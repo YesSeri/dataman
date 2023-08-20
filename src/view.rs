@@ -1,29 +1,83 @@
-use crate::model::Sheet;
+use std::{
+    io::{self, Stdout, Write},
+    time::Duration,
+};
 
+use crate::model::{Sheet, Mode};
+use crossterm::{queue, ExecutableCommand, QueueableCommand};
+
+use crossterm::{
+    cursor::position,
+    event::{poll, read, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    execute,
+    terminal::{self, disable_raw_mode, enable_raw_mode},
+};
 pub trait Display {
-    fn update(&mut self, data: &Sheet);
-    fn create() -> Self;
+    fn update(&mut self, sheet: &Sheet) -> Result<(), std::io::Error>;
+    fn new() -> Self;
+    fn shutdown(&self) -> Result<(), std::io::Error>;
 }
 
-#[derive(Default)]
-pub struct BasicUI { }
+pub struct BasicUI {
+    stdout: Stdout,
+}
 
+impl Display for BasicUI {
+    fn update(&mut self, sheet: &Sheet) -> Result<(), std::io::Error> {
+        let columns = sheet.columns.as_slice();
+        let mut res = vec![];
+        let selected_column = sheet.cursor;
 
-impl Display for BasicUI{
-    fn update(&mut self, data: &Sheet) {
-        let columns = data.columns.as_slice();
-        for i in 0..columns.len() {
-            let mut line:Vec<&str> = vec![];
-            for column in columns {
-                line.push(&column.data[i]);
+        //        self.stdout
+        //            .execute()
+        //            .unwrap();
+        queue!(
+            io::stdout(),
+            terminal::Clear(terminal::ClearType::All),
+            crossterm::cursor::MoveTo(0, 0),
+        )?;
+
+        for i in 0..columns[0].data.len() {
+            let mut row = vec![];
+            for j in 0..columns.len() {
+                if i == 0 && j == sheet.cursor {
+                    let data = format!("**{}**", columns[j].data[i].clone());
+                    row.push(format!("{:>20}", data));
+                } else {
+                    row.push(format!("{:>20}", columns[j].data[i].clone()));
+                }
             }
-            let string = line.join(",");
-            println!("{}", string);
+            res.push(row.join(","));
+        }
+        print!("{}\n\r{}\r\n", selected_column, res.join("\r\n"));
+
+        if let Ok((cols, rows)) = crossterm::terminal::size() {
+            queue!(
+                io::stdout(),
+                crossterm::cursor::MoveTo(0, rows - 1),
+                crossterm::cursor::EnableBlinking,
+            )?;
+            let msg = match sheet.mode {
+                Mode::Normal => "*normal*".to_string(),
+                Mode::Regex => "regex:".to_string(),
+            };
+            print!("{}{}", msg, sheet.user_inputs.last().unwrap_or(&"".to_string()));
+        } 
+        self.stdout.flush()?;
+        Ok(())
+    }
+    fn new() -> Self {
+        enable_raw_mode().unwrap();
+
+        let mut stdout = io::stdout();
+        execute!(stdout, DisableMouseCapture).unwrap();
+
+        Self {
+            stdout,
         }
     }
-
-    fn create() -> Self {
-        Self{}
+    fn shutdown(&self) -> Result<(), std::io::Error> {
+        disable_raw_mode()?;
+        Ok(())
     }
 }
-

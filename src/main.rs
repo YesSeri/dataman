@@ -1,16 +1,23 @@
 use std::path::PathBuf;
 
-use dataman::{view::BasicUI, controller::Controller};
-
+use dataman::{controller::Controller, view::BasicUI};
 
 fn main() {
-    // Initialize your TUI framework here
-
-    // Create an instance of the App struct
-    let file_path = "assets/data.csv";
-    let mut controller: Controller<BasicUI> = Controller::from(&PathBuf::from(file_path));
-    controller.run();
-    //app.derive(1, |cell| format!("{}X{}X{}", cell, cell, cell));
-
-    //dbg!(app);
+    let p = PathBuf::from("assets/data.csv");
+    let mut c: Controller<BasicUI> = Controller::from(&p);
+    c.run();
 }
+
+//fn get_user_input() -> String {
+//    use std::io::{self, Write};
+//
+//    let mut user_input = String::new();
+//    print!("Enter a regex pattern: ");
+//    io::stdout().flush().unwrap();
+//
+//    io::stdin()
+//        .read_line(&mut user_input)
+//        .expect("Failed to read user input");
+//
+//    user_input.trim().to_string()
+//}

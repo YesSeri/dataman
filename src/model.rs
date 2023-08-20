@@ -14,14 +14,16 @@ impl Column {
     pub fn get_data(&self) -> &[String] {
         &self.data[1..]
     }
-    pub fn derive_new(column: &Column, fun: fn(String) -> String) -> Self {
-        let mut data = vec![];
-        let header = format!("{}-derived", column.data[0]);
-        data.push(header);
-        for d in column.get_data().iter() {
-            data.push(fun(d.to_string()));
-        }
-        Self::new(data)
+}
+
+#[derive(PartialEq, Debug)]
+pub enum Mode {
+    Regex,
+    Normal,
+}
+impl Default for Mode {
+    fn default() -> Self {
+        Self::Normal
     }
 }
 
@@ -29,16 +31,24 @@ impl Column {
 pub struct Sheet {
     pub columns: Vec<Column>,
     pub cursor: usize,
+    pub user_inputs: Vec<String>,
+    pub mode: Mode,
 }
 impl Sheet {
     pub fn new(columns: Vec<Column>, cursor: usize) -> Self {
         Self {
             columns,
             cursor,
+            user_inputs: vec![],
+            mode: Mode::Normal,
         }
     }
     pub fn get(&self, x: usize, y: usize) -> String {
         self.columns[x].data[y].clone()
+    }
+    pub fn change_mode(&mut self, mode: Mode){
+        self.user_inputs.push(String::new());
+        self.mode = mode;
     }
 
     pub fn from_csv(file_path: &PathBuf) -> Result<Sheet, std::io::Error> {
@@ -62,9 +72,20 @@ impl Sheet {
         }
         Ok(Sheet::new(columns, 0))
     }
+
+    pub fn derive_new(&mut self, i: usize, fun: impl Fn(String) -> String) {
+        let mut res = vec![];
+        let col = &self.columns[i];
+        let header = format!("{}-DER", col.data[0]);
+        res.push(header);
+        for d in col.get_data().iter() {
+            let transformed_data = fun(d.to_string());
+            res.push(transformed_data);
+        }
+        let new_col = Column::new(res);
+        self.columns.push(new_col);
+    }
 }
-
-
 
 #[cfg(test)]
 mod test {
@@ -73,15 +94,15 @@ mod test {
     //    #[test]
     //    fn derive() {
     //        let file_path = "assets/data.csv";
-//        let mut app = App::from_csv(file_path).unwrap();
-//        assert_eq!(app.editor.sheet.columns.len(), 3);
-//        app.derive(1, |cell| format!("{}X{}", cell, cell));
-//
-//        let text = app.editor.sheet.get(1, 1);
-//        assert_eq!("zenkert".to_string(), text);
-//
-//        let text = app.editor.sheet.get(3, 1);
-//        assert_eq!("zenkertXzenkert".to_string(), text);
-//        assert_eq!(app.editor.sheet.columns.len(), 4);
-//    }
+    //        let mut app = App::from_csv(file_path).unwrap();
+    //        assert_eq!(app.editor.sheet.columns.len(), 3);
+    //        app.derive(1, |cell| format!("{}X{}", cell, cell));
+    //
+    //        let text = app.editor.sheet.get(1, 1);
+    //        assert_eq!("zenkert".to_string(), text);
+    //
+    //        let text = app.editor.sheet.get(3, 1);
+    //        assert_eq!("zenkertXzenkert".to_string(), text);
+    //        assert_eq!(app.editor.sheet.columns.len(), 4);
+//    //    }
 }

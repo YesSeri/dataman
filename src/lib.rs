@@ -2,9 +2,9 @@
 #![allow(unused_variables)]
 #![allow(unused_imports)]
 
+pub mod controller;
 mod model;
 pub mod view;
-pub mod controller;
 use model::*;
 
 use std::{error::Error, fs::File};
@@ -59,11 +59,11 @@ impl App {
             ui: UIComponent::new(),
         }
     }
-    pub fn derive(&mut self, i: usize, fun: fn(String) -> String) {
-        let column = &self.editor.sheet.columns[i];
-        let new_column = Column::derive_new(column, fun);
-        self.editor.sheet.columns.push(new_column);
-    }
+    //    pub fn derive(&mut self, i: usize, fun: fn(String) -> String) {
+    //        let column = &self.editor.sheet.columns[i];
+    //        let new_column = Column::derive_new(column, fun);
+    //        self.editor.sheet.columns.push(new_column);
+    //    }
     pub fn save(&self, file_path: &str) -> Result<(), Box<dyn Error>> {
         let mut wtr = csv::Writer::from_path(file_path)?;
         for column in self.editor.sheet.columns.iter() {
@@ -72,14 +72,13 @@ impl App {
         wtr.flush()?;
         Ok(())
     }
-
 }
 
-impl Default for App {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+//impl Default for App {
+//    fn default() -> Self {
+//        Self::new()
+//    }
+//}
 
 #[cfg(test)]
 mod test {
@@ -87,15 +86,15 @@ mod test {
 
     #[test]
     fn derive() {
-       // let file_path = "assets/data.csv";
-       // assert_eq!(app.editor.sheet.columns.len(), 3);
-       // app.derive(1, |cell| format!("{}X{}", cell, cell));
+        // let file_path = "assets/data.csv";
+        // assert_eq!(app.editor.sheet.columns.len(), 3);
+        // app.derive(1, |cell| format!("{}X{}", cell, cell));
 
-       // let text = app.editor.sheet.get(1, 1);
-       // assert_eq!("zenkert".to_string(), text);
+        // let text = app.editor.sheet.get(1, 1);
+        // assert_eq!("zenkert".to_string(), text);
 
-       // let text = app.editor.sheet.get(3, 1);
-       // assert_eq!("zenkertXzenkert".to_string(), text);
-       // assert_eq!(app.editor.sheet.columns.len(), 4);
+        // let text = app.editor.sheet.get(3, 1);
+        // assert_eq!("zenkertXzenkert".to_string(), text);
+        // assert_eq!(app.editor.sheet.columns.len(), 4);
     }
 }
