@@ -6,6 +6,15 @@ use csv::ReaderBuilder;
 pub struct Column {
     pub data: Vec<String>,
 }
+impl std::fmt::Debug for Sheet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut res = String::new();
+        for col in self.columns.iter() {
+            res.push_str(&format!("\r\n{:?}\r\n", col));
+        }
+        write!(f, "\r\n{}\r\n", res)
+    }
+}
 
 impl Column {
     pub fn new(data: Vec<String>) -> Self {
@@ -27,18 +36,53 @@ impl Default for Mode {
     }
 }
 
-#[derive(Debug)]
 pub struct Sheet {
     pub columns: Vec<Column>,
     pub cursor: usize,
     pub user_inputs: Vec<String>,
     pub mode: Mode,
 }
+
+impl TryFrom<PathBuf> for Sheet {
+    type Error = csv::Error;
+
+    fn try_from(pathbuf: PathBuf) -> Result<Self, Self::Error> {
+        let binding = std::fs::read_to_string(pathbuf).expect("not able to read file");
+        let content = binding.as_ref();
+        Sheet::try_from(content)
+    }
+}
+impl TryFrom<&str> for Sheet {
+    type Error = csv::Error;
+
+    fn try_from(data: &str) -> Result<Self, Self::Error> {
+        let mut reader = ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(data.as_bytes());
+
+        let first = reader.records().next().unwrap()?;
+        let len = first.len();
+        let mut columns = vec![];
+        for header in first.iter() {
+            columns.push(Column::new(vec![header.to_string()]));
+        }
+
+        for result in reader.records() {
+            let result = result?;
+            // add one column per record
+            for (i, data) in result.into_iter().enumerate() {
+                let d = data.to_string();
+                columns[i].data.push(d);
+            }
+        }
+        Ok(Sheet::new(columns))
+    }
+}
 impl Sheet {
-    pub fn new(columns: Vec<Column>, cursor: usize) -> Self {
+    pub fn new(columns: Vec<Column>) -> Self {
         Self {
             columns,
-            cursor,
+            cursor: 0,
             user_inputs: vec![],
             mode: Mode::Normal,
         }
@@ -46,7 +90,7 @@ impl Sheet {
     pub fn get(&self, x: usize, y: usize) -> String {
         self.columns[x].data[y].clone()
     }
-    pub fn change_mode(&mut self, mode: Mode){
+    pub fn change_mode(&mut self, mode: Mode) {
         self.user_inputs.push(String::new());
         self.mode = mode;
     }
@@ -70,10 +114,11 @@ impl Sheet {
                 columns[i].data.push(d);
             }
         }
-        Ok(Sheet::new(columns, 0))
+        Ok(Sheet::new(columns))
     }
 
-    pub fn derive_new(&mut self, i: usize, fun: impl Fn(String) -> String) {
+    pub fn derive_new(&mut self, fun: impl Fn(String) -> String) {
+        let i = self.cursor;
         let mut res = vec![];
         let col = &self.columns[i];
         let header = format!("{}-DER", col.data[0]);
@@ -88,21 +133,4 @@ impl Sheet {
 }
 
 #[cfg(test)]
-mod test {
-    use super::*;
-
-    //    #[test]
-    //    fn derive() {
-    //        let file_path = "assets/data.csv";
-    //        let mut app = App::from_csv(file_path).unwrap();
-    //        assert_eq!(app.editor.sheet.columns.len(), 3);
-    //        app.derive(1, |cell| format!("{}X{}", cell, cell));
-    //
-    //        let text = app.editor.sheet.get(1, 1);
-    //        assert_eq!("zenkert".to_string(), text);
-    //
-    //        let text = app.editor.sheet.get(3, 1);
-    //        assert_eq!("zenkertXzenkert".to_string(), text);
-    //        assert_eq!(app.editor.sheet.columns.len(), 4);
-//    //    }
-}
+mod test {}

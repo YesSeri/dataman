@@ -1,9 +1,10 @@
 use std::{
+    fmt::Debug,
     io::{self, Stdout, Write},
     time::Duration,
 };
 
-use crate::model::{Sheet, Mode};
+use crate::model::{Mode, Sheet};
 use crossterm::{queue, ExecutableCommand, QueueableCommand};
 
 use crossterm::{
@@ -61,8 +62,12 @@ impl Display for BasicUI {
                 Mode::Normal => "*normal*".to_string(),
                 Mode::Regex => "regex:".to_string(),
             };
-            print!("{}{}", msg, sheet.user_inputs.last().unwrap_or(&"".to_string()));
-        } 
+            print!(
+                "{}{}",
+                msg,
+                sheet.user_inputs.last().unwrap_or(&"".to_string())
+            );
+        }
         self.stdout.flush()?;
         Ok(())
     }
@@ -72,12 +77,28 @@ impl Display for BasicUI {
         let mut stdout = io::stdout();
         execute!(stdout, DisableMouseCapture).unwrap();
 
-        Self {
-            stdout,
-        }
+        Self { stdout }
     }
     fn shutdown(&self) -> Result<(), std::io::Error> {
         disable_raw_mode()?;
         Ok(())
+    }
+}
+
+pub struct DebugUI {
+    stdout: Stdout,
+}
+
+impl Display for DebugUI {
+    fn update(&mut self, sheet: &Sheet) -> Result<(), std::io::Error> {
+        todo!();
+    }
+    fn new() -> Self {
+        let stdout = io::stdout();
+
+        Self { stdout }
+    }
+    fn shutdown(&self) -> Result<(), std::io::Error> {
+        todo!()
     }
 }
