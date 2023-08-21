@@ -1,6 +1,8 @@
-use std::{error::Error, fs::File, path::PathBuf};
+use std::{fs::File, path::PathBuf};
 
-use csv::ReaderBuilder;
+use csv::{Error, ReaderBuilder};
+
+use crate::error::AppError;
 
 #[derive(Debug)]
 pub struct Column {
@@ -28,6 +30,7 @@ impl Column {
 #[derive(PartialEq, Debug)]
 pub enum Mode {
     Regex,
+    RegexReplace,
     Normal,
 }
 impl Default for Mode {
@@ -39,43 +42,49 @@ impl Default for Mode {
 pub struct Sheet {
     pub columns: Vec<Column>,
     pub cursor: usize,
-    pub user_inputs: Vec<String>,
+    pub user_input: String,
     pub mode: Mode,
 }
 
 impl TryFrom<PathBuf> for Sheet {
-    type Error = csv::Error;
+    type Error = AppError;
 
     fn try_from(pathbuf: PathBuf) -> Result<Self, Self::Error> {
-        let binding = std::fs::read_to_string(pathbuf).expect("not able to read file");
+        let binding = std::fs::read_to_string(pathbuf)?;
         let content = binding.as_ref();
         Sheet::try_from(content)
     }
 }
 impl TryFrom<&str> for Sheet {
-    type Error = csv::Error;
+    type Error = AppError;
 
     fn try_from(data: &str) -> Result<Self, Self::Error> {
         let mut reader = ReaderBuilder::new()
             .has_headers(false)
             .from_reader(data.as_bytes());
 
-        let first = reader.records().next().unwrap()?;
-        let len = first.len();
-        let mut columns = vec![];
-        for header in first.iter() {
-            columns.push(Column::new(vec![header.to_string()]));
-        }
-
-        for result in reader.records() {
-            let result = result?;
-            // add one column per record
-            for (i, data) in result.into_iter().enumerate() {
-                let d = data.to_string();
-                columns[i].data.push(d);
+        let first = reader.records().next();
+        if let Some(Ok(header)) = first {
+            let len = header.len();
+            let mut columns = vec![];
+            for header in header.iter() {
+                columns.push(Column::new(vec![header.to_string()]));
             }
+            for result in reader.records() {
+                let result = result?;
+                // add one column per record
+                for (i, data) in result.into_iter().enumerate() {
+                    let d = data.to_string();
+                    columns[i].data.push(d);
+                }
+            }
+            Ok(Sheet::new(columns))
+        } else {
+            Err(AppError::Io(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                "No data found",
+            )))
         }
-        Ok(Sheet::new(columns))
     }
 }
 impl Sheet {
@@ -83,7 +92,7 @@ impl Sheet {
         Self {
             columns,
             cursor: 0,
-            user_inputs: vec![],
+            user_input: "".to_string(),
             mode: Mode::Normal,
         }
     }
@@ -91,7 +100,7 @@ impl Sheet {
         self.columns[x].data[y].clone()
     }
     pub fn change_mode(&mut self, mode: Mode) {
-        self.user_inputs.push(String::new());
+        self.user_input.clear();
         self.mode = mode;
     }
 
