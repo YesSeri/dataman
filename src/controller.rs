@@ -14,6 +14,7 @@ use regex::Regex;
 use crate::{
     error::AppError,
     model::{Mode, Sheet},
+    tui::TUI,
     view::{BasicUI, Display},
 };
 
@@ -33,36 +34,52 @@ impl TryFrom<PathBuf> for Controller<BasicUI> {
         })
     }
 }
+impl TryFrom<PathBuf> for Controller<TUI> {
+    type Error = AppError;
+
+    fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
+        Ok(Self {
+            sheet: Sheet::try_from(path)?,
+            ui: TUI::new(),
+        })
+    }
+}
 
 impl<T: Display> Controller<T> {
     pub fn new(ui: T, sheet: Sheet) -> Self {
         Self { ui, sheet }
     }
+
     pub fn run(&mut self) -> Result<(), AppError> {
         self.ui.update(&self.sheet)?;
-        loop {
-            // we don't need to poll I think, since we don't mind blocking.
-            //if poll(Duration::from_secs(1))? {
-            // It's guaranteed that read() won't block if `poll` returns `Ok(true)`
-            if let Event::Key(key) = read()? {
-                match key.code {
-                    KeyCode::Left => self.left(),
-                    KeyCode::Right => self.right(),
-                    KeyCode::Char(c) => {
-                        if 'r' == c {
-                            let (search, replace) = self.get_regex_input()?;
-                            self.regex_command(Regex::new(&search)?, &replace)?;
-                        }
-                    }
-                    _ => break,
-                }
-            }
-            self.ui.update(&self.sheet)?;
-            //}
-        }
         self.ui.shutdown()?;
         Ok(())
     }
+    //    pub fn run(&mut self) -> Result<(), AppError> {
+    //        self.ui.update(&self.sheet)?;
+    //        loop {
+    //            // we don't need to poll I think, since we don't mind blocking.
+    //            //if poll(Duration::from_secs(1))? {
+    //            // It's guaranteed that read() won't block if `poll` returns `Ok(true)`
+    //            if let Event::Key(key) = read()? {
+    //                match key.code {
+    //                    KeyCode::Left => self.left(),
+    //                    KeyCode::Right => self.right(),
+    //                    KeyCode::Char(c) => {
+    //                        if 'r' == c {
+    //                            let (search, replace) = self.get_regex_input()?;
+    //                            self.regex_command(Regex::new(&search)?, &replace)?;
+    //                        }
+    //                    }
+    //                    _ => break,
+    //                }
+    //            }
+    //            self.ui.update(&self.sheet)?;
+    //            //}
+    //        }
+    //        self.ui.shutdown()?;
+    //        Ok(())
+    //    }
     fn get_regex_input(&mut self) -> Result<(String, String), AppError> {
         self.sheet.change_mode(Mode::Regex);
         'outer: loop {

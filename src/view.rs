@@ -26,7 +26,7 @@ pub trait Display {
     fn update(&mut self, sheet: &Sheet) -> Result<(), AppError>;
     fn update_input(&mut self, sheet: &Sheet) -> Result<(), AppError>;
     fn new() -> Self;
-    fn shutdown(&self) -> Result<(), AppError>;
+    fn shutdown(&mut self) -> Result<(), AppError>;
 }
 
 #[derive(Debug)]
@@ -74,7 +74,7 @@ impl Display for BasicUI {
 
         Self { stdout }
     }
-    fn shutdown(&self) -> Result<(), AppError> {
+    fn shutdown(&mut self) -> Result<(), AppError> {
         terminal::disable_raw_mode()?;
         Ok(())
     }
@@ -114,50 +114,11 @@ impl Display for DebugUI {
 
         Self { stdout }
     }
-    fn shutdown(&self) -> Result<(), AppError> {
+    fn shutdown(&mut self) -> Result<(), AppError> {
         todo!()
     }
 
     fn update_input(&mut self, sheet: &Sheet) -> Result<(), AppError> {
         todo!()
-    }
-}
-
-pub struct TUI {
-    terminal: Terminal<CrosstermBackend<Stdout>>,
-}
-impl Display for TUI {
-    fn update(&mut self, sheet: &Sheet) -> Result<(), AppError> {
-        self.terminal.draw(|f| {
-            let size = f.size();
-            let block = Block::default().title("Block").borders(Borders::ALL);
-            f.render_widget(block, size);
-        })?;
-
-        // Start a thread to discard any input events. Without handling events, the
-        // stdin buffer will fill up, and be read into the shell when the program exits.
-        thread::spawn(|| loop {
-            let _ = event::read();
-        });
-        thread::sleep(Duration::from_millis(5000));
-        Ok(())
-    }
-
-    fn update_input(&mut self, sheet: &Sheet) -> Result<(), AppError> {
-        todo!()
-    }
-
-    fn new() -> Self {
-        enable_raw_mode().unwrap();
-        let stdout = io::stdout();
-        // execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
-        let backend = CrosstermBackend::new(stdout);
-        let terminal = Terminal::new(backend).unwrap();
-        Self { terminal }
-    }
-
-    fn shutdown(&self) -> Result<(), AppError> {
-        terminal::disable_raw_mode()?;
-        Ok(())
     }
 }
