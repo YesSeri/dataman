@@ -7,6 +7,7 @@ use crossterm::{
 };
 use dataman::model::Sheet;
 use ratatui::{prelude::*, widgets::*};
+use dataman::db;
 
 struct App {
     state: TableState,
@@ -51,9 +52,15 @@ impl<'a> App {
         };
         self.state.select(Some(i));
     }
+    pub fn right(&mut self){
+
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let p = PathBuf::from("assets/data.csv");
+    db::open_connection(&p).unwrap();
+    todo!();
     // setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -85,11 +92,11 @@ fn main() -> Result<(), Box<dyn Error>> {
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<()> {
     loop {
         terminal.draw(|f| ui(f, &mut app))?;
-
         if let Event::Key(key) = event::read()? {
             if key.kind == KeyEventKind::Press {
                 match key.code {
                     KeyCode::Char('q') => return Ok(()),
+                    KeyCode::Right => app.right(),
                     KeyCode::Down => app.next(),
                     KeyCode::Up => app.previous(),
                     _ => {}
@@ -111,7 +118,8 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .iter()
         .map(|col| col.data.first().unwrap().clone())
         .collect::<Vec<String>>();
-    let header = Row::new(header_cells);
+    let header = Row::new(header_cells).style(Style::default().bold());
+    // draw border under header
     let rows = app.sheet.columns.iter().skip(1).map(|item| {
         let height = 1;
         let cells = item.data.iter().map(|c| Cell::from(c.clone()));

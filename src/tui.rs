@@ -20,6 +20,7 @@ pub struct TUI {
 }
 impl Display for TUI {
     fn update(&mut self, sheet: &Sheet) -> Result<(), AppError> {
+        dbg!("aaa");
         execute!(std::io::stdout(), terminal::Clear(terminal::ClearType::All))?;
         // self.terminal.draw(|f| {
         //     let size = f.size();
