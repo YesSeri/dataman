@@ -1,8 +1,12 @@
 // read csv file to in memory database
 
-use std::error::Error;
-use std::path::Path;
+use csv::Reader;
 use rusqlite::Connection;
+use std::error::Error;
+use std::fmt::format;
+use std::path::Path;
+
+use crate::db;
 
 #[derive(Debug)]
 struct Item {
@@ -11,48 +15,73 @@ struct Item {
     age: String,
 }
 
-pub fn open_connection(file: &Path) -> Result<(), Box<dyn Error>> {
-    let mut csv = csv::Reader::from_path(file)?;
-    let headers = csv.headers()?;
+pub fn open_connection(path: &Path) -> Result<(), Box<dyn Error>> {
     // create table with headers as columns
-    let table_name = match get_table_name(file) {
-        Some(name) => name,
-        None => "default_table",
-    };
-    let s: String = headers.iter().map(|header| format!("\n\t{} TEXT", header)).collect::<Vec<String>>().join(",");
-    let create_table_query = format!("CREATE TABLE IF NOT EXISTS {} ({}\n);", table_name, s );
-
-    println!("{}", &create_table_query);
     let conn = Connection::open_in_memory()?;
 
-    conn.execute(&create_table_query, ())?;
-    let me = Item {
-        first: "Steven".to_string(),
-        last: "Stevenson".to_string(),
-        age: "42".to_string(),
-    };
-    let q = format!("INSERT INTO {} VALUES (?1, ?2, ?3)",table_name);
-    dbg!(&q);
-    conn.execute(
-        &q,
-        (&me.first, &me.last, &me.age),
-    )?;
-    //
-    let mut stmt = conn.prepare("SELECT firstname, lastname, age FROM data")?;
-    let person_iter = stmt.query_map([], |row| {
-        Ok(Item {
-            first: row.get(0)?,
-            last: row.get(1)?,
-            age: row.get(2)?,
-        })
-    })?;
-    //
-    for person in person_iter {
-        println!("Found person {:?}", person.unwrap());
-    }
+    let _ = std::fs::remove_file("db.sqlite");
+    let conn = Connection::open("db.sqlite")?;
+
+    create_table_from_csv(path, &conn);
+    add_table_data_from_csv(path, &conn);
+
     Ok(())
 }
+fn create_table_from_csv(path: &Path, conn: &Connection) -> Result<(), Box<dyn Error>> {
+    let mut csv = csv::Reader::from_path(path)?;
+    let headers = csv.headers()?;
+    let table_name = get_table_name(path).unwrap_or("default_table");
+    let columns: String = headers
+        .iter()
+        .map(|header| format!("'{}'", header))
+        .collect::<Vec<String>>()
+        .join(", ");
 
+    let headers_string: String = headers
+        .iter()
+        .map(|header| format!("\n\t{} TEXT", header))
+        .collect::<Vec<String>>()
+        .join(",");
+    let create_table_query = format!(
+        "CREATE TABLE IF NOT EXISTS {} ({}\n);",
+        table_name, headers_string
+    );
+    conn.execute(&create_table_query, ())?;
+    Ok(())
+}
+fn add_table_data_from_csv(path: &Path, conn: &Connection) -> Result<(), Box<dyn Error>> {
+    let mut csv = csv::Reader::from_path(path)?;
+
+    let table_name = get_table_name(path).unwrap_or("default_table");
+    let headers = csv.headers()?;
+    let columns: String = headers
+        .iter()
+        .map(|header| format!("'{}'", header))
+        .collect::<Vec<String>>()
+        .join(", ");
+
+    let values = csv
+        .records()
+        .map(|row| {
+            let row = row.unwrap();
+            format!(
+                "({})",
+                row.iter()
+                    .map(|el| format!("'{}'\n", el))
+                    .collect::<Vec<String>>()
+                    .join(", ")
+            )
+        })
+        .collect::<Vec<String>>()
+        .join(",");
+
+    let query = format!(
+        "INSERT INTO '{}' ({}) VALUES {};",
+        table_name, columns, values
+    );
+    conn.execute(&query, ())?;
+    Ok(())
+}
 fn get_table_name(file: &Path) -> Option<&str> {
     file.file_stem()?.to_str()
 }
