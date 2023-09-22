@@ -5,62 +5,14 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use dataman::model::Sheet;
 use ratatui::{prelude::*, widgets::*};
-use dataman::db;
-
-struct App {
-    state: TableState,
-    sheet: Sheet,
-    name: String,
-}
-
-impl<'a> App {
-    fn from(path: PathBuf) -> App {
-        let name = (&path).display().to_string();
-        let sheet = Sheet::try_from(path).unwrap();
-        let mut state = TableState::default();
-        state.select(Some(0));
-        App {
-            state, sheet, name,
-        }
-    }
-    pub fn next(&mut self) {
-        let i = match self.state.selected() {
-            Some(i) => {
-                if i >= self.sheet.columns.len() - 1 {
-                    0
-                } else {
-                    i + 1
-                }
-            }
-            None => 1,
-        };
-        self.state.select(Some(i));
-    }
-
-    pub fn previous(&mut self) {
-        let i = match self.state.selected() {
-            Some(i) => {
-                if i == 0 {
-                    self.sheet.columns.len() - 2
-                } else {
-                    i - 1
-                }
-            }
-            None => 0,
-        };
-        self.state.select(Some(i));
-    }
-    pub fn right(&mut self){
-
-    }
-}
+use dataman::app::App;
+use dataman::libstuff::db::Database;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let p = PathBuf::from("assets/data.csv");
-    db::open_connection(&p).unwrap();
-    todo!();
+
+    let database = Database::from(&p).unwrap();
     // setup terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -70,7 +22,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // create app and run it
     let file = "assets/data.csv";
-    let app = App::from(PathBuf::from(file));
+    let app = App::from(file);
     let res = run_app(&mut terminal, app);
 
     // restore terminal

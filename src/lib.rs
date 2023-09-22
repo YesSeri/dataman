@@ -4,8 +4,8 @@
 
 pub mod controller;
 pub mod error;
-pub mod model;
 pub mod tui;
 pub mod view;
-pub mod db;
+pub mod app;
+pub mod libstuff;
 
