@@ -1,5 +1,6 @@
 // read csv file to in memory database
 
+use std::collections::HashSet;
 use csv::Reader;
 use rusqlite::Connection;
 use std::error::Error;
@@ -8,27 +9,30 @@ use std::path::Path;
 
 #[derive(Debug)]
 pub struct Database {
-    connection: Connection,
-    pub(crate) table_names: Vec<String>,
+    pub connection: Connection,
+    pub(crate) table_names: HashSet<String>
+}
+
+impl Database {
+    pub(crate) fn insert_table_name(&mut self, table_name: String) {
+        self.table_names.insert(table_name);
+    }
 }
 
 impl TryFrom<&Path> for Database {
     type Error = Box<dyn Error>;
 
     fn try_from(path: &Path) -> Result<Self, Box<dyn Error>> {
-        // open in memory if release mode, else as file
-        // i find it easier to debug when the database is a file
-
-        let database: Database = if cfg!(debug_assertions) {
-            let _ = std::fs::remove_file("db.sqlite");
-            Database::new(Connection::open("db.sqlite")?)
-        } else {
-            Database::new(Connection::open_in_memory()?)
-        };
-
-
         let mut csv = Database::get_csv_reader(path)?;
         let table_name = Database::get_table_name(path).unwrap();
+
+        let table_names = HashSet::from([table_name.to_string()]);
+        let database: Database = if cfg!(debug_assertions) {
+            let _ = std::fs::remove_file("db.sqlite");
+            Database::new(Connection::open("db.sqlite")?, table_names)
+        } else {
+            Database::new(Connection::open_in_memory()?, table_names)
+        };
         let funs = vec![Database::build_create_table_query, Database::build_add_data_query];
         for fun in funs {
             let query = fun(&mut csv, table_name)?;
@@ -39,10 +43,10 @@ impl TryFrom<&Path> for Database {
 }
 
 impl Database {
-    pub fn new(connection: Connection) -> Self {
+    pub fn new(connection: Connection, table_names: HashSet<String>) -> Self {
         Database {
             connection,
-            table_names: Vec::new(),
+            table_names,
         }
     }
     fn get_csv_reader(path: &Path) -> Result<Reader<File>, Box<dyn Error>> {

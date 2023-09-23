@@ -13,7 +13,8 @@ use ratatui::{
     Terminal,
 };
 
-use crate::{error::AppError, model::Sheet, view::Display};
+use crate::{error::AppError, view::Display};
+use crate::libstuff::model::Sheet;
 
 pub struct TUI {
     terminal: Terminal<CrosstermBackend<Stdout>>,

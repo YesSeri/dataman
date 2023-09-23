@@ -13,10 +13,10 @@ use regex::Regex;
 
 use crate::{
     error::AppError,
-    model::{Mode, Sheet},
     tui::TUI,
     view::{BasicUI, Display},
 };
+use crate::libstuff::model::{Mode, Sheet};
 
 #[derive(Debug)]
 pub struct Controller<T> {
@@ -24,26 +24,26 @@ pub struct Controller<T> {
     sheet: Sheet,
 }
 
-impl TryFrom<PathBuf> for Controller<BasicUI> {
-    type Error = AppError;
-
-    fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
-        Ok(Self {
-            sheet: Sheet::try_from(path)?,
-            ui: BasicUI::new(),
-        })
-    }
-}
-impl TryFrom<PathBuf> for Controller<TUI> {
-    type Error = AppError;
-
-    fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
-        Ok(Self {
-            sheet: Sheet::try_from(path)?,
-            ui: TUI::new(),
-        })
-    }
-}
+// impl TryFrom<PathBuf> for Controller<BasicUI> {
+//     type Error = AppError;
+//
+//     fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
+//         Ok(Self {
+//             sheet: Sheet::try_from(path)?,
+//             ui: BasicUI::new(),
+//         })
+//     }
+// }
+// impl TryFrom<PathBuf> for Controller<TUI> {
+//     type Error = AppError;
+//
+//     fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
+//         Ok(Self {
+//             sheet: Sheet::try_from(path)?,
+//             ui: TUI::new(),
+//         })
+//     }
+// }
 
 impl<T: Display> Controller<T> {
     pub fn new(ui: T, sheet: Sheet) -> Self {

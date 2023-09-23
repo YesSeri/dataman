@@ -7,7 +7,6 @@ use std::{
 
 use crate::{
     error::AppError,
-    model::{Mode, Sheet},
 };
 
 use crossterm::{
@@ -22,6 +21,8 @@ use ratatui::{
     widgets::{Block, Borders},
     Terminal,
 };
+use crate::libstuff::model::{Mode, Sheet};
+
 pub trait Display {
     fn update(&mut self, sheet: &Sheet) -> Result<(), AppError>;
     fn update_input(&mut self, sheet: &Sheet) -> Result<(), AppError>;

@@ -3,11 +3,13 @@ use std::{fs::File, path::PathBuf};
 use csv::{Error, ReaderBuilder};
 
 use crate::error::AppError;
+use crate::libstuff::db::Database;
 
 #[derive(Debug)]
 pub struct Column {
     pub data: Vec<String>,
 }
+
 impl std::fmt::Debug for Sheet {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut res = String::new();
@@ -33,6 +35,7 @@ pub enum Mode {
     RegexReplace,
     Normal,
 }
+
 impl Default for Mode {
     fn default() -> Self {
         Self::Normal
@@ -46,15 +49,40 @@ pub struct Sheet {
     pub mode: Mode,
 }
 
-impl TryFrom<PathBuf> for Sheet {
-    type Error = AppError;
+impl From<Database> for Vec<Sheet> {
+    fn from(db: Database) -> Self {
+        for table_name in db.table_names {
+            // select all from table_name
+            let query = format!("SELECT * FROM {}", table_name);
+            let mut stmt = db.connection.prepare(&query).unwrap();
+            let cols = stmt.column_names().iter().map(|s| s.to_string()).collect::<Vec<String>>();
 
-    fn try_from(pathbuf: PathBuf) -> Result<Self, Self::Error> {
-        let binding = std::fs::read_to_string(pathbuf)?;
-        let content = binding.as_ref();
-        Sheet::try_from(content)
+            let mut rows = stmt.query([]).unwrap();
+
+            while let Ok(row) = rows.next() {
+                if let Some(row) = row {
+                    // print each field in the row
+                    let mut i = 0;
+                    // print column names
+                    while let Ok(field) = row.get::<usize, String>(i) {
+                        // print column name and field name
+
+                        println!("{} {}", cols[i], field);
+                        i += 1;
+                    }
+                }
+            }
+
+
+            todo!();
+
+
+            Sheet::new(vec![]);
+        }
+        todo!();
     }
 }
+
 impl TryFrom<&str> for Sheet {
     type Error = AppError;
 
@@ -87,6 +115,7 @@ impl TryFrom<&str> for Sheet {
         }
     }
 }
+
 impl Sheet {
     pub fn new(columns: Vec<Column>) -> Self {
         Self {
