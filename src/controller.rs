@@ -11,17 +11,17 @@ use crossterm::{
 };
 use regex::Regex;
 
+use crate::libstuff::{adapter::Mode, db::Database};
 use crate::{
     error::AppError,
     tui::TUI,
     view::{BasicUI, Display},
 };
-use crate::libstuff::model::{Mode, Sheet};
 
 #[derive(Debug)]
 pub struct Controller<T> {
     ui: T,
-    sheet: Sheet,
+    database: Database,
 }
 
 // impl TryFrom<PathBuf> for Controller<BasicUI> {
@@ -46,12 +46,15 @@ pub struct Controller<T> {
 // }
 
 impl<T: Display> Controller<T> {
-    pub fn new(ui: T, sheet: Sheet) -> Self {
-        Self { ui, sheet }
+    pub fn new(ui: T, database: Database) -> Self {
+        Self { ui, database }
     }
 
     pub fn run(&mut self) -> Result<(), AppError> {
-        self.ui.update(&self.sheet)?;
+        let (headers, rows) = self
+            .database
+            .get(10, self.database.table_names.iter().next().unwrap());
+        self.ui.update(headers, rows)?;
         self.ui.shutdown()?;
         Ok(())
     }
@@ -81,68 +84,69 @@ impl<T: Display> Controller<T> {
     //        Ok(())
     //    }
     fn get_regex_input(&mut self) -> Result<(String, String), AppError> {
-        self.sheet.change_mode(Mode::Regex);
-        'outer: loop {
-            self.ui.update_input(&self.sheet)?;
-            let state = self.poll_for_input();
-            match state {
-                InputState::More => {
-                    continue;
-                }
-                InputState::Next => {
-                    let search = self.sheet.user_input.clone();
-                    self.sheet.change_mode(Mode::RegexReplace);
-                    loop {
-                        self.ui.update_input(&self.sheet)?;
-                        let state = self.poll_for_input();
-                        match state {
-                            InputState::More => {
-                                continue;
-                            }
-                            InputState::Next => {
-                                let replace = self.sheet.user_input.clone();
-                                self.sheet.change_mode(Mode::Normal);
-                                return Ok((search, replace));
-                            }
-                            InputState::Back => {
-                                self.sheet.user_input = search;
-                                self.sheet.change_mode(Mode::Regex);
-                                continue 'outer;
-                            }
-                        }
-                    }
-                }
-                InputState::Back => {}
-            }
-        }
+        // self.sheet.change_mode(Mode::Regex);
+        // 'outer: loop {
+        //     self.ui.update_input(&self.sheet)?;
+        //     let state = self.poll_for_input();
+        //     match state {
+        //         InputState::More => {
+        //             continue;
+        //         }
+        //         InputState::Next => {
+        //             let search = self.sheet.user_input.clone();
+        //             self.sheet.change_mode(Mode::RegexReplace);
+        //             loop {
+        //                 self.ui.update_input(&self.sheet)?;
+        //                 let state = self.poll_for_input();
+        //                 match state {
+        //                     InputState::More => {
+        //                         continue;
+        //                     }
+        //                     nputState::Next => {
+        //                         let replace = self.sheet.user_input.clone();
+        //                         self.sheet.change_mode(Mode::Normal);
+        //                         return Ok((search, replace));
+        //                     }
+        //                     InputState::Back => {
+        //                         self.sheet.user_input = search;
+        //                         self.sheet.change_mode(Mode::Regex);
+        //                         continue 'outer;
+        //                     }
+        //                 }
+        //             }
+        //         }
+        //         InputState::Back => {}
+        //     }
+        // }
+        Ok(())
     }
 
     fn regex_command(&mut self, find: Regex, replace: &str) -> Result<(), AppError> {
-        let fun = |s: String| {
-            let result: String = match find.captures_len() {
-                1 => find.replace_all(&s, replace).to_string(),
-                _ => todo!(),
-            };
-            result
-        };
-        self.sheet.derive_new(fun);
-        self.sheet.change_mode(Mode::Normal);
+        // let fun = |s: String| {
+        //     let result: String = match find.captures_len() {
+        //         1 => find.replace_all(&s, replace).to_string(),
+        //         _ => todo!(),
+        //     };
+        //     result
+        // };
+        // self.sheet.derive_new(fun);
+        // self.sheet.change_mode(Mode::Normal);
         Ok(())
     }
     fn poll_for_input(&mut self) -> InputState {
         // It's guaranteed that read() won't block if `poll` returns `Ok(true)`
         if let Ok(Event::Key(key)) = read() {
             match key.code {
-                KeyCode::Enter => InputState::Next,
-                KeyCode::Esc => InputState::Back,
-                KeyCode::Backspace => {
-                    self.sheet.user_input.pop();
-                    return InputState::More;
-                }
-                KeyCode::Char(c) => {
-                    self.sheet.user_input.push(c);
-                    return InputState::More;
-                }
+                // KeyCode::Enter => InputState::Next,
+                // KeyCode::Esc => InputState::Back,
+                // KeyCode::Backspace => {
+                //     self.sheet.user_input.pop();
+                //     return InputState::More;
+                // }
+                // KeyCode::Char(c) => {
+                //     self.sheet.user_input.push(c);
+                //     return InputState::More;
+                // }
                 _ => InputState::Back,
             }
         } else {
@@ -150,14 +154,8 @@ impl<T: Display> Controller<T> {
         }
     }
 
-    fn left(&mut self) {
-        self.sheet.cursor = self.sheet.cursor.saturating_sub(1);
-    }
-    fn right(&mut self) {
-        if self.sheet.cursor < self.sheet.columns.len() - 1 {
-            self.sheet.cursor += 1;
-        }
-    }
+    fn left(&mut self) {}
+    fn right(&mut self) {}
 }
 enum InputState {
     More,
@@ -177,13 +175,5 @@ mod test {
         let data = r"col1,col2
 abc,def
 ";
-        let sheet = Sheet::try_from(data).unwrap();
-        let d: DebugUI = Display::new();
-        let mut controller: Controller<_> = Controller::new(d, sheet);
-        let re = Regex::new("[a|e]").unwrap();
-        controller.regex_command(re, "x").unwrap();
-        let sheet = &controller.sheet;
-        assert_eq!(sheet.columns.len(), 3);
-        assert_eq!(sheet.columns[2].get_data()[0], "xbc");
     }
 }

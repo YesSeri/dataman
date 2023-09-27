@@ -5,10 +5,9 @@ use std::{
     time::Duration,
 };
 
-use crate::{
-    error::AppError,
-};
+use crate::error::AppError;
 
+use crate::libstuff::adapter::{Mode, Sheet};
 use crossterm::{
     cursor::position,
     event::{self, poll, read, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -21,10 +20,9 @@ use ratatui::{
     widgets::{Block, Borders},
     Terminal,
 };
-use crate::libstuff::model::{Mode, Sheet};
 
 pub trait Display {
-    fn update(&mut self, sheet: &Sheet) -> Result<(), AppError>;
+    fn update(&mut self, headers: Vec<String>, rows: Vec<Vec<String>>) -> Result<(), AppError>;
     fn update_input(&mut self, sheet: &Sheet) -> Result<(), AppError>;
     fn new() -> Self;
     fn shutdown(&mut self) -> Result<(), AppError>;
@@ -36,35 +34,35 @@ pub struct BasicUI {
 }
 
 impl Display for BasicUI {
-    fn update(&mut self, sheet: &Sheet) -> Result<(), AppError> {
-        let columns = sheet.columns.as_slice();
-        let mut res = vec![];
-        let selected_column = sheet.cursor;
+    fn update(&mut self, headers: Vec<String>, rows: Vec<Vec<String>>) -> Result<(), AppError> {
+        // let columns = sheet.rows.as_slice();
+        // let mut res = vec![];
+        // let selected_column = sheet.cursor;
 
-        //        self.stdout
-        //            .execute()
-        //            .unwrap();
-        queue!(
-            io::stdout(),
-            terminal::Clear(terminal::ClearType::All),
-            crossterm::cursor::MoveTo(0, 0),
-        )?;
+        // //        self.stdout
+        // //            .execute()
+        // //            .unwrap();
+        // queue!(
+        //     io::stdout(),
+        //     terminal::Clear(terminal::ClearType::All),
+        //     crossterm::cursor::MoveTo(0, 0),
+        // )?;
 
-        for i in 0..columns[0].data.len() {
-            let mut row = vec![];
-            for (j, column) in columns.iter().enumerate() {
-                if i == 0 && j == sheet.cursor {
-                    let data = format!("**{}**", column.data[i]);
-                    row.push(format!("{:>20}", data));
-                } else {
-                    row.push(format!("{:>20}", column.data[i]));
-                }
-            }
-            res.push(row.join(""));
-        }
-        print!("{}\n\r{}\r\n", selected_column, res.join("\r\n"));
+        // for i in 0..columns[0].data.len() {
+        //     let mut row = vec![];
+        //     for (j, column) in columns.iter().enumerate() {
+        //         if i == 0 && j == sheet.cursor {
+        //             let data = format!("**{}**", column.data[i]);
+        //             row.push(format!("{:>20}", data));
+        //         } else {
+        //             row.push(format!("{:>20}", column.data[i]));
+        //         }
+        //     }
+        //     res.push(row.join(""));
+        // }
+        // print!("{}\n\r{}\r\n", selected_column, res.join("\r\n"));
 
-        self.stdout.flush()?;
+        // self.stdout.flush()?;
         Ok(())
     }
     fn new() -> Self {
@@ -81,22 +79,22 @@ impl Display for BasicUI {
     }
 
     fn update_input(&mut self, sheet: &Sheet) -> Result<(), AppError> {
-        if let Ok((cols, rows)) = crossterm::terminal::size() {
-            queue!(
-                io::stdout(),
-                crossterm::cursor::MoveTo(0, rows - 1),
-                crossterm::cursor::EnableBlinking,
-                terminal::Clear(terminal::ClearType::All)
-            )?;
-            let msg = match sheet.mode {
-                Mode::Normal => "*normal*".to_string(),
-                Mode::Regex => "<regex>:".to_string(),
-                Mode::RegexReplace => "(replace):".to_string(),
-            };
+        // if let Ok((cols, rows)) = crossterm::terminal::size() {
+        //     queue!(
+        //         io::stdout(),
+        //         crossterm::cursor::MoveTo(0, rows - 1),
+        //         crossterm::cursor::EnableBlinking,
+        //         terminal::Clear(terminal::ClearType::All)
+        //     )?;
+        //     let msg = match sheet.mode {
+        //         Mode::Normal => "*normal*".to_string(),
+        //         Mode::Regex => "<regex>:".to_string(),
+        //         Mode::RegexReplace => "(replace):".to_string(),
+        //     };
 
-            print!("{}{}", msg, sheet.user_input);
-        }
-        self.stdout.flush()?;
+        //     print!("{}{}", msg, sheet.user_input);
+        // }
+        // self.stdout.flush()?;
         Ok(())
     }
 }
@@ -107,7 +105,7 @@ pub struct DebugUI {
 }
 
 impl Display for DebugUI {
-    fn update(&mut self, sheet: &Sheet) -> Result<(), AppError> {
+    fn update(&mut self, headers: Vec<String>, rows: Vec<Vec<String>>) -> Result<(), AppError> {
         todo!();
     }
     fn new() -> Self {

@@ -1,8 +1,9 @@
 // read csv file to in memory database
 
-use std::collections::HashSet;
 use csv::Reader;
+use rusqlite::types::ValueRef;
 use rusqlite::Connection;
+use std::collections::HashSet;
 use std::error::Error;
 use std::fs::File;
 use std::path::Path;
@@ -10,7 +11,42 @@ use std::path::Path;
 #[derive(Debug)]
 pub struct Database {
     pub connection: Connection,
-    pub(crate) table_names: HashSet<String>
+    pub(crate) table_names: HashSet<String>,
+}
+
+impl Database {
+    pub fn get(&self, limit: i32, table_name: &str) -> (Vec<String>, Vec<Vec<String>>) {
+        let mut sheet = vec![];
+        let query = format!("SELECT * FROM {table_name} LIMIT {limit};");
+        let mut stmt = self.connection.prepare(&query).unwrap();
+        let cols = stmt
+            .column_names()
+            .iter()
+            .map(<&str>::to_string)
+            .collect::<Vec<String>>();
+        let mut rows = stmt.query([]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            let data = cols
+                .iter()
+                .enumerate()
+                .map(|(i, col)| {
+                    let field = row.get_ref(i).unwrap();
+                    match field {
+                        ValueRef::Null => unimplemented!("null"),
+                        ValueRef::Integer(cell) => cell.to_string(),
+                        ValueRef::Real(_) => unimplemented!("real"),
+                        ValueRef::Text(cell) => {
+                            let cell = std::str::from_utf8(cell).unwrap();
+                            cell.to_string()
+                        }
+                        ValueRef::Blob(_) => unimplemented!("blob"),
+                    }
+                })
+                .collect::<Vec<String>>();
+            sheet.push(data);
+        }
+        (cols, sheet)
+    }
 }
 
 impl Database {
@@ -23,7 +59,7 @@ impl TryFrom<&Path> for Database {
     type Error = Box<dyn Error>;
 
     fn try_from(path: &Path) -> Result<Self, Box<dyn Error>> {
-        let mut csv = Database::get_csv_reader(path)?;
+        let mut csv = csv::Reader::from_path(path)?;
         let table_name = Database::get_table_name(path).unwrap();
 
         let table_names = HashSet::from([table_name.to_string()]);
@@ -33,7 +69,7 @@ impl TryFrom<&Path> for Database {
         } else {
             Database::new(Connection::open_in_memory()?, table_names)
         };
-        let funs = vec![Database::build_create_table_query, Database::build_add_data_query];
+        let funs = vec![Self::build_create_table_query, Self::build_add_data_query];
         for fun in funs {
             let query = fun(&mut csv, table_name)?;
             database.connection.execute(&query, ())?;
@@ -49,11 +85,10 @@ impl Database {
             table_names,
         }
     }
-    fn get_csv_reader(path: &Path) -> Result<Reader<File>, Box<dyn Error>> {
-        let csv = csv::Reader::from_path(path)?;
-        Ok(csv)
-    }
-    fn build_create_table_query(csv: &mut Reader<File>, table_name: &str) -> Result<String, Box<dyn Error>> {
+    fn build_create_table_query(
+        csv: &mut Reader<File>,
+        table_name: &str,
+    ) -> Result<String, Box<dyn Error>> {
         let headers = csv.headers()?;
         let columns: String = headers
             .iter()
@@ -66,14 +101,17 @@ impl Database {
             .map(|header| format!("\n\t{} TEXT", header))
             .collect::<Vec<String>>()
             .join(",");
-        let create_table_query = format!(
-            "CREATE TABLE IF NOT EXISTS {} ({}\n);",
+        let query = format!(
+            "CREATE TABLE IF NOT EXISTS {} (\n\tid INTEGER PRIMARY KEY, {}\n);",
             table_name, headers_string
         );
-        Ok(create_table_query)
+        Ok(query)
     }
 
-    fn build_add_data_query(csv: &mut Reader<File>, table_name: &str) -> Result<String, Box<dyn Error>> {
+    fn build_add_data_query(
+        csv: &mut Reader<File>,
+        table_name: &str,
+    ) -> Result<String, Box<dyn Error>> {
         let headers = csv.headers()?;
         let columns: String = headers
             .iter()
@@ -86,9 +124,9 @@ impl Database {
             .map(|row| {
                 let row = row.unwrap();
                 format!(
-                    "({})",
+                    "\n\t({})",
                     row.iter()
-                        .map(|el| format!("'{}'\n", el))
+                        .map(|el| format!("'{}'", el))
                         .collect::<Vec<String>>()
                         .join(", ")
                 )
@@ -100,6 +138,7 @@ impl Database {
             "INSERT INTO '{}' ({}) VALUES {};",
             table_name, columns, values
         );
+
         Ok(query)
     }
 
