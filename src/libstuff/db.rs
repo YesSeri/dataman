@@ -2,23 +2,41 @@
 
 use csv::Reader;
 use rusqlite::types::ValueRef;
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use std::collections::HashSet;
 use std::error::Error;
 use std::fs::File;
 use std::path::Path;
 
+use regex::Regex;
+use rusqlite::functions::FunctionFlags;
+use rusqlite::Result;
+use std::sync::Arc;
+
+use crate::error::AppError;
+type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
 #[derive(Debug)]
 pub struct Database {
     pub connection: Connection,
     pub(crate) table_names: HashSet<String>,
-    pub current_header: u32,
+    pub current_header_idx: u32,
+    pub order_column: String,
+    pub is_asc_order: bool,
 }
 
 impl Database {
+    pub fn get_current_header(&self) -> String {
+        let res = self.get(0, "data").0[self.current_header_idx as usize].clone();
+        res
+    }
     pub fn get(&self, limit: i32, table_name: &str) -> (Vec<String>, Vec<Vec<String>>) {
         let mut sheet = vec![];
-        let query = format!("SELECT * FROM {table_name} LIMIT {limit};");
+        let ordering = if self.is_asc_order { "ASC" } else { "DESC" };
+        let query = format!(
+            "SELECT * FROM {} ORDER BY {} {} LIMIT {};",
+            table_name, self.order_column, ordering, limit
+        );
         let mut stmt = self.connection.prepare(&query).unwrap();
         let cols = stmt
             .column_names()
@@ -33,7 +51,7 @@ impl Database {
                 .map(|(i, col)| {
                     let field = row.get_ref(i).unwrap();
                     match field {
-                        ValueRef::Null => unimplemented!("null"),
+                        ValueRef::Null => "NULL".to_string(),
                         ValueRef::Integer(cell) => cell.to_string(),
                         ValueRef::Real(_) => unimplemented!("real"),
                         ValueRef::Text(cell) => {
@@ -47,6 +65,41 @@ impl Database {
             sheet.push(data);
         }
         (cols, sheet)
+    }
+
+    pub fn derive_column(
+        &self,
+        column_name: String,
+        fun: fn(String) -> String,
+    ) -> Result<(), Box<dyn Error>> {
+        // create a new column in the table. The new value for each row is the value string value of column name after running fun function on it.
+        let derived_column_name = format!("derived-{}", column_name);
+
+        let create_column_query = format!(
+            "ALTER TABLE data ADD COLUMN '{}' TEXT;",
+            derived_column_name
+        );
+        self.connection.execute(&create_column_query, [])?;
+
+        // for each row in the table, run fun on the value of column name and insert the result into the new column
+        let query = format!("SELECT id, `{}` FROM data", column_name);
+        let mut binding = self.connection.prepare(&query)?;
+        let mut rows = binding.query([])?;
+
+        // TODO use a transaction
+        while let Some(row) = rows.next()? {
+            let id: i32 = row.get(0)?;
+            let value: String = row.get(1)?;
+            let derived_value = fun(value);
+            let update_query = format!(
+                "UPDATE {} SET '{}' = ? WHERE id = ?",
+                "data", derived_column_name
+            );
+            self.connection
+                .execute(&update_query, params![derived_value, id])?;
+        }
+
+        Ok(())
     }
 }
 
@@ -66,7 +119,8 @@ impl TryFrom<&Path> for Database {
         let table_names = HashSet::from([table_name.to_string()]);
         let database: Database = if cfg!(debug_assertions) {
             let _ = std::fs::remove_file("db.sqlite");
-            Database::new(Connection::open("db.sqlite")?, table_names)
+            // Database::new(Connection::open("db.sqlite")?, table_names)
+            Database::new(Connection::open_in_memory()?, table_names)
         } else {
             Database::new(Connection::open_in_memory()?, table_names)
         };
@@ -84,7 +138,9 @@ impl Database {
         Database {
             connection,
             table_names,
-            current_header: 0,
+            current_header_idx: 0,
+            order_column: "id".to_string(),
+            is_asc_order: true,
         }
     }
     fn build_create_table_query(
@@ -157,19 +213,19 @@ impl Database {
         r
     }
     pub(crate) fn next_header(&mut self) {
-        let i = self.current_header + 1;
+        let i = self.current_header_idx + 1;
         if i >= self.count_headers() {
-            self.current_header = 0;
+            self.current_header_idx = 0;
         } else {
-            self.current_header = i;
+            self.current_header_idx = i;
         }
     }
     pub(crate) fn previous_header(&mut self) {
-        let i = self.current_header;
+        let i = self.current_header_idx;
         if i == 0 {
-            self.current_header = self.count_headers() - 1;
+            self.current_header_idx = self.count_headers() - 1;
         } else {
-            self.current_header = i - 1;
+            self.current_header_idx = i - 1;
         }
     }
 }
@@ -187,25 +243,36 @@ mod tests {
     fn inc_header() {
         let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         database.next_header();
-        assert_eq!(1, database.current_header);
+        assert_eq!(1, database.current_header_idx);
         database.next_header();
-        assert_eq!(2, database.current_header);
+        assert_eq!(2, database.current_header_idx);
         database.next_header();
-        assert_eq!(3, database.current_header);
+        assert_eq!(3, database.current_header_idx);
         database.next_header();
-        assert_eq!(0, database.current_header);
+        assert_eq!(0, database.current_header_idx);
     }
 
     #[test]
     fn dec_header() {
         let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         database.previous_header();
-        assert_eq!(3, database.current_header);
+        assert_eq!(3, database.current_header_idx);
         database.previous_header();
-        assert_eq!(2, database.current_header);
+        assert_eq!(2, database.current_header_idx);
         database.previous_header();
-        assert_eq!(1, database.current_header);
+        assert_eq!(1, database.current_header_idx);
         database.previous_header();
-        assert_eq!(0, database.current_header);
+        assert_eq!(0, database.current_header_idx);
+    }
+
+    #[test]
+    fn derive_column_test() {
+        let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let col = "firstname";
+        let fun = |s| format!("{}-changed", s);
+        database.derive_column(col.to_string(), fun).unwrap();
+        let first = database.get(1, "data").1[0][4].clone();
+        assert_eq!(first, "henrik-changed");
+        assert_eq!(database.count_headers(), 5);
     }
 }

@@ -45,4 +45,14 @@ impl App {
     pub fn left(&mut self) {
         self.controller.database.previous_header();
     }
+
+    pub fn regex(&self) {
+        todo!();
+    }
+
+    pub fn copy(&self) {
+        let column_name = self.controller.database.get_current_header();
+        let fun = |s: String| s.to_string();
+        let _ = self.controller.database.derive_column(column_name, fun);
+    }
 }

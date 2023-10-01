@@ -1,6 +1,5 @@
 use std::path::Path;
-use std::process::id;
-use std::{error::Error, io, path::PathBuf};
+use std::{error::Error, io};
 
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
@@ -9,7 +8,6 @@ use crossterm::{
 };
 use dataman::app::App;
 use dataman::libstuff::db::Database;
-use ratatui::text::Spans;
 use ratatui::{prelude::*, widgets::*};
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -50,7 +48,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
             if key.kind == KeyEventKind::Press {
                 match key.code {
                     KeyCode::Char('q') => return Ok(()),
-                    // KeyCode::Char('r') => app.regex(),
+                    KeyCode::Char('c') => app.copy(),
                     KeyCode::Right => app.right(),
                     KeyCode::Left => app.left(),
                     KeyCode::Down => app.next(),
@@ -69,7 +67,9 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
 
     let selected_style = Style::default().add_modifier(Modifier::REVERSED);
     let (headers, rows) = app.controller.get_headers_and_rows(20).unwrap();
-    let per_header = (100 / 4) as u16;
+    let id_extra_space = 8 / headers.len() as u16;
+
+    let per_header = (100 / headers.len()) as u16 - id_extra_space;
     let widths = headers
         .iter()
         .map(|header| {
@@ -80,7 +80,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
             }
         })
         .collect::<Vec<_>>();
-    let current_header: u32 = app.controller.database.current_header;
+    let current_header: u32 = app.controller.database.current_header_idx;
     // mark current header
 
     let header = Row::new(headers.iter().enumerate().map(|(i, h)| {
