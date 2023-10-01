@@ -1,6 +1,7 @@
 // read csv file to in memory database
 
 use csv::Reader;
+use ratatui::widgets::TableState;
 use rusqlite::types::ValueRef;
 use rusqlite::{params, Connection};
 use std::collections::HashSet;
@@ -23,6 +24,7 @@ pub struct Database {
     pub current_header_idx: u32,
     pub order_column: String,
     pub is_asc_order: bool,
+    pub state: TableState,
 }
 
 impl Database {
@@ -137,12 +139,15 @@ impl TryFrom<&Path> for Database {
 
 impl Database {
     pub fn new(connection: Connection, table_names: HashSet<String>) -> Self {
+        let mut state = TableState::default();
+        state.select(Some(0));
         Database {
             connection,
             table_names,
             current_header_idx: 0,
             order_column: "id".to_string(),
             is_asc_order: true,
+            state,
         }
     }
     fn build_create_table_query(
@@ -229,6 +234,29 @@ impl Database {
         } else {
             self.current_header_idx = i - 1;
         }
+    }
+
+    pub fn next(&mut self) {
+        let i = match self.state.selected() {
+            Some(i) => i + 1,
+            None => 0,
+        };
+        self.state.select(Some(i));
+    }
+
+    pub fn previous(&mut self) {
+        let i = match self.state.selected() {
+            Some(i) => i.saturating_sub(1),
+            None => 0,
+        };
+        self.state.select(Some(i));
+    }
+    pub fn right(&mut self) {
+        self.next_header();
+    }
+
+    pub fn left(&mut self) {
+        self.previous_header();
     }
 }
 // tests

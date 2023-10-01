@@ -9,52 +9,24 @@ use crossterm::{
     event::{poll, read, Event, KeyCode, KeyEvent},
     terminal, ExecutableCommand,
 };
+use ratatui::widgets::TableState;
 use regex::Regex;
 
 use crate::libstuff::db::Database;
-use crate::{
-    error::AppError,
-    tui::TUI,
-    view::{BasicUI, Display},
-};
+use crate::{error::AppError, tui::TUI};
 
-#[derive(Debug)]
-pub struct Controller<T> {
-    ui: T,
+pub struct Controller {
+    pub ui: TUI,
     pub database: Database,
 }
 
-// impl TryFrom<PathBuf> for Controller<BasicUI> {
-//     type Error = AppError;
-//
-//     fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
-//         Ok(Self {
-//             sheet: Sheet::try_from(path)?,
-//             ui: BasicUI::new(),
-//         })
-//     }
-// }
-// impl TryFrom<PathBuf> for Controller<TUI> {
-//     type Error = AppError;
-//
-//     fn try_from(path: PathBuf) -> Result<Self, Self::Error> {
-//         Ok(Self {
-//             sheet: Sheet::try_from(path)?,
-//             ui: TUI::new(),
-//         })
-//     }
-// }
-
-impl<T: Display> Controller<T> {
-    pub fn new(ui: T, database: Database) -> Self {
+impl Controller {
+    pub fn new(ui: TUI, database: Database) -> Self {
         Self { ui, database }
     }
 
     pub fn run(&mut self) -> Result<(), AppError> {
-        let (headers, rows) = self
-            .database
-            .get(10, self.database.table_names.iter().next().unwrap());
-        self.ui.update(headers, rows)?;
+        let res = TUI::start(self);
         self.ui.shutdown()?;
         Ok(())
     }
@@ -145,7 +117,7 @@ impl<T: Display> Controller<T> {
         // It's guaranteed that read() won't block if `poll` returns `Ok(true)`
         if let Ok(Event::Key(key)) = read() {
             match key.code {
-                // KeyCode::Enter => InputState::Next,
+                KeyCode::Enter => InputState::Next,
                 // KeyCode::Esc => InputState::Back,
                 // KeyCode::Backspace => {
                 //     self.sheet.user_input.pop();
@@ -162,8 +134,15 @@ impl<T: Display> Controller<T> {
         }
     }
 
-    fn left(&mut self) {}
-    fn right(&mut self) {}
+    pub fn regex(&self) {
+        todo!();
+    }
+
+    pub fn copy(&self) {
+        let column_name = self.database.get_current_header();
+        let fun = |s: String| s.to_string();
+        let _ = self.database.derive_column(column_name, fun);
+    }
 }
 enum InputState {
     More,
@@ -173,8 +152,6 @@ enum InputState {
 #[cfg(test)]
 mod test {
     use regex::Regex;
-
-    use crate::view::DebugUI;
 
     use super::*;
 
