@@ -138,10 +138,14 @@ impl Controller {
         todo!();
     }
 
-    pub fn copy(&self) {
+    pub fn derive_column(&self, fun: fn(String) -> String) {
         let column_name = self.database.get_current_header();
-        let fun = |s: String| s.to_string();
         let _ = self.database.derive_column(column_name, fun);
+    }
+
+    pub fn copy(&self) {
+        let fun = |s: String| s.to_string();
+        self.derive_column(fun);
     }
 }
 enum InputState {

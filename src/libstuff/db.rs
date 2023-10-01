@@ -4,6 +4,7 @@ use csv::Reader;
 use ratatui::widgets::TableState;
 use rusqlite::types::ValueRef;
 use rusqlite::{params, Connection};
+use std::cmp;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fs::File;
@@ -236,27 +237,26 @@ impl Database {
         }
     }
 
-    pub fn next(&mut self) {
+    pub fn next_row(&mut self, height: u16) {
         let i = match self.state.selected() {
-            Some(i) => i + 1,
-            None => 0,
+            Some(i) if i <= height as usize => i + 1,
+            _ => 0,
         };
         self.state.select(Some(i));
     }
 
-    pub fn previous(&mut self) {
+    pub fn previous_row(&mut self, height: u16) {
         let i = match self.state.selected() {
-            Some(i) => i.saturating_sub(1),
+            Some(i) => {
+                if i == 0 {
+                    height as usize - 1
+                } else {
+                    i - 1
+                }
+            }
             None => 0,
         };
         self.state.select(Some(i));
-    }
-    pub fn right(&mut self) {
-        self.next_header();
-    }
-
-    pub fn left(&mut self) {
-        self.previous_header();
     }
 }
 // tests

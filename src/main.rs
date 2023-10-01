@@ -3,6 +3,13 @@ use std::{error::Error, path::Path};
 use dataman::{controller::Controller, libstuff::db::Database, tui::TUI};
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // use regex::Regex;
+
+    // let re = Regex::new(r"ree").unwrap();
+    // let hay = "Greek: ree";
+    // let m = re.find(hay).unwrap();
+    // dbg!(m);
+    // todo!();
     let p = Path::new("assets/data.csv");
 
     let database = Database::try_from(p).unwrap();

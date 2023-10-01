@@ -6,10 +6,11 @@ use crossterm::{
     terminal::{self, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    prelude::{Backend, Constraint, CrosstermBackend, Layout},
+    prelude::{Backend, Constraint, CrosstermBackend, Direction, Layout},
     style::{Color, Modifier, Style, Stylize},
-    text::{Line, Span},
-    widgets::{Block, Borders, Cell, List, ListItem, Row, Table},
+    symbols::block,
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table},
     Frame, Terminal,
 };
 
@@ -44,14 +45,15 @@ impl TUI {
                 .terminal
                 .draw(|f| TUI::update(f, &mut controller.database))?;
             if let Event::Key(key) = event::read()? {
+                let term_height = controller.ui.terminal.backend().size()?.height;
                 if key.kind == KeyEventKind::Press {
                     match key.code {
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('c') => controller.copy(),
-                        KeyCode::Right => controller.database.right(),
-                        KeyCode::Left => controller.database.left(),
-                        KeyCode::Down => controller.database.next(),
-                        KeyCode::Up => controller.database.previous(),
+                        KeyCode::Right => controller.database.next_header(),
+                        KeyCode::Left => controller.database.previous_header(),
+                        KeyCode::Down => controller.database.next_row(term_height),
+                        KeyCode::Up => controller.database.previous_row(term_height),
                         _ => {}
                     }
                 }
@@ -60,10 +62,10 @@ impl TUI {
     }
     fn update<B: Backend>(f: &mut Frame<B>, db: &mut Database) {
         let rects = Layout::default()
-            .constraints([Constraint::Percentage(100)].as_ref())
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Max(1000), Constraint::Length(1)].as_ref())
             .split(f.size());
 
-        let selected_style = Style::default().add_modifier(Modifier::REVERSED);
         let (headers, rows) = db.get(20, "data");
         let id_extra_space = 8 / headers.len() as u16;
 
@@ -96,19 +98,29 @@ impl TUI {
         .height(1);
 
         // // draw border under header
-        let rows = rows.iter().map(|item| {
+        let rows = rows.iter().map(|items| {
             let height = 1;
-            let cells = item.iter().map(|c| Cell::from(c.clone()));
-            Row::new(cells).height(height as u16)
+            Row::new(items.clone()).height(height as u16)
         });
+        let selected_style = Style::default().add_modifier(Modifier::UNDERLINED);
         let t = Table::new(rows)
             .header(header)
             .block(Block::default().borders(Borders::ALL).title("MY TITLE"))
             .highlight_style(selected_style)
-            .highlight_symbol(">> ")
+            // .highlight_symbol(">> ")
             .widths(widths.as_slice())
             .bg(Color::Black);
         f.render_stateful_widget(t, rects[0], &mut db.state);
+
+        let a = db.current_header_idx;
+        let b = db.state.selected().unwrap_or(199);
+        let text = vec![Line::from(vec![
+            Span::raw(format!("current header: {}", a)),
+            Span::raw(format!("selected: {}", b)),
+        ])];
+        let paragraph = Paragraph::new(text);
+
+        f.render_widget(paragraph, rects[1])
     }
 }
 
