@@ -27,8 +27,7 @@ pub struct Database {
 
 impl Database {
     pub fn get_current_header(&self) -> String {
-        let res = self.get(0, "data").0[self.current_header_idx as usize].clone();
-        res
+        self.get(0, "data").0[self.current_header_idx as usize].clone()
     }
     pub fn get(&self, limit: i32, table_name: &str) -> (Vec<String>, Vec<Vec<String>>) {
         let mut sheet = vec![];
@@ -101,6 +100,9 @@ impl Database {
 
         Ok(())
     }
+    // TODO 1. add ability to take input.
+    // TODO 2. user sql query
+    // TODO 3. user regex fn
 }
 
 impl Database {
