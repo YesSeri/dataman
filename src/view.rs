@@ -7,7 +7,6 @@ use std::{
 
 use crate::error::AppError;
 
-use crate::libstuff::adapter::{Mode, Sheet};
 use crossterm::{
     cursor::position,
     event::{self, poll, read, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
@@ -23,7 +22,7 @@ use ratatui::{
 
 pub trait Display {
     fn update(&mut self, headers: Vec<String>, rows: Vec<Vec<String>>) -> Result<(), AppError>;
-    fn update_input(&mut self, sheet: &Sheet) -> Result<(), AppError>;
+    // fn update_input(&mut self, sheet: &Sheet) -> Result<(), AppError>;
     fn new() -> Self;
     fn shutdown(&mut self) -> Result<(), AppError>;
 }
@@ -78,25 +77,25 @@ impl Display for BasicUI {
         Ok(())
     }
 
-    fn update_input(&mut self, sheet: &Sheet) -> Result<(), AppError> {
-        // if let Ok((cols, rows)) = crossterm::terminal::size() {
-        //     queue!(
-        //         io::stdout(),
-        //         crossterm::cursor::MoveTo(0, rows - 1),
-        //         crossterm::cursor::EnableBlinking,
-        //         terminal::Clear(terminal::ClearType::All)
-        //     )?;
-        //     let msg = match sheet.mode {
-        //         Mode::Normal => "*normal*".to_string(),
-        //         Mode::Regex => "<regex>:".to_string(),
-        //         Mode::RegexReplace => "(replace):".to_string(),
-        //     };
+    // fn update_input(&mut self, sheet: &Sheet) -> Result<(), AppError> {
+    // if let Ok((cols, rows)) = crossterm::terminal::size() {
+    //     queue!(
+    //         io::stdout(),
+    //         crossterm::cursor::MoveTo(0, rows - 1),
+    //         crossterm::cursor::EnableBlinking,
+    //         terminal::Clear(terminal::ClearType::All)
+    //     )?;
+    //     let msg = match sheet.mode {
+    //         Mode::Normal => "*normal*".to_string(),
+    //         Mode::Regex => "<regex>:".to_string(),
+    //         Mode::RegexReplace => "(replace):".to_string(),
+    //     };
 
-        //     print!("{}{}", msg, sheet.user_input);
-        // }
-        // self.stdout.flush()?;
-        Ok(())
-    }
+    //     print!("{}{}", msg, sheet.user_input);
+    // }
+    // self.stdout.flush()?;
+    //     Ok(())
+    // }
 }
 
 #[derive(Debug)]
@@ -114,10 +113,6 @@ impl Display for DebugUI {
         Self { stdout }
     }
     fn shutdown(&mut self) -> Result<(), AppError> {
-        todo!()
-    }
-
-    fn update_input(&mut self, sheet: &Sheet) -> Result<(), AppError> {
         todo!()
     }
 }

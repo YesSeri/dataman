@@ -1,5 +1,4 @@
 use crate::controller::Controller;
-use crate::libstuff::adapter::Sheet;
 use crate::libstuff::db::Database;
 use crate::view::{BasicUI, Display};
 use ratatui::widgets::TableState;
@@ -23,7 +22,7 @@ impl From<Database> for App {
     }
 }
 
-impl<'a> App {
+impl App {
     pub fn next(&mut self) {
         let i = match self.state.selected() {
             Some(i) => i.add(1),
@@ -39,5 +38,11 @@ impl<'a> App {
         };
         self.state.select(Some(i));
     }
-    pub fn right(&mut self) {}
+    pub fn right(&mut self) {
+        self.controller.database.next_header();
+    }
+
+    pub fn left(&mut self) {
+        self.controller.database.previous_header();
+    }
 }

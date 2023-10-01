@@ -12,6 +12,7 @@ use std::path::Path;
 pub struct Database {
     pub connection: Connection,
     pub(crate) table_names: HashSet<String>,
+    pub current_header: u32,
 }
 
 impl Database {
@@ -83,6 +84,7 @@ impl Database {
         Database {
             connection,
             table_names,
+            current_header: 0,
         }
     }
     fn build_create_table_query(
@@ -145,10 +147,65 @@ impl Database {
     fn get_table_name(file: &Path) -> Option<&str> {
         file.file_stem()?.to_str()
     }
+    fn count_headers(&self) -> u32 {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT COUNT(*) FROM PRAGMA_TABLE_INFO('data')")
+            .unwrap();
+
+        let r: u32 = stmt.query_row([], |row| row.get(0)).unwrap();
+        r
+    }
+    pub(crate) fn next_header(&mut self) {
+        let i = self.current_header + 1;
+        if i >= self.count_headers() {
+            self.current_header = 0;
+        } else {
+            self.current_header = i;
+        }
+    }
+    pub(crate) fn previous_header(&mut self) {
+        let i = self.current_header;
+        if i == 0 {
+            self.current_header = self.count_headers() - 1;
+        } else {
+            self.current_header = i - 1;
+        }
+    }
 }
 // tests
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn get_number_of_headers_test() {
+        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let number_of_headers = database.count_headers();
+    }
+    #[test]
+    fn inc_header() {
+        let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        database.next_header();
+        assert_eq!(1, database.current_header);
+        database.next_header();
+        assert_eq!(2, database.current_header);
+        database.next_header();
+        assert_eq!(3, database.current_header);
+        database.next_header();
+        assert_eq!(0, database.current_header);
+    }
+
+    #[test]
+    fn dec_header() {
+        let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        database.previous_header();
+        assert_eq!(3, database.current_header);
+        database.previous_header();
+        assert_eq!(2, database.current_header);
+        database.previous_header();
+        assert_eq!(1, database.current_header);
+        database.previous_header();
+        assert_eq!(0, database.current_header);
+    }
 }

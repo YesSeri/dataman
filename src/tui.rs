@@ -13,7 +13,6 @@ use ratatui::{
     Terminal,
 };
 
-use crate::libstuff::adapter::Sheet;
 use crate::{error::AppError, view::Display};
 
 pub struct TUI {
@@ -58,10 +57,6 @@ impl Display for TUI {
             }
         }
         Ok(())
-    }
-
-    fn update_input(&mut self, sheet: &Sheet) -> Result<(), AppError> {
-        todo!()
     }
 
     fn new() -> Self {

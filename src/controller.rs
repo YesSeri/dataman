@@ -11,7 +11,7 @@ use crossterm::{
 };
 use regex::Regex;
 
-use crate::libstuff::{adapter::Mode, db::Database};
+use crate::libstuff::db::Database;
 use crate::{
     error::AppError,
     tui::TUI,
@@ -21,7 +21,7 @@ use crate::{
 #[derive(Debug)]
 pub struct Controller<T> {
     ui: T,
-    database: Database,
+    pub database: Database,
 }
 
 // impl TryFrom<PathBuf> for Controller<BasicUI> {

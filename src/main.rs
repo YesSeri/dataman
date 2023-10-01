@@ -9,6 +9,7 @@ use crossterm::{
 };
 use dataman::app::App;
 use dataman::libstuff::db::Database;
+use ratatui::text::Spans;
 use ratatui::{prelude::*, widgets::*};
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -51,6 +52,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
                     KeyCode::Char('q') => return Ok(()),
                     // KeyCode::Char('r') => app.regex(),
                     KeyCode::Right => app.right(),
+                    KeyCode::Left => app.left(),
                     KeyCode::Down => app.next(),
                     KeyCode::Up => app.previous(),
                     _ => {}
@@ -78,7 +80,23 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
             }
         })
         .collect::<Vec<_>>();
-    let header = Row::new(headers).style(Style::default().bold());
+    let current_header: u32 = app.controller.database.current_header;
+    // mark current header
+
+    let header = Row::new(headers.iter().enumerate().map(|(i, h)| {
+        if current_header == i as u32 {
+            Cell::from(Span::styled(
+                h.clone(),
+                Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
+            ))
+        } else {
+            Cell::from(h.clone())
+        }
+    }))
+    // style with bold
+    // .style(Style::default().add_modifier(Modifier::BOLD))
+    .height(1);
+
     // // draw border under header
     let rows = rows.iter().map(|item| {
         let height = 1;
@@ -90,6 +108,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .block(Block::default().borders(Borders::ALL).title("MY TITLE"))
         .highlight_style(selected_style)
         .highlight_symbol(">> ")
-        .widths(widths.as_slice());
+        .widths(widths.as_slice())
+        .bg(Color::Black);
     f.render_stateful_widget(t, rects[0], &mut app.state);
 }
