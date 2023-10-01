@@ -58,6 +58,14 @@ impl<T: Display> Controller<T> {
         self.ui.shutdown()?;
         Ok(())
     }
+    pub fn get_headers_and_rows(
+        &self,
+        limit: i32,
+    ) -> Result<(Vec<String>, Vec<Vec<String>>), AppError> {
+        let first_table = self.database.table_names.iter().next().unwrap();
+        let tuple = self.database.get(limit, first_table);
+        Ok(tuple)
+    }
     //    pub fn run(&mut self) -> Result<(), AppError> {
     //        self.ui.update(&self.sheet)?;
     //        loop {
@@ -118,7 +126,7 @@ impl<T: Display> Controller<T> {
         //         InputState::Back => {}
         //     }
         // }
-        Ok(())
+        todo!();
     }
 
     fn regex_command(&mut self, find: Regex, replace: &str) -> Result<(), AppError> {

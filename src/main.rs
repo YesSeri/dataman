@@ -49,7 +49,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, mut app: App) -> io::Result<(
             if key.kind == KeyEventKind::Press {
                 match key.code {
                     KeyCode::Char('q') => return Ok(()),
-                    KeyCode::Char('r') => app.regex(),
+                    // KeyCode::Char('r') => app.regex(),
                     KeyCode::Right => app.right(),
                     KeyCode::Down => app.next(),
                     KeyCode::Up => app.previous(),
@@ -66,7 +66,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &mut App) {
         .split(f.size());
 
     let selected_style = Style::default().add_modifier(Modifier::REVERSED);
-    let (headers, rows) = app.db.get(20, "data");
+    let (headers, rows) = app.controller.get_headers_and_rows(20).unwrap();
     let per_header = (100 / 4) as u16;
     let widths = headers
         .iter()

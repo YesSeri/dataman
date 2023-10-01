@@ -13,14 +13,14 @@ use ratatui::{
     Terminal,
 };
 
-use crate::{error::AppError, view::Display};
 use crate::libstuff::adapter::Sheet;
+use crate::{error::AppError, view::Display};
 
 pub struct TUI {
     terminal: Terminal<CrosstermBackend<Stdout>>,
 }
 impl Display for TUI {
-    fn update(&mut self, sheet: &Sheet) -> Result<(), AppError> {
+    fn update(&mut self, headers: Vec<String>, rows: Vec<Vec<String>>) -> Result<(), AppError> {
         execute!(std::io::stdout(), terminal::Clear(terminal::ClearType::All))?;
         // self.terminal.draw(|f| {
         //     let size = f.size();
