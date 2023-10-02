@@ -1,4 +1,4 @@
-use std::{io::Stdout, thread, time::Duration};
+use std::{io::Stdout, process::exit, thread, time::Duration};
 
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
@@ -14,7 +14,11 @@ use ratatui::{
     Frame, Terminal,
 };
 
-use crate::{controller::Controller, error::AppError, libstuff::db::Database};
+use crate::{
+    controller::Controller,
+    error::{AppError, AppResult},
+    libstuff::db::Database,
+};
 
 pub struct TUI {
     terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -43,15 +47,15 @@ impl TUI {
             controller
                 .ui
                 .terminal
-                .draw(|f| TUI::update(f, &mut controller.database))?;
+                .draw(|f| TUI::update(f, &mut controller.database).unwrap())?;
             if let Event::Key(key) = event::read()? {
                 let term_height = controller.ui.terminal.backend().size()?.height;
                 if key.kind == KeyEventKind::Press {
                     match key.code {
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('c') => controller.copy(),
-                        KeyCode::Right => controller.database.next_header(),
-                        KeyCode::Left => controller.database.previous_header(),
+                        KeyCode::Right => controller.database.next_header()?,
+                        KeyCode::Left => controller.database.previous_header()?,
                         KeyCode::Down => controller.database.next_row(term_height),
                         KeyCode::Up => controller.database.previous_row(term_height),
                         _ => {}
@@ -60,14 +64,15 @@ impl TUI {
             }
         }
     }
-    fn update<B: Backend>(f: &mut Frame<B>, db: &mut Database) {
+    fn update<B: Backend>(f: &mut Frame<B>, db: &mut Database) -> AppResult<()> {
         let rects = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Max(1000), Constraint::Length(1)].as_ref())
             .split(f.size());
 
-        let table_name = db.table_names.iter().next().unwrap();
-        let (headers, rows) = db.get(150, table_name);
+        let binding = "default table name".to_string();
+        let table_name = db.table_names.iter().next().unwrap_or(&binding);
+        let (headers, rows) = db.get(150, table_name)?;
         let id_extra_space = 8 / headers.len() as u16;
 
         let per_header = (100 / headers.len()) as u16 - id_extra_space;
@@ -104,9 +109,11 @@ impl TUI {
             Row::new(items.clone()).height(height as u16)
         });
         let selected_style = Style::default().add_modifier(Modifier::UNDERLINED);
+        let binding = "default table name".to_string();
+        let table_name = db.table_names.iter().next().unwrap_or(&binding).clone();
         let t = Table::new(rows)
             .header(header)
-            .block(Block::default().borders(Borders::ALL).title("MY TITLE"))
+            .block(Block::default().borders(Borders::ALL).title(table_name))
             .highlight_style(selected_style)
             // .highlight_symbol(">> ")
             .widths(widths.as_slice())
@@ -115,15 +122,17 @@ impl TUI {
 
         let a = db.current_header_idx;
         let b = db.state.selected().unwrap_or(200);
-        let c = db.count_headers();
-        let text = vec![Line::from(vec![
-            Span::raw(format!("current header: {}", a)),
-            // Span::raw(format!("selected: {}", b)),
-            Span::raw(format!("max header: {}", c)),
-        ])];
+        let c: String = db
+            .count_headers()
+            .map(|r| r.to_string())
+            .unwrap_or("???".to_string());
+        let text = vec![Line::from(vec![Span::raw(format!(
+            "current header: {a} selected: {b} max header: {c}"
+        ))])];
         let paragraph = Paragraph::new(text);
 
-        f.render_widget(paragraph, rects[1])
+        f.render_widget(paragraph, rects[1]);
+        Ok(())
     }
 }
 

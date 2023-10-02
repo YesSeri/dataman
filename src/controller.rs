@@ -12,8 +12,8 @@ use crossterm::{
 use ratatui::widgets::TableState;
 use regex::Regex;
 
-use crate::libstuff::db::Database;
 use crate::{error::AppError, tui::TUI};
+use crate::{error::AppResult, libstuff::db::Database};
 
 pub struct Controller {
     pub ui: TUI,
@@ -30,10 +30,10 @@ impl Controller {
         self.ui.shutdown()?;
         Ok(())
     }
-    pub fn get_headers_and_rows(&self, limit: i32) -> (Vec<String>, Vec<Vec<String>>) {
-        let first_table = self.database.table_names.iter().next().unwrap();
-        let tuple = self.database.get(limit, first_table);
-        tuple
+    pub fn get_headers_and_rows(&self, limit: i32) -> AppResult<(Vec<String>, Vec<Vec<String>>)> {
+        let binding = "default table name".to_string();
+        let first_table = self.database.table_names.iter().next().unwrap_or(&binding);
+        self.database.get(limit, first_table)
     }
     //    pub fn run(&mut self) -> Result<(), AppError> {
     //        self.ui.update(&self.sheet)?;
@@ -135,14 +135,14 @@ impl Controller {
         todo!();
     }
 
-    pub fn derive_column(&self, fun: fn(String) -> String) {
-        let column_name = self.database.get_current_header();
-        let _ = self.database.derive_column(column_name, fun);
+    pub fn derive_column(&self, fun: fn(String) -> String) -> AppResult<()> {
+        let column_name = self.database.get_current_header()?;
+        self.database.derive_column(column_name, fun)
     }
 
     pub fn copy(&self) {
         let fun = |s: String| s.to_string();
-        self.derive_column(fun);
+        let _ = self.derive_column(fun);
     }
 }
 enum InputState {

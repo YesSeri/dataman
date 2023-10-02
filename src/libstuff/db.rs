@@ -12,10 +12,9 @@ use std::path::Path;
 
 use regex::Regex;
 use rusqlite::functions::FunctionFlags;
-use rusqlite::Result;
 use std::sync::Arc;
 
-use crate::error::AppError;
+use crate::error::{AppError, AppResult};
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 #[derive(Debug)]
@@ -29,11 +28,12 @@ pub struct Database {
 }
 
 impl Database {
-    pub fn get_current_header(&self) -> String {
-        let table_name = self.table_names.iter().next().unwrap();
-        self.get(0, table_name).0[self.current_header_idx as usize].clone()
+    pub fn get_current_header(&self) -> AppResult<String> {
+        let binding = "default table name".to_string();
+        let table_name = self.table_names.iter().next().unwrap_or(&binding);
+        Ok(self.get(0, table_name)?.0[self.current_header_idx as usize].clone())
     }
-    pub fn get(&self, limit: i32, table_name: &str) -> (Vec<String>, Vec<Vec<String>>) {
+    pub fn get(&self, limit: i32, table_name: &str) -> AppResult<(Vec<String>, Vec<Vec<String>>)> {
         let mut sheet = vec![];
         let ordering = if self.is_asc_order { "ASC" } else { "DESC" };
         let query = format!(
@@ -46,8 +46,8 @@ impl Database {
             .iter()
             .map(<&str>::to_string)
             .collect::<Vec<String>>();
-        let mut rows = stmt.query([]).unwrap();
-        while let Some(row) = rows.next().unwrap() {
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
             let data = cols
                 .iter()
                 .enumerate()
@@ -67,14 +67,10 @@ impl Database {
                 .collect::<Vec<String>>();
             sheet.push(data);
         }
-        (cols, sheet)
+        Ok((cols, sheet))
     }
 
-    pub fn derive_column(
-        &self,
-        column_name: String,
-        fun: fn(String) -> String,
-    ) -> Result<(), Box<dyn Error>> {
+    pub fn derive_column(&self, column_name: String, fun: fn(String) -> String) -> AppResult<()> {
         // create a new column in the table. The new value for each row is the value string value of column name after running fun function on it.
         let derived_column_name = format!("derived-{}", column_name);
 
@@ -85,7 +81,7 @@ impl Database {
         self.connection.execute(&create_column_query, [])?;
 
         // for each row in the table, run fun on the value of column name and insert the result into the new column
-        let query = format!("SELECT id, '{}' FROM data", column_name);
+        let query = format!("SELECT id, \"{}\" FROM data", column_name);
         let mut binding = self.connection.prepare(&query)?;
         let mut rows = binding.query([])?;
 
@@ -127,7 +123,7 @@ impl TryFrom<&Path> for Database {
         let database: Database = if cfg!(debug_assertions) {
             let _ = std::fs::remove_file("db.sqlite");
             Database::new(Connection::open("db.sqlite")?, table_names)
-            //Database::new(Connection::open_in_memory()?, table_names)
+            // Database::new(Connection::open_in_memory()?, table_names)
         } else {
             Database::new(Connection::open_in_memory()?, table_names)
         };
@@ -160,13 +156,13 @@ impl Database {
         let headers = csv.headers()?;
         let columns: String = headers
             .iter()
-            .map(|header| format!("'{}'", header))
+            .map(|header| format!("\"{}\"", header))
             .collect::<Vec<String>>()
             .join(", ");
 
         let headers_string: String = headers
             .iter()
-            .map(|header| format!("\n\t{} TEXT", header))
+            .map(|header| format!("\n\t\"{}\" TEXT", header))
             .collect::<Vec<String>>()
             .join(",");
         let query = format!(
@@ -213,22 +209,28 @@ impl Database {
     fn get_table_name(file: &Path) -> Option<&str> {
         file.file_stem()?.to_str()
     }
-    pub fn count_headers(&self) -> u32 {
-        let table_name = self.table_names.iter().next().unwrap();
+    pub fn count_headers(&self) -> AppResult<u32> {
+        let table_name = self
+            .table_names
+            .iter()
+            .next()
+            .ok_or(AppError::Sqlite(rusqlite::Error::InvalidQuery))?; // TODO handle error
         let query = format!("SELECT COUNT(*) FROM PRAGMA_TABLE_INFO('{}')", table_name);
-        let mut stmt = self.connection.prepare(&query).unwrap();
+        let mut stmt = self.connection.prepare(&query)?;
 
-        let r: u32 = stmt.query_row([], |row| row.get(0)).unwrap();
-        r
+        let r = stmt.query_row([], |row| row.get(0));
+        r.map_err(|e| AppError::Sqlite(e))
     }
-    pub(crate) fn next_header(&mut self) {
-        self.current_header_idx = (self.current_header_idx + 1) % self.count_headers();
+    pub(crate) fn next_header(&mut self) -> AppResult<()> {
+        self.current_header_idx = (self.current_header_idx + 1) % self.count_headers()?;
+        Ok(())
     }
-    pub(crate) fn previous_header(&mut self) {
+    pub(crate) fn previous_header(&mut self) -> AppResult<()> {
         if self.current_header_idx == 0 {
-            self.current_header_idx = self.count_headers();
+            self.current_header_idx = self.count_headers()?;
         };
         self.current_header_idx = self.current_header_idx - 1;
+        Ok(())
     }
 
     pub fn next_row(&mut self, height: u16) {
@@ -266,26 +268,26 @@ mod tests {
     #[test]
     fn inc_header() {
         let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
-        database.next_header();
+        database.next_header().unwrap();
         assert_eq!(1, database.current_header_idx);
-        database.next_header();
+        database.next_header().unwrap();
         assert_eq!(2, database.current_header_idx);
-        database.next_header();
+        database.next_header().unwrap();
         assert_eq!(3, database.current_header_idx);
-        database.next_header();
+        database.next_header().unwrap();
         assert_eq!(0, database.current_header_idx);
     }
 
     #[test]
     fn dec_header() {
         let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
-        database.previous_header();
+        database.previous_header().unwrap();
         assert_eq!(3, database.current_header_idx);
-        database.previous_header();
+        database.previous_header().unwrap();
         assert_eq!(2, database.current_header_idx);
-        database.previous_header();
+        database.previous_header().unwrap();
         assert_eq!(1, database.current_header_idx);
-        database.previous_header();
+        database.previous_header().unwrap();
         assert_eq!(0, database.current_header_idx);
     }
 
@@ -295,8 +297,9 @@ mod tests {
         let col = "firstname";
         let fun = |s| format!("{}-changed", s);
         database.derive_column(col.to_string(), fun).unwrap();
-        let first = database.get(1, "data").1[0][4].clone();
+        let first = database.get(1, "data").unwrap().1[0][4].clone();
         assert_eq!(first, "henrik-changed");
-        assert_eq!(database.count_headers(), 5);
+        let n = database.count_headers().unwrap();
+        assert_eq!(n, 5);
     }
 }

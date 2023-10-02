@@ -3,11 +3,13 @@ use std::{
     fmt,
 };
 
+pub type AppResult<T> = std::result::Result<T, AppError>;
 #[derive(Debug)]
 pub enum AppError {
     Io(std::io::Error),
     Parse(csv::Error),
     Regex(regex::Error),
+    Sqlite(rusqlite::Error),
 }
 
 impl fmt::Display for AppError {
@@ -16,6 +18,7 @@ impl fmt::Display for AppError {
             AppError::Io(err) => write!(f, "IO error: {}", err),
             AppError::Parse(err) => write!(f, "Csv parsing error: {}", err),
             AppError::Regex(err) => write!(f, "Regex parsing error: {}", err),
+            AppError::Sqlite(err) => write!(f, "Sqlite error: {}", err),
         }
     }
 }
@@ -25,6 +28,7 @@ impl error::Error for AppError {
             AppError::Io(err) => Some(err),
             AppError::Parse(err) => Some(err),
             AppError::Regex(err) => Some(err),
+            AppError::Sqlite(err) => Some(err),
         }
     }
 }
@@ -44,5 +48,11 @@ impl From<std::io::Error> for AppError {
 impl From<regex::Error> for AppError {
     fn from(err: regex::Error) -> AppError {
         AppError::Regex(err)
+    }
+}
+
+impl From<rusqlite::Error> for AppError {
+    fn from(err: rusqlite::Error) -> AppError {
+        AppError::Sqlite(err)
     }
 }
