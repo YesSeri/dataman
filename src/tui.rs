@@ -66,7 +66,8 @@ impl TUI {
             .constraints([Constraint::Max(1000), Constraint::Length(1)].as_ref())
             .split(f.size());
 
-        let (headers, rows) = db.get(20, "data");
+        let table_name = db.table_names.iter().next().unwrap();
+        let (headers, rows) = db.get(150, table_name);
         let id_extra_space = 8 / headers.len() as u16;
 
         let per_header = (100 / headers.len()) as u16 - id_extra_space;
@@ -113,7 +114,7 @@ impl TUI {
         f.render_stateful_widget(t, rects[0], &mut db.state);
 
         let a = db.current_header_idx;
-        let b = db.state.selected().unwrap_or(199);
+        let b = db.state.selected().unwrap_or(200);
         let text = vec![Line::from(vec![
             Span::raw(format!("current header: {}", a)),
             Span::raw(format!("selected: {}", b)),

@@ -10,7 +10,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // let m = re.find(hay).unwrap();
     // dbg!(m);
     // todo!();
-    let p = Path::new("assets/data.csv");
+    let p = Path::new("assets/data-long.csv");
 
     let database = Database::try_from(p).unwrap();
     let tui = TUI::new();

@@ -30,13 +30,14 @@ pub struct Database {
 
 impl Database {
     pub fn get_current_header(&self) -> String {
-        self.get(0, "data").0[self.current_header_idx as usize].clone()
+        let table_name = self.table_names.iter().next().unwrap();
+        self.get(0, table_name).0[self.current_header_idx as usize].clone()
     }
     pub fn get(&self, limit: i32, table_name: &str) -> (Vec<String>, Vec<Vec<String>>) {
         let mut sheet = vec![];
         let ordering = if self.is_asc_order { "ASC" } else { "DESC" };
         let query = format!(
-            "SELECT * FROM {} ORDER BY {} {} LIMIT {};",
+            "SELECT * FROM `{}` ORDER BY {} {} LIMIT {};",
             table_name, self.order_column, ordering, limit
         );
         let mut stmt = self.connection.prepare(&query).unwrap();
@@ -93,9 +94,10 @@ impl Database {
             let id: i32 = row.get(0)?;
             let value: String = row.get(1)?;
             let derived_value = fun(value);
+            let table_name = self.table_names.iter().next().unwrap();
             let update_query = format!(
                 "UPDATE {} SET '{}' = ? WHERE id = ?",
-                "data", derived_column_name
+                table_name, derived_column_name
             );
             self.connection
                 .execute(&update_query, params![derived_value, id])?;
@@ -168,7 +170,7 @@ impl Database {
             .collect::<Vec<String>>()
             .join(",");
         let query = format!(
-            "CREATE TABLE IF NOT EXISTS {} (\n\tid INTEGER PRIMARY KEY, {}\n);",
+            "CREATE TABLE IF NOT EXISTS `{}` (\n\tid INTEGER PRIMARY KEY, {}\n);",
             table_name, headers_string
         );
         Ok(query)
@@ -249,7 +251,7 @@ impl Database {
         let i = match self.state.selected() {
             Some(i) => {
                 if i == 0 {
-                    height as usize - 1
+                    height as usize + 1
                 } else {
                     i - 1
                 }
@@ -297,7 +299,7 @@ mod tests {
 
     #[test]
     fn derive_column_test() {
-        let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         let col = "firstname";
         let fun = |s| format!("{}-changed", s);
         database.derive_column(col.to_string(), fun).unwrap();
