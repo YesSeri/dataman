@@ -115,9 +115,11 @@ impl TUI {
 
         let a = db.current_header_idx;
         let b = db.state.selected().unwrap_or(200);
+        let c = db.count_headers();
         let text = vec![Line::from(vec![
             Span::raw(format!("current header: {}", a)),
-            Span::raw(format!("selected: {}", b)),
+            // Span::raw(format!("selected: {}", b)),
+            Span::raw(format!("max header: {}", c)),
         ])];
         let paragraph = Paragraph::new(text);
 

@@ -30,10 +30,7 @@ impl Controller {
         self.ui.shutdown()?;
         Ok(())
     }
-    pub fn get_headers_and_rows(
-        &self,
-        limit: i32,
-    ) -> (Vec<String>, Vec<Vec<String>>) {
+    pub fn get_headers_and_rows(&self, limit: i32) -> (Vec<String>, Vec<Vec<String>>) {
         let first_table = self.database.table_names.iter().next().unwrap();
         let tuple = self.database.get(limit, first_table);
         tuple

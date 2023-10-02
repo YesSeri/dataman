@@ -37,7 +37,7 @@ impl Database {
         let mut sheet = vec![];
         let ordering = if self.is_asc_order { "ASC" } else { "DESC" };
         let query = format!(
-            "SELECT * FROM `{}` ORDER BY {} {} LIMIT {};",
+            "SELECT * FROM '{}' ORDER BY {} {} LIMIT {};",
             table_name, self.order_column, ordering, limit
         );
         let mut stmt = self.connection.prepare(&query).unwrap();
@@ -85,7 +85,7 @@ impl Database {
         self.connection.execute(&create_column_query, [])?;
 
         // for each row in the table, run fun on the value of column name and insert the result into the new column
-        let query = format!("SELECT id, `{}` FROM data", column_name);
+        let query = format!("SELECT id, '{}' FROM data", column_name);
         let mut binding = self.connection.prepare(&query)?;
         let mut rows = binding.query([])?;
 
@@ -126,8 +126,8 @@ impl TryFrom<&Path> for Database {
         let table_names = HashSet::from([table_name.to_string()]);
         let database: Database = if cfg!(debug_assertions) {
             let _ = std::fs::remove_file("db.sqlite");
-            // Database::new(Connection::open("db.sqlite")?, table_names)
-            Database::new(Connection::open_in_memory()?, table_names)
+            Database::new(Connection::open("db.sqlite")?, table_names)
+            //Database::new(Connection::open_in_memory()?, table_names)
         } else {
             Database::new(Connection::open_in_memory()?, table_names)
         };
@@ -170,7 +170,7 @@ impl Database {
             .collect::<Vec<String>>()
             .join(",");
         let query = format!(
-            "CREATE TABLE IF NOT EXISTS `{}` (\n\tid INTEGER PRIMARY KEY, {}\n);",
+            "CREATE TABLE IF NOT EXISTS '{}' (\n\tid INTEGER PRIMARY KEY, {}\n);",
             table_name, headers_string
         );
         Ok(query)
@@ -213,30 +213,22 @@ impl Database {
     fn get_table_name(file: &Path) -> Option<&str> {
         file.file_stem()?.to_str()
     }
-    fn count_headers(&self) -> u32 {
-        let mut stmt = self
-            .connection
-            .prepare("SELECT COUNT(*) FROM PRAGMA_TABLE_INFO('data')")
-            .unwrap();
+    pub fn count_headers(&self) -> u32 {
+        let table_name = self.table_names.iter().next().unwrap();
+        let query = format!("SELECT COUNT(*) FROM PRAGMA_TABLE_INFO('{}')", table_name);
+        let mut stmt = self.connection.prepare(&query).unwrap();
 
         let r: u32 = stmt.query_row([], |row| row.get(0)).unwrap();
         r
     }
     pub(crate) fn next_header(&mut self) {
-        let i = self.current_header_idx + 1;
-        if i >= self.count_headers() {
-            self.current_header_idx = 0;
-        } else {
-            self.current_header_idx = i;
-        }
+        self.current_header_idx = (self.current_header_idx + 1) % self.count_headers();
     }
     pub(crate) fn previous_header(&mut self) {
-        let i = self.current_header_idx;
-        if i == 0 {
-            self.current_header_idx = self.count_headers() - 1;
-        } else {
-            self.current_header_idx = i - 1;
-        }
+        if self.current_header_idx == 0 {
+            self.current_header_idx = self.count_headers();
+        };
+        self.current_header_idx = self.current_header_idx - 1;
     }
 
     pub fn next_row(&mut self, height: u16) {
