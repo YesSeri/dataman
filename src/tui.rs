@@ -1,4 +1,4 @@
-use std::{io::Stdout, process::exit, thread, time::Duration};
+use std::{fmt::Display, io::Stdout, process::exit, thread, time::Duration};
 
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
@@ -20,17 +20,41 @@ use crate::{
     libstuff::db::Database,
 };
 
+pub enum Command {
+    None,
+    Copy,
+    Regex,
+    Edit,
+}
+impl Display for Command {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Command::None => write!(f, "none"),
+            Command::Copy => write!(f, "copy"),
+            Command::Regex => write!(f, "regex"),
+            Command::Edit => write!(f, "edit"),
+        }
+    }
+}
 pub struct TUI {
     terminal: Terminal<CrosstermBackend<Stdout>>,
+    last_command: Command,
 }
 impl TUI {
+    pub fn set_command(&mut self, command: Command) {
+        self.last_command = command;
+    }
+
     pub fn new() -> Self {
         let stdout = std::io::stdout();
         execute!(&stdout, EnterAlternateScreen).unwrap();
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend).unwrap();
         enable_raw_mode().unwrap();
-        Self { terminal }
+        Self {
+            terminal,
+            last_command: Command::None,
+        }
     }
 
     pub fn shutdown(&mut self) -> Result<(), AppError> {
@@ -44,10 +68,9 @@ impl TUI {
     }
     pub fn start(controller: &mut Controller) -> Result<(), AppError> {
         loop {
-            controller
-                .ui
-                .terminal
-                .draw(|f| TUI::update(f, &mut controller.database).unwrap())?;
+            controller.ui.terminal.draw(|f| {
+                TUI::update(f, &mut controller.database, &controller.ui.last_command).unwrap()
+            })?;
             if let Event::Key(key) = event::read()? {
                 let term_height = controller.ui.terminal.backend().size()?.height;
                 if key.kind == KeyEventKind::Press {
@@ -64,7 +87,11 @@ impl TUI {
             }
         }
     }
-    fn update<B: Backend>(f: &mut Frame<B>, db: &mut Database) -> AppResult<()> {
+    fn update<B: Backend>(
+        f: &mut Frame<B>,
+        db: &mut Database,
+        last_command: &Command,
+    ) -> AppResult<()> {
         let rects = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Max(1000), Constraint::Length(1)].as_ref())
@@ -127,7 +154,7 @@ impl TUI {
             .map(|r| r.to_string())
             .unwrap_or("???".to_string());
         let text = vec![Line::from(vec![Span::raw(format!(
-            "current header: {a} selected: {b} max header: {c}"
+            "last command: {last_command} current header: {a} selected: {b} max header: {c}"
         ))])];
         let paragraph = Paragraph::new(text);
 

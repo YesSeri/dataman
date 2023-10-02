@@ -74,14 +74,15 @@ impl Database {
         // create a new column in the table. The new value for each row is the value string value of column name after running fun function on it.
         let derived_column_name = format!("derived-{}", column_name);
 
+        let table_name = self.table_names.iter().next().unwrap();
         let create_column_query = format!(
-            "ALTER TABLE data ADD COLUMN '{}' TEXT;",
+            "ALTER TABLE \"{table_name}\" ADD COLUMN '{}' TEXT;",
             derived_column_name
         );
         self.connection.execute(&create_column_query, [])?;
 
         // for each row in the table, run fun on the value of column name and insert the result into the new column
-        let query = format!("SELECT id, \"{}\" FROM data", column_name);
+        let query = format!("SELECT id, \"{}\" FROM \"{table_name}\"", column_name);
         let mut binding = self.connection.prepare(&query)?;
         let mut rows = binding.query([])?;
 
@@ -92,7 +93,7 @@ impl Database {
             let derived_value = fun(value);
             let table_name = self.table_names.iter().next().unwrap();
             let update_query = format!(
-                "UPDATE {} SET '{}' = ? WHERE id = ?",
+                "UPDATE \"{}\" SET '{}' = ? WHERE id = ?",
                 table_name, derived_column_name
             );
             self.connection
@@ -122,8 +123,8 @@ impl TryFrom<&Path> for Database {
         let table_names = HashSet::from([table_name.to_string()]);
         let database: Database = if cfg!(debug_assertions) {
             let _ = std::fs::remove_file("db.sqlite");
-            Database::new(Connection::open("db.sqlite")?, table_names)
-            // Database::new(Connection::open_in_memory()?, table_names)
+            // Database::new(Connection::open("db.sqlite")?, table_names)
+            Database::new(Connection::open_in_memory()?, table_names)
         } else {
             Database::new(Connection::open_in_memory()?, table_names)
         };

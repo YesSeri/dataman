@@ -12,7 +12,10 @@ use crossterm::{
 use ratatui::widgets::TableState;
 use regex::Regex;
 
-use crate::{error::AppError, tui::TUI};
+use crate::{
+    error::AppError,
+    tui::{Command, TUI},
+};
 use crate::{error::AppResult, libstuff::db::Database};
 
 pub struct Controller {
@@ -26,9 +29,8 @@ impl Controller {
     }
 
     pub fn run(&mut self) -> Result<(), AppError> {
-        let res = TUI::start(self);
-        self.ui.shutdown()?;
-        Ok(())
+        TUI::start(self)?;
+        self.ui.shutdown()
     }
     pub fn get_headers_and_rows(&self, limit: i32) -> AppResult<(Vec<String>, Vec<Vec<String>>)> {
         let binding = "default table name".to_string();
@@ -140,8 +142,9 @@ impl Controller {
         self.database.derive_column(column_name, fun)
     }
 
-    pub fn copy(&self) {
+    pub fn copy(&mut self) {
         let fun = |s: String| s.to_string();
+        self.ui.set_command(Command::Copy);
         let _ = self.derive_column(fun);
     }
 }
@@ -152,14 +155,43 @@ enum InputState {
 }
 #[cfg(test)]
 mod test {
+    use std::path::Path;
+
     use regex::Regex;
 
     use super::*;
 
     #[test]
-    fn regex_derive_column() {
-        let data = r"col1,col2
-abc,def
-";
+    fn copy_column_test() {
+        let p = Path::new("assets/data.csv");
+        let mut database = Database::try_from(p).unwrap();
+        let copy_fun = |s: String| s.to_string();
+        database.next_header().unwrap();
+        let column_name = database.get_current_header().unwrap();
+        database.derive_column(column_name, copy_fun).unwrap();
+        let (_, res) = database.get(20, "data").unwrap();
+        for row in res.iter() {
+            let original = row[1].clone();
+            let copy = row[4].clone();
+            assert_eq!(original, copy);
+        }
+    }
+
+    #[test]
+    fn copy_column_long_test() {
+        let p = Path::new("assets/data-long.csv");
+        let mut database = Database::try_from(p).unwrap();
+
+        let copy_fun = |s: String| s.to_string();
+        database.next_header().unwrap();
+        let column_name = database.get_current_header().unwrap();
+        database.derive_column(column_name, copy_fun).unwrap();
+        let table_name = database.table_names.iter().next().unwrap();
+        let (_, res) = database.get(20, table_name).unwrap();
+        for row in res.iter() {
+            let original = row[1].clone();
+            let copy = row[4].clone();
+            assert_eq!(original, copy);
+        }
     }
 }
