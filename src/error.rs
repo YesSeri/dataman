@@ -2,6 +2,7 @@ use std::{
     error::{self, Error},
     fmt,
 };
+use std::fmt::write;
 
 pub type AppResult<T> = std::result::Result<T, AppError>;
 #[derive(Debug)]
@@ -10,6 +11,7 @@ pub enum AppError {
     Parse(csv::Error),
     Regex(regex::Error),
     Sqlite(rusqlite::Error),
+    Other,
 }
 
 impl fmt::Display for AppError {
@@ -19,6 +21,7 @@ impl fmt::Display for AppError {
             AppError::Parse(err) => write!(f, "Csv parsing error: {}", err),
             AppError::Regex(err) => write!(f, "Regex parsing error: {}", err),
             AppError::Sqlite(err) => write!(f, "Sqlite error: {}", err),
+            AppError::Other => {write!(f, "Other error")}
         }
     }
 }
@@ -29,6 +32,7 @@ impl error::Error for AppError {
             AppError::Parse(err) => Some(err),
             AppError::Regex(err) => Some(err),
             AppError::Sqlite(err) => Some(err),
+            AppError::Other => Some(self)
         }
     }
 }

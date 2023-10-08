@@ -3,7 +3,7 @@
 use csv::Reader;
 use ratatui::widgets::TableState;
 use rusqlite::types::ValueRef;
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, Statement};
 use std::cmp;
 use std::collections::HashSet;
 use std::error::Error;
@@ -15,6 +15,7 @@ use rusqlite::functions::FunctionFlags;
 use std::sync::Arc;
 
 use crate::error::{AppError, AppResult};
+
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 #[derive(Debug)]
@@ -84,23 +85,40 @@ impl Database {
         let cell = row.get(0)?;
         Ok(cell)
     }
+    pub fn prepare(&self, sql: &str) -> rusqlite::Result<Statement> {
+        if cfg!(debug_assertions) {
+            eprintln!("{}", sql);
+        }
+        self.connection.prepare(&sql)
+    }
+    pub fn execute<P: rusqlite::Params>(&self, sql: &str, params: P) -> AppResult<()> {
+        if cfg!(debug_assertions) {
+            eprintln!("{}", sql);
+        }
+        self.connection.execute(&sql, params)?;
+        Ok(())
+    }
 
-    pub fn derive_column(&self, column_name: String, fun: fn(String) -> String) -> AppResult<()> {
+    pub fn execute_batch(&self, sql: &str) -> AppResult<()> {
+        if cfg!(debug_assertions) {
+            eprintln!("{}", sql);
+        }
+        self.connection.execute_batch(&sql)?;
+        Ok(())
+    }
+    pub fn derive_column(&mut self, column_name: String, fun: fn(String) -> String) -> AppResult<()> {
         // create a new column in the table. The new value for each row is the value string value of column name after running fun function on it.
-        let derived_column_name = format!("derived-{}", column_name);
 
         let table_name = self.table_names.iter().next().unwrap();
-        let create_column_query = format!(
-            "ALTER TABLE `{table_name}` ADD COLUMN '{}' TEXT;",
-            derived_column_name
-        );
-        self.connection.execute(&create_column_query, [])?;
-
         // for each row in the table, run fun on the value of column name and insert the result into the new column
-        let query = format!("SELECT id, `{}` FROM `{table_name}`", column_name);
+        let query = format!("SELECT `id`, `{column_name}` FROM `{table_name}`");
         let mut binding = self.connection.prepare(&query)?;
         let mut rows = binding.query([])?;
-
+        let derived_column_name = format!("derived{}", column_name);
+        let create_column_query = format!("ALTER TABLE `{table_name}` ADD COLUMN `{derived_column_name}` TEXT;\n");
+        let mut transaction = String::new();
+        transaction.push_str("BEGIN TRANSACTION;\n");
+        transaction.push_str(create_column_query.as_ref());
         // TODO use a transaction
         while let Some(row) = rows.next()? {
             let id: i32 = row.get(0)?;
@@ -108,13 +126,12 @@ impl Database {
             let derived_value = fun(value);
             let table_name = self.table_names.iter().next().unwrap();
             let update_query = format!(
-                "UPDATE `{}` SET '{}' = ? WHERE id = ?",
-                table_name, derived_column_name
+                "UPDATE `{table_name}` SET '{derived_column_name}' = '{derived_value}' WHERE id = '{id}';\n",
             );
-            self.connection
-                .execute(&update_query, params![derived_value, id])?;
+            transaction.push_str(&update_query);
         }
-
+        transaction.push_str("COMMIT;\n");
+        self.execute_batch(&transaction)?;
         Ok(())
     }
 
@@ -165,8 +182,8 @@ impl TryFrom<&Path> for Database {
         let table_names = HashSet::from([table_name.to_string()]);
         let database: Database = if cfg!(debug_assertions) {
             let _ = std::fs::remove_file("db.sqlite");
-            Database::new(Connection::open("db.sqlite")?, table_names)
-            // Database::new(Connection::open_in_memory()?, table_names)
+            // Database::new(Connection::open("db.sqlite")?, table_names)
+            Database::new(Connection::open_in_memory()?, table_names)
         } else {
             Database::new(Connection::open_in_memory()?, table_names)
         };
@@ -305,8 +322,7 @@ impl Database {
     pub fn update_cell(&mut self, header: &str, id: i32, content: &str) -> AppResult<()> {
         let table_name = self.get_first_table();
         let update_query = format!("UPDATE `{}` SET '{}' = ? WHERE id = ?;", table_name, header);
-        self.connection
-            .execute(&update_query, params![content, id])?;
+        self.execute(&update_query, params![content, id])?;
         Ok(())
     }
 }
@@ -315,11 +331,13 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn get_number_of_headers_test() {
         let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         let number_of_headers = database.count_headers();
     }
+
     #[test]
     fn inc_header() {
         let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
@@ -365,6 +383,7 @@ mod tests {
         let first = database.get(1, 0, "data").unwrap().1[0][1].clone();
         assert_eq!(first, "hank");
     }
+
     #[test]
     fn test_offset() {
         let database = Database::try_from(Path::new("assets/data.csv")).unwrap();

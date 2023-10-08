@@ -53,7 +53,7 @@ impl Controller {
         todo!();
     }
 
-    pub fn derive_column(&self, fun: fn(String) -> String) -> AppResult<()> {
+    pub fn derive_column(&mut self, fun: fn(String) -> String) -> AppResult<()> {
         let column_name = self.database.get_current_header()?;
         self.database.derive_column(column_name, fun)
     }
