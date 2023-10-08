@@ -1,4 +1,10 @@
-use std::{fmt::Display, io::Stdout, process::exit, thread, time::Duration};
+use std::{
+    fmt::Display,
+    io::{Read, Stdout, Write},
+    process::exit,
+    thread,
+    time::Duration,
+};
 
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
@@ -47,7 +53,7 @@ impl TUI {
 
     pub fn new() -> Self {
         let stdout = std::io::stdout();
-        execute!(&stdout, EnterAlternateScreen).unwrap();
+        // execute!(&stdout, EnterAlternateScreen).unwrap();
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend).unwrap();
         enable_raw_mode().unwrap();
@@ -61,7 +67,7 @@ impl TUI {
         execute!(
             self.terminal.backend_mut(),
             terminal::Clear(terminal::ClearType::All),
-            LeaveAlternateScreen
+            // LeaveAlternateScreen
         )?;
         terminal::disable_raw_mode()?;
         Ok(())
@@ -77,6 +83,8 @@ impl TUI {
                     match key.code {
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('c') => controller.copy(),
+                        KeyCode::Char('s') => controller.sort()?,
+                        KeyCode::Char('e') => controller.edit_cell()?,
                         KeyCode::Right => controller.database.next_header()?,
                         KeyCode::Left => controller.database.previous_header()?,
                         KeyCode::Down => controller.database.next_row(term_height),
@@ -86,6 +94,23 @@ impl TUI {
                 }
             }
         }
+    }
+
+    pub fn get_editor_input(data: &str) -> AppResult<String> {
+        let editor = std::env::var("EDITOR").unwrap();
+        let mut file_path = std::env::temp_dir();
+        file_path.push("dataman_input.txt");
+
+        let mut file = std::fs::File::create(&file_path)?;
+        file.write_all(data.as_bytes())?;
+
+        std::process::Command::new(editor)
+            .arg(&file_path)
+            .status()?;
+
+        let mut editable = String::new();
+        std::fs::File::open(file_path)?.read_to_string(&mut editable)?;
+        Ok(editable)
     }
     fn update<B: Backend>(
         f: &mut Frame<B>,
@@ -99,7 +124,7 @@ impl TUI {
 
         let binding = "default table name".to_string();
         let table_name = db.table_names.iter().next().unwrap_or(&binding);
-        let (headers, rows) = db.get(150, table_name)?;
+        let (headers, rows) = db.get(150, 0, table_name)?;
         let id_extra_space = 8 / headers.len() as u16;
 
         let per_header = (100 / headers.len()) as u16 - id_extra_space;
@@ -153,8 +178,9 @@ impl TUI {
             .count_headers()
             .map(|r| r.to_string())
             .unwrap_or("???".to_string());
+        let offset = db.state.offset();
         let text = vec![Line::from(vec![Span::raw(format!(
-            "last command: {last_command} current header: {a} selected: {b} max header: {c}"
+            "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
         ))])];
         let paragraph = Paragraph::new(text);
 
