@@ -54,7 +54,6 @@ impl TUI {
 
     pub fn new() -> Self {
         let stdout = std::io::stdout();
-        // execute!(&stdout, EnterAlternateScreen).unwrap();
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend).unwrap();
         enable_raw_mode().unwrap();
@@ -68,8 +67,8 @@ impl TUI {
         execute!(
             self.terminal.backend_mut(),
             terminal::Clear(terminal::ClearType::All),
-            // LeaveAlternateScreen
         )?;
+        print!("\x1B[2J\x1B[1;1H");
         terminal::disable_raw_mode()?;
         Ok(())
     }
@@ -89,8 +88,9 @@ impl TUI {
                 if key.kind == KeyEventKind::Press {
                     match key.code {
                         KeyCode::Char('q') => return Ok(()),
+                        KeyCode::Char('f') => controller.regex_filter()?,
                         KeyCode::Char('c') => controller.copy(),
-                        KeyCode::Char('r') => controller.regex("hen")?,
+                        KeyCode::Char('r') => controller.regex()?,
                         KeyCode::Char('s') => controller.sort()?,
                         KeyCode::Char('e') => controller.edit_cell()?,
                         KeyCode::Right => controller.database.next_header()?,
@@ -131,7 +131,8 @@ impl TUI {
             .split(f.size());
 
         let binding = "default table name".to_string();
-        let table_name = db.table_names.iter().next().unwrap_or(&binding);
+        let table_name = db.get_current_table_name()?;
+        eprintln!("table_name: {}", table_name);
         let (headers, rows) = db.get(150, 0, table_name)?;
         let id_extra_space = 8 / headers.len() as u16;
 
@@ -170,7 +171,7 @@ impl TUI {
         });
         let selected_style = Style::default().add_modifier(Modifier::UNDERLINED);
         let binding = "default table name".to_string();
-        let table_name = db.table_names.iter().next().unwrap_or(&binding).clone();
+        let table_name = db.get_current_table_name()?;
         let t = Table::new(rows)
             .header(header)
             .block(Block::default().borders(Borders::ALL).title(table_name))

@@ -32,9 +32,9 @@ impl Controller {
         TUI::start(self)?;
         self.ui.shutdown()
     }
-    pub fn get_headers_and_rows(&self, limit: i32) -> AppResult<(Vec<String>, Vec<Vec<String>>)> {
+    pub fn get_headers_and_rows(&mut self, limit: i32) -> AppResult<(Vec<String>, Vec<Vec<String>>)> {
         let binding = "default table name".to_string();
-        let first_table = self.database.table_names.iter().next().unwrap_or(&binding);
+        let first_table = self.database.get_current_table_name()?;
         self.database.get(limit, 0, first_table)
     }
     fn poll_for_input(&mut self) -> InputState {
@@ -49,17 +49,27 @@ impl Controller {
         }
     }
 
-    pub fn regex(&mut self, pattern: &str) -> AppResult<()> {
+    pub fn regex_filter(&mut self) -> AppResult<()> {
+        let pattern = TUI::get_editor_input("Enter regex")?;
+        let pattern = pattern.trim_end_matches('\n');
+        eprintln!("pattern: {:?}", pattern);
+        let header = self.database.get_current_header()?;
+        self.database.regex_filter(&header, pattern)?;
+
+        Ok(())
+
+    }
+    pub fn regex(&mut self) -> AppResult<()> {
+        let pattern = TUI::get_editor_input("Enter regex")?;
+        // remove last
+        let pattern = pattern.trim_end_matches('\n');
+        eprintln!("pattern: {:?}", pattern);
         self.ui.set_command(Command::Regex);
         let fun = |s: String| {
-            let re = Regex::new(pattern).map_err(AppError::Regex).ok()?;
+            let re = Regex::new(&pattern).map_err(AppError::Regex).ok()?;
             let first_match: AppResult<_> = re.captures_iter(&s).next().ok_or(AppError::Other);
             eprintln!("first match: {:?}", first_match);
-            let r = first_match
-                .ok()
-                .map(|m| m.get(1))?
-                .map(|c| c.as_str().to_string());
-            eprintln!("{:?}", r);
+            let r = first_match.ok().map(|m| m.get(0))?.map(|c| c.as_str().to_string());
             r
         };
         self.derive_column(fun)?;
@@ -67,8 +77,8 @@ impl Controller {
     }
 
     pub fn derive_column<F>(&mut self, fun: F) -> AppResult<()>
-    where
-        F: Fn(String) -> Option<String>,
+        where
+            F: Fn(String) -> Option<String>,
     {
         let column_name = self.database.get_current_header()?;
         self.database.derive_column(column_name, fun)
@@ -94,11 +104,13 @@ impl Controller {
         self.database.sort()
     }
 }
+
 enum InputState {
     More,
     Next,
     Back,
 }
+
 #[cfg(test)]
 mod test {
     use std::path::Path;
@@ -109,11 +121,12 @@ mod test {
     fn copy_column_test() {
         let p = Path::new("assets/data.csv");
         let mut database = Database::try_from(p).unwrap();
-        let copy_fun = |s: String| s.to_string();
+        let copy_fun = |s: String| Some(s.to_string());
+
         database.next_header().unwrap();
         let column_name = database.get_current_header().unwrap();
         database.derive_column(column_name, copy_fun).unwrap();
-        let (_, res) = database.get(20, 100, "data").unwrap();
+        let (_, res) = database.get(20, 100, "data".to_string()).unwrap();
         for row in res.iter() {
             let original = row[1].clone();
             let copy = row[4].clone();
@@ -126,11 +139,11 @@ mod test {
         let p = Path::new("assets/data-long.csv");
         let mut database = Database::try_from(p).unwrap();
 
-        let copy_fun = |s: String| s.to_string();
+        let copy_fun = |s: String| Some(s.to_string());
         database.next_header().unwrap();
         let column_name = database.get_current_header().unwrap();
         database.derive_column(column_name, copy_fun).unwrap();
-        let table_name = database.table_names.iter().next().unwrap();
+        let table_name = database.get_current_table_name().unwrap();
         let (_, res) = database.get(20, 0, table_name).unwrap();
         for row in res.iter() {
             let original = row[1].clone();

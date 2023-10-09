@@ -6,3 +6,4 @@ pub mod controller;
 pub mod error;
 pub mod libstuff;
 pub mod tui;
+pub mod db_user_fn;
