@@ -9,5 +9,5 @@ edition = "2021"
 crossterm = "0.27.0"
 csv = "1.2.2"
 ratatui = { version = "0.23.0", features = ["all-widgets"] }
-regex = "1.9.3"
+regex = "1.9.6"
 rusqlite = { version = "0.29.0", features = ["bundled", "functions"] }

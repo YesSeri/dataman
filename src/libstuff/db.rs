@@ -10,7 +10,6 @@ use std::error::Error;
 use std::fs::File;
 use std::path::Path;
 
-use regex::Regex;
 use rusqlite::functions::FunctionFlags;
 use std::sync::Arc;
 
@@ -106,16 +105,19 @@ impl Database {
         self.connection.execute_batch(&sql)?;
         Ok(())
     }
-    pub fn derive_column(&mut self, column_name: String, fun: fn(String) -> String) -> AppResult<()> {
+    pub fn derive_column<F>(&mut self, column_name: String, fun: F) -> AppResult<()>
+    where
+        F: Fn(String) -> Option<String>,
+    {
         // create a new column in the table. The new value for each row is the value string value of column name after running fun function on it.
-
         let table_name = self.table_names.iter().next().unwrap();
         // for each row in the table, run fun on the value of column name and insert the result into the new column
         let query = format!("SELECT `id`, `{column_name}` FROM `{table_name}`");
         let mut binding = self.connection.prepare(&query)?;
         let mut rows = binding.query([])?;
         let derived_column_name = format!("derived{}", column_name);
-        let create_column_query = format!("ALTER TABLE `{table_name}` ADD COLUMN `{derived_column_name}` TEXT;\n");
+        let create_column_query =
+            format!("ALTER TABLE `{table_name}` ADD COLUMN `{derived_column_name}` TEXT;\n");
         let mut transaction = String::new();
         transaction.push_str("BEGIN TRANSACTION;\n");
         transaction.push_str(create_column_query.as_ref());
@@ -123,7 +125,7 @@ impl Database {
         while let Some(row) = rows.next()? {
             let id: i32 = row.get(0)?;
             let value: String = row.get(1)?;
-            let derived_value = fun(value);
+            let derived_value = fun(value).unwrap_or("NULL".to_string());
             let table_name = self.table_names.iter().next().unwrap();
             let update_query = format!(
                 "UPDATE `{table_name}` SET '{derived_column_name}' = '{derived_value}' WHERE id = '{id}';\n",
@@ -182,8 +184,8 @@ impl TryFrom<&Path> for Database {
         let table_names = HashSet::from([table_name.to_string()]);
         let database: Database = if cfg!(debug_assertions) {
             let _ = std::fs::remove_file("db.sqlite");
-            // Database::new(Connection::open("db.sqlite")?, table_names)
-            Database::new(Connection::open_in_memory()?, table_names)
+            Database::new(Connection::open("db.sqlite")?, table_names)
+            // Database::new(Connection::open_in_memory()?, table_names)
         } else {
             Database::new(Connection::open_in_memory()?, table_names)
         };
@@ -366,9 +368,9 @@ mod tests {
 
     #[test]
     fn derive_column_test() {
-        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         let col = "firstname";
-        let fun = |s| format!("{}-changed", s);
+        let fun = |s| Ok(format!("{}-changed", s));
         database.derive_column(col.to_string(), fun).unwrap();
         let first = database.get(1, 0, "data").unwrap().1[0][4].clone();
         assert_eq!(first, "henrik-changed");

@@ -49,17 +49,33 @@ impl Controller {
         }
     }
 
-    pub fn regex(&self) {
-        todo!();
+    pub fn regex(&mut self, pattern: &str) -> AppResult<()> {
+        self.ui.set_command(Command::Regex);
+        let fun = |s: String| {
+            let re = Regex::new(pattern).map_err(AppError::Regex).ok()?;
+            let first_match: AppResult<_> = re.captures_iter(&s).next().ok_or(AppError::Other);
+            eprintln!("first match: {:?}", first_match);
+            let r = first_match
+                .ok()
+                .map(|m| m.get(1))?
+                .map(|c| c.as_str().to_string());
+            eprintln!("{:?}", r);
+            r
+        };
+        self.derive_column(fun)?;
+        Ok(())
     }
 
-    pub fn derive_column(&mut self, fun: fn(String) -> String) -> AppResult<()> {
+    pub fn derive_column<F>(&mut self, fun: F) -> AppResult<()>
+    where
+        F: Fn(String) -> Option<String>,
+    {
         let column_name = self.database.get_current_header()?;
         self.database.derive_column(column_name, fun)
     }
 
     pub fn copy(&mut self) {
-        let fun = |s: String| s.to_string();
+        let fun = |s: String| Some(s.to_string());
         self.ui.set_command(Command::Copy);
         let _ = self.derive_column(fun);
     }
@@ -86,8 +102,6 @@ enum InputState {
 #[cfg(test)]
 mod test {
     use std::path::Path;
-
-    use regex::Regex;
 
     use super::*;
 

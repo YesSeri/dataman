@@ -1,3 +1,4 @@
+use core::panic;
 use std::{
     fmt::Display,
     io::{Read, Stdout, Write},
@@ -75,7 +76,13 @@ impl TUI {
     pub fn start(controller: &mut Controller) -> Result<(), AppError> {
         loop {
             controller.ui.terminal.draw(|f| {
-                TUI::update(f, &mut controller.database, &controller.ui.last_command).unwrap()
+                match TUI::update(f, &mut controller.database, &controller.ui.last_command) {
+                    Ok(_) => (),
+                    Err(_) => {
+                        terminal::disable_raw_mode().unwrap();
+                        panic!("error in update");
+                    }
+                }
             })?;
             if let Event::Key(key) = event::read()? {
                 let term_height = controller.ui.terminal.backend().size()?.height;
@@ -83,6 +90,7 @@ impl TUI {
                     match key.code {
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('c') => controller.copy(),
+                        KeyCode::Char('r') => controller.regex("hen")?,
                         KeyCode::Char('s') => controller.sort()?,
                         KeyCode::Char('e') => controller.edit_cell()?,
                         KeyCode::Right => controller.database.next_header()?,
