@@ -12,6 +12,7 @@ use crossterm::{
     execute,
     terminal::{self, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use crossterm::event::KeyModifiers;
 use ratatui::{
     prelude::{Backend, Constraint, CrosstermBackend, Direction, Layout},
     style::{Color, Modifier, Style, Stylize},
@@ -91,8 +92,14 @@ impl TUI {
                         KeyCode::Char('f') => controller.regex_filter()?,
                         KeyCode::Char('c') => controller.copy(),
                         KeyCode::Char('r') => controller.regex()?,
-                        KeyCode::Char('s') => controller.sort()?,
                         KeyCode::Char('e') => controller.edit_cell()?,
+                        KeyCode::Char('s')=> {
+                            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                                controller.save()?
+                            }else{
+                                controller.sort()?
+                            }
+                        },
                         KeyCode::Right => controller.database.next_header()?,
                         KeyCode::Left => controller.database.previous_header()?,
                         KeyCode::Down => controller.database.next_row(term_height),

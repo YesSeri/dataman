@@ -4,11 +4,11 @@ use csv::Reader;
 use ratatui::widgets::TableState;
 use rusqlite::types::ValueRef;
 use rusqlite::{params, Connection, Statement};
-use std::cmp;
 use std::error::Error;
 use std::fs::File;
 use std::hash::Hash;
 use std::path::Path;
+use std::process::id;
 
 use rusqlite::functions::FunctionFlags;
 use std::sync::Arc;
@@ -31,7 +31,7 @@ pub struct Database {
 }
 
 impl Database {
-    pub fn get_current_header(& self) -> AppResult<String> {
+    pub fn get_current_header(&self) -> AppResult<String> {
         let binding = vec!["default table name".to_string()];
         let table_name = self.get_current_table_name()?;
         Ok(self.get(0, 0, table_name)?.0[self.current_header_idx as usize].clone())
@@ -107,7 +107,7 @@ impl Database {
         self.connection.execute_batch(&sql)?;
         Ok(())
     }
-    pub fn derive_column<F>(& self, column_name: String, fun: F) -> AppResult<()>
+    pub fn derive_column<F>(&self, column_name: String, fun: F) -> AppResult<()>
         where
             F: Fn(String) -> Option<String>,
     {
@@ -176,9 +176,9 @@ impl Database {
         }
         Ok(table_names)
     }
-    pub fn next_table(& self) -> AppResult<()> {
+    pub fn next_table(&mut self) -> AppResult<()> {
         let query = format!("SELECT rowid FROM sqlite_master WHERE type='table' AND rowid > {} ORDER BY rowid;", self.current_table_idx);
-        let id:usize = self.connection.query_row(&query, [], |row| row.get(0))?;
+        self.current_table_idx = self.connection.query_row(&query, [], |row| row.get(0))?;
         Ok(())
     }
     pub fn get_current_table_name(&self) -> AppResult<String> {
@@ -189,12 +189,11 @@ impl Database {
         //     let id: usize = r.get(0)?;
         //     eprintln!("name: {}",  id);
         // }
-
         let query = format!("SELECT name FROM sqlite_master WHERE type='table' AND rowid={};", self.current_table_idx);
         let table_name = self.connection.query_row(&query, [], |row| row.get(0))?;
         Ok(table_name)
     }
-    pub fn regex_filter(& self, header: &str, pattern: &str) -> AppResult<()> {
+    pub fn regex_filter(&mut self, header: &str, pattern: &str) -> AppResult<()> {
         // create new table with filter applied using create table as sqlite statement.
         regex::Regex::new(pattern)?;
         let table_name = self.get_current_table_name()?;
@@ -234,7 +233,6 @@ impl TryFrom<&Path> for Database {
 
 impl Database {
     pub fn new(table_names: Vec<String>) -> Self {
-
         let mut state = TableState::default();
         state.select(Some(0));
         let connection = if cfg!(debug_assertions) {
@@ -374,7 +372,7 @@ impl Database {
         };
         self.state.select(Some(i));
     }
-    pub fn update_cell(& self, header: &str, id: i32, content: &str) -> AppResult<()> {
+    pub fn update_cell(&self, header: &str, id: i32, content: &str) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
         let update_query = format!("UPDATE `{}` SET '{}' = ? WHERE id = ?;", table_name, header);
         self.execute(&update_query, params![content, id])?;

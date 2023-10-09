@@ -24,6 +24,13 @@ pub struct Controller {
 }
 
 impl Controller {
+    pub(crate) fn save(&self) -> AppResult<()> {
+        eprintln!("save not implemented");
+        Ok(())
+    }
+}
+
+impl Controller {
     pub fn new(ui: TUI, database: Database) -> Self {
         Self { ui, database }
     }
