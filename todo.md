@@ -1,0 +1,2 @@
+- Add sql query `q` shortcut 
+- `TryFrom<Path>` amd `TryFrom<Stdin>` is only two inputs. Within these two we can decide which file to use, .csv, .sqlite3, .tsv.

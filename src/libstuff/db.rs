@@ -10,10 +10,10 @@ use std::hash::Hash;
 use std::path::Path;
 use std::process::id;
 
-use rusqlite::functions::FunctionFlags;
-use std::sync::Arc;
 use crossterm::event::KeyCode::F;
 use crossterm::ExecutableCommand;
+use rusqlite::functions::FunctionFlags;
+use std::sync::Arc;
 
 use crate::error::{AppError, AppResult};
 
@@ -81,22 +81,26 @@ impl Database {
         let table_name = self.get_current_table_name()?;
         let query = format!("SELECT `{}` FROM `{}` WHERE id = ?;", header, table_name);
         let mut stmt = self.prepare(&query)?;
+        if cfg!(debug_assertions) {
+            eprintln!("id: {}", id);
+        }
         let mut rows = stmt.query(params![id])?;
         let row = rows.next()?.unwrap();
         let cell = row.get(0)?;
+
         Ok(cell)
     }
     pub fn prepare(&self, sql: &str) -> rusqlite::Result<Statement> {
         if cfg!(debug_assertions) {
             eprintln!("{}", sql);
         }
-        self.connection.prepare(&sql)
+        self.connection.prepare(sql)
     }
     pub fn execute<P: rusqlite::Params>(&self, sql: &str, params: P) -> AppResult<()> {
         if cfg!(debug_assertions) {
             eprintln!("{}", sql);
         }
-        self.connection.execute(&sql, params)?;
+        self.connection.execute(sql, params)?;
         Ok(())
     }
 
@@ -104,12 +108,12 @@ impl Database {
         if cfg!(debug_assertions) {
             eprintln!("{}", sql);
         }
-        self.connection.execute_batch(&sql)?;
+        self.connection.execute_batch(sql)?;
         Ok(())
     }
     pub fn derive_column<F>(&self, column_name: String, fun: F) -> AppResult<()>
-        where
-            F: Fn(String) -> Option<String>,
+    where
+        F: Fn(String) -> Option<String>,
     {
         // create a new column in the table. The new value for each row is the value string value of column name after running fun function on it.
         let table_name = self.get_current_table_name()?;
@@ -140,10 +144,11 @@ impl Database {
     }
 
     pub(crate) fn get_current_id(&self) -> AppResult<i32> {
-        let i = self.state.selected().unwrap_or(0) + 1;
+        let i = self.state.selected().unwrap_or(0);
         let query = format!(
-            "SELECT rowid FROM `{}` WHERE rowid = ?",
+            "SELECT rowid FROM `{}` LIMIT 1 OFFSET {};",
             self.get_current_table_name()?,
+            i
         );
         let a: i32 = self
             .connection
@@ -177,7 +182,10 @@ impl Database {
         Ok(table_names)
     }
     pub fn next_table(&mut self) -> AppResult<()> {
-        let query = format!("SELECT rowid FROM sqlite_master WHERE type='table' AND rowid > {} ORDER BY rowid;", self.current_table_idx);
+        let query = format!(
+            "SELECT rowid FROM sqlite_master WHERE type='table' AND rowid > {} ORDER BY rowid;",
+            self.current_table_idx
+        );
         self.current_table_idx = self.connection.query_row(&query, [], |row| row.get(0))?;
         Ok(())
     }
@@ -189,7 +197,10 @@ impl Database {
         //     let id: usize = r.get(0)?;
         //     eprintln!("name: {}",  id);
         // }
-        let query = format!("SELECT name FROM sqlite_master WHERE type='table' AND rowid={};", self.current_table_idx);
+        let query = format!(
+            "SELECT name FROM sqlite_master WHERE type='table' AND rowid={};",
+            self.current_table_idx
+        );
         let table_name = self.connection.query_row(&query, [], |row| row.get(0))?;
         Ok(table_name)
     }
@@ -197,8 +208,10 @@ impl Database {
         // create new table with filter applied using create table as sqlite statement.
         regex::Regex::new(pattern)?;
         let table_name = self.get_current_table_name()?;
-        let select_query = format!("SELECT * FROM `{table_name}` WHERE `{header}` REGEXP '{pattern}'");
-        let create_table_query = format!("CREATE TABLE `{table_name}RegexFiltered` AS {select_query};");
+        let select_query =
+            format!("SELECT * FROM `{table_name}` WHERE `{header}` REGEXP '{pattern}'");
+        let create_table_query =
+            format!("CREATE TABLE `{table_name}RegexFiltered` AS {select_query};");
 
         self.execute(&create_table_query, [])?;
         self.next_table()?;
@@ -223,9 +236,12 @@ impl TryFrom<&Path> for Database {
             database.execute(&query, ())?;
         }
 
-
-        let query = format!("SELECT rowid FROM sqlite_master WHERE type='table' ORDER BY rowid LIMIT 1;");
-        let table_idx: usize = database.connection.query_row(&query, [], |row| row.get(0)).unwrap();
+        let query = "SELECT rowid FROM sqlite_master WHERE type='table' ORDER BY rowid LIMIT 1;"
+            .to_string();
+        let table_idx: usize = database
+            .connection
+            .query_row(&query, [], |row| row.get(0))
+            .unwrap();
         database.current_table_idx = table_idx;
         Ok(database)
     }
