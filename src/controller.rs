@@ -12,11 +12,11 @@ use crossterm::{
 use ratatui::widgets::TableState;
 use regex::Regex;
 
+use crate::{error::AppResult, libstuff::db::Database};
 use crate::{
-    error::AppError,
+    error::{log, AppError},
     tui::{Command, TUI},
 };
-use crate::{error::AppResult, libstuff::db::Database};
 
 pub struct Controller {
     pub ui: TUI,
@@ -25,7 +25,7 @@ pub struct Controller {
 
 impl Controller {
     pub(crate) fn save(&self) -> AppResult<()> {
-        eprintln!("save not implemented");
+        log("save not implemented".to_owned());
         Ok(())
     }
 }
@@ -62,7 +62,7 @@ impl Controller {
     pub fn regex_filter(&mut self) -> AppResult<()> {
         let pattern = TUI::get_editor_input("Enter regex")?;
         let pattern = pattern.trim_end_matches('\n');
-        eprintln!("pattern: {:?}", pattern);
+        log(format!("pattern: {:?}", pattern));
         let header = self.database.get_current_header()?;
         self.database.regex_filter(&header, pattern)?;
 

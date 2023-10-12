@@ -14,6 +14,11 @@ pub enum AppError {
     Sqlite(rusqlite::Error),
     Other,
 }
+pub fn log(msg: String) {
+    if cfg!(debug_assertions) {
+        eprintln!("{}", msg);
+    }
+}
 
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

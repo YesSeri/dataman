@@ -3,7 +3,7 @@ use std::{
     fmt::Display,
     io::{Read, Stdout, Write},
     process::exit,
-    thread,
+    result, thread,
     time::Duration,
 };
 
@@ -89,7 +89,7 @@ impl TUI {
             if let Event::Key(key) = event::read()? {
                 let term_height = controller.ui.terminal.backend().size()?.height;
                 if key.kind == KeyEventKind::Press {
-                    let r: AppResult<()> = match key.code {
+                    let res: AppResult<()> = match key.code {
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('f') => controller.regex_filter(),
                         KeyCode::Char('c') => controller.copy(),
@@ -114,8 +114,13 @@ impl TUI {
                         }
                         _ => Ok(()),
                     };
+
+                    if let Err(err) = res {
+                        controller.ui.set_command(Command::IllegalOperation(
+                            "Could not execute command.".to_string(),
+                        ));
+                    }
                 }
-                if let Err(err) = r {}
             }
         }
     }
@@ -148,7 +153,6 @@ impl TUI {
 
         let binding = "default table name".to_string();
         let table_name = db.get_current_table_name()?;
-        eprintln!("table_name: {}", table_name);
         let (headers, rows) = db.get(150, 0, table_name)?;
         let id_extra_space = 8 / headers.len() as u16;
 

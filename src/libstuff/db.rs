@@ -15,7 +15,7 @@ use crossterm::ExecutableCommand;
 use rusqlite::functions::FunctionFlags;
 use std::sync::Arc;
 
-use crate::error::{AppError, AppResult};
+use crate::error::{log, AppError, AppResult};
 
 type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
@@ -82,7 +82,7 @@ impl Database {
         let query = format!("SELECT `{}` FROM `{}` WHERE id = ?;", header, table_name);
         let mut stmt = self.prepare(&query)?;
         if cfg!(debug_assertions) {
-            eprintln!("id: {}", id);
+            log(format!("id: {}", id));
         }
         let mut rows = stmt.query(params![id])?;
         let row = rows.next()?.unwrap();
@@ -92,13 +92,13 @@ impl Database {
     }
     pub fn prepare(&self, sql: &str) -> rusqlite::Result<Statement> {
         if cfg!(debug_assertions) {
-            eprintln!("{}", sql);
+            log(format!("{}", sql));
         }
         self.connection.prepare(sql)
     }
     pub fn execute<P: rusqlite::Params>(&self, sql: &str, params: P) -> AppResult<()> {
         if cfg!(debug_assertions) {
-            eprintln!("{}", sql);
+            log(format!("{}", sql));
         }
         self.connection.execute(sql, params)?;
         Ok(())
@@ -106,7 +106,7 @@ impl Database {
 
     pub fn execute_batch(&self, sql: &str) -> AppResult<()> {
         if cfg!(debug_assertions) {
-            eprintln!("{}", sql);
+            log(format!("{}", sql));
         }
         self.connection.execute_batch(sql)?;
         Ok(())
@@ -124,17 +124,15 @@ impl Database {
         let derived_column_name = format!("derived{}", column_name);
         let create_column_query =
             format!("ALTER TABLE `{table_name}` ADD COLUMN `{derived_column_name}` TEXT;\n");
-        self.execute(&create_column_query, [])?;
-
         let mut transaction = String::new();
         transaction.push_str("BEGIN TRANSACTION;\n");
-        // transaction.push_str(create_column_query.as_ref());
+        transaction.push_str(create_column_query.as_ref());
         // TODO use a transaction
-        let table_name = self.get_table_names()?[0].clone();
         while let Some(row) = rows.next()? {
             let id: i32 = row.get(0)?;
             let value: String = row.get(1)?;
             let derived_value = fun(value).unwrap_or("NULL".to_string());
+            let table_name = self.get_table_names()?[0].clone();
             let update_query = format!(
                 "UPDATE `{table_name}` SET '{derived_column_name}' = '{derived_value}' WHERE id = '{id}';\n",
             );
@@ -197,7 +195,7 @@ impl Database {
         // let mut rows = stmt.query([])?;
         // while let Some(r) = rows.next()? {
         //     let id: usize = r.get(0)?;
-        //     eprintln!("name: {}",  id);
+        //     log("name: {}",  id);
         // }
         let query = format!(
             "SELECT name FROM sqlite_master WHERE type='table' AND rowid={};",
@@ -218,20 +216,6 @@ impl Database {
         self.execute(&create_table_query, [])?;
         self.next_table()?;
         Ok(())
-    }
-    pub fn regex(&self, pattern: &str, column_name: String) -> AppResult<()> {
-        eprintln!("pattern: {:?}", pattern);
-        let fun = |s: String| {
-            let re = regex::Regex::new(pattern).map_err(AppError::Regex).ok()?;
-            let first_match: AppResult<_> = re.captures_iter(&s).next().ok_or(AppError::Other);
-            eprintln!("first match: {:?}", first_match);
-
-            first_match
-                .ok()
-                .map(|m| m.get(0))?
-                .map(|c| c.as_str().to_string())
-        };
-        self.derive_column(column_name, fun)
     }
     // TODO 1. add ability to take input.
     // TODO 2. user sql query
@@ -285,7 +269,7 @@ impl Database {
             state,
         };
         database.add_custom_functions().unwrap_or_else(|e| {
-            eprintln!("Error adding custom functions, e.g. REGEXP: {}", e);
+            log(format!("Error adding custom functions, e.g. REGEXP: {}", e));
         });
         database
     }
