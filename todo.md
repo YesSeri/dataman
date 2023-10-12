@@ -1,2 +1,3 @@
 - Add sql query `q` shortcut 
-- `TryFrom<Path>` amd `TryFrom<Stdin>` is only two inputs. Within these two we can decide which file to use, .csv, .sqlite3, .tsv.
+- `TryFrom<Path>` amd `TryFrom<String>` is only two inputs. Within these two we can decide which file to use, .csv, .sqlite3, .tsv.
+- add wrapper to `TableState` to keep track of rowid. The problem is that you can't access the data in *Ratatui's* TableState.
