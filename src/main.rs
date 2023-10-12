@@ -1,6 +1,6 @@
 use std::{error::Error, path::Path};
 
-use dataman::{controller::Controller, libstuff::db::Database, tui::TUI, db_user_fn::scalar_function_example};
+use dataman::{controller::Controller, libstuff::db::Database, tui::TUI};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();

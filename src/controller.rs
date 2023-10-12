@@ -39,7 +39,10 @@ impl Controller {
         TUI::start(self)?;
         self.ui.shutdown()
     }
-    pub fn get_headers_and_rows(&mut self, limit: i32) -> AppResult<(Vec<String>, Vec<Vec<String>>)> {
+    pub fn get_headers_and_rows(
+        &mut self,
+        limit: i32,
+    ) -> AppResult<(Vec<String>, Vec<Vec<String>>)> {
         let binding = "default table name".to_string();
         let first_table = self.database.get_current_table_name()?;
         self.database.get(limit, 0, first_table)
@@ -64,37 +67,30 @@ impl Controller {
         self.database.regex_filter(&header, pattern)?;
 
         Ok(())
-
     }
     pub fn regex(&mut self) -> AppResult<()> {
         let pattern = TUI::get_editor_input("Enter regex")?;
         // remove last
         let pattern = pattern.trim_end_matches('\n');
-        eprintln!("pattern: {:?}", pattern);
         self.ui.set_command(Command::Regex);
-        let fun = |s: String| {
-            let re = Regex::new(&pattern).map_err(AppError::Regex).ok()?;
-            let first_match: AppResult<_> = re.captures_iter(&s).next().ok_or(AppError::Other);
-            eprintln!("first match: {:?}", first_match);
-            let r = first_match.ok().map(|m| m.get(0))?.map(|c| c.as_str().to_string());
-            r
-        };
-        self.derive_column(fun)?;
+        let column_name = self.database.get_current_header()?;
+        self.database.regex(pattern, column_name).unwrap();
         Ok(())
     }
 
     pub fn derive_column<F>(&mut self, fun: F) -> AppResult<()>
-        where
-            F: Fn(String) -> Option<String>,
+    where
+        F: Fn(String) -> Option<String>,
     {
         let column_name = self.database.get_current_header()?;
         self.database.derive_column(column_name, fun)
     }
 
-    pub fn copy(&mut self) {
+    pub fn copy(&mut self) -> AppResult<()> {
         let fun = |s: String| Some(s.to_string());
         self.ui.set_command(Command::Copy);
-        let _ = self.derive_column(fun);
+        self.derive_column(fun)?;
+        Ok(())
     }
 
     pub(crate) fn edit_cell(&mut self) -> AppResult<()> {

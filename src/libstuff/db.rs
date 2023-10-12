@@ -124,15 +124,17 @@ impl Database {
         let derived_column_name = format!("derived{}", column_name);
         let create_column_query =
             format!("ALTER TABLE `{table_name}` ADD COLUMN `{derived_column_name}` TEXT;\n");
+        self.execute(&create_column_query, [])?;
+
         let mut transaction = String::new();
         transaction.push_str("BEGIN TRANSACTION;\n");
-        transaction.push_str(create_column_query.as_ref());
+        // transaction.push_str(create_column_query.as_ref());
         // TODO use a transaction
+        let table_name = self.get_table_names()?[0].clone();
         while let Some(row) = rows.next()? {
             let id: i32 = row.get(0)?;
             let value: String = row.get(1)?;
             let derived_value = fun(value).unwrap_or("NULL".to_string());
-            let table_name = self.get_table_names()?[0].clone();
             let update_query = format!(
                 "UPDATE `{table_name}` SET '{derived_column_name}' = '{derived_value}' WHERE id = '{id}';\n",
             );
@@ -216,6 +218,20 @@ impl Database {
         self.execute(&create_table_query, [])?;
         self.next_table()?;
         Ok(())
+    }
+    pub fn regex(&self, pattern: &str, column_name: String) -> AppResult<()> {
+        eprintln!("pattern: {:?}", pattern);
+        let fun = |s: String| {
+            let re = regex::Regex::new(pattern).map_err(AppError::Regex).ok()?;
+            let first_match: AppResult<_> = re.captures_iter(&s).next().ok_or(AppError::Other);
+            eprintln!("first match: {:?}", first_match);
+
+            first_match
+                .ok()
+                .map(|m| m.get(0))?
+                .map(|c| c.as_str().to_string())
+        };
+        self.derive_column(column_name, fun)
     }
     // TODO 1. add ability to take input.
     // TODO 2. user sql query

@@ -7,12 +7,12 @@ use std::{
     time::Duration,
 };
 
+use crossterm::event::KeyModifiers;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{self, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use crossterm::event::KeyModifiers;
 use ratatui::{
     prelude::{Backend, Constraint, CrosstermBackend, Direction, Layout},
     style::{Color, Modifier, Style, Stylize},
@@ -33,6 +33,7 @@ pub enum Command {
     Copy,
     Regex,
     Edit,
+    IllegalOperation(String),
 }
 impl Display for Command {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -41,6 +42,7 @@ impl Display for Command {
             Command::Copy => write!(f, "copy"),
             Command::Regex => write!(f, "regex"),
             Command::Edit => write!(f, "edit"),
+            Command::IllegalOperation(msg) => write!(f, "illegal operation: {}", msg),
         }
     }
 }
@@ -87,26 +89,33 @@ impl TUI {
             if let Event::Key(key) = event::read()? {
                 let term_height = controller.ui.terminal.backend().size()?.height;
                 if key.kind == KeyEventKind::Press {
-                    match key.code {
+                    let r: AppResult<()> = match key.code {
                         KeyCode::Char('q') => return Ok(()),
-                        KeyCode::Char('f') => controller.regex_filter()?,
+                        KeyCode::Char('f') => controller.regex_filter(),
                         KeyCode::Char('c') => controller.copy(),
-                        KeyCode::Char('r') => controller.regex()?,
-                        KeyCode::Char('e') => controller.edit_cell()?,
-                        KeyCode::Char('s')=> {
+                        KeyCode::Char('r') => controller.regex(),
+                        KeyCode::Char('e') => controller.edit_cell(),
+                        KeyCode::Char('s') => {
                             if key.modifiers.contains(KeyModifiers::CONTROL) {
-                                controller.save()?
-                            }else{
-                                controller.sort()?
+                                controller.save()
+                            } else {
+                                controller.sort()
                             }
-                        },
-                        KeyCode::Right => controller.database.next_header()?,
-                        KeyCode::Left => controller.database.previous_header()?,
-                        KeyCode::Down => controller.database.next_row(term_height),
-                        KeyCode::Up => controller.database.previous_row(term_height),
-                        _ => {}
-                    }
+                        }
+                        KeyCode::Right => controller.database.next_header(),
+                        KeyCode::Left => controller.database.previous_header(),
+                        KeyCode::Down => {
+                            controller.database.next_row(term_height);
+                            Ok(())
+                        }
+                        KeyCode::Up => {
+                            controller.database.previous_row(term_height);
+                            Ok(())
+                        }
+                        _ => Ok(()),
+                    };
                 }
+                if let Err(err) = r {}
             }
         }
     }
