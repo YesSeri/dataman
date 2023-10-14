@@ -74,7 +74,8 @@ impl Controller {
         let pattern = pattern.trim_end_matches('\n');
         self.ui.set_command(Command::Regex);
         let column_name = self.database.get_current_header()?;
-        self.database.regex(pattern, column_name).unwrap();
+        todo!();
+        // self.database.regex(pattern, column_name).unwrap();
         Ok(())
     }
 

@@ -26,7 +26,7 @@ pub struct Database {
     pub order_column: String,
     pub is_asc_order: bool,
     pub state: TableState,
-    current_table_idx: usize,
+    pub(super) current_table_idx: usize,
     row_idx: usize,
 }
 
@@ -108,7 +108,9 @@ impl Database {
         if cfg!(debug_assertions) {
             log(format!("{}", sql));
         }
-        self.connection.execute_batch(sql)?;
+
+        self.connection
+            .execute_batch(&format!("BEGIN TRANSACTION; {} COMMIT;", sql))?;
         Ok(())
     }
     pub fn derive_column<F>(&self, column_name: String, fun: F) -> AppResult<()>
@@ -226,24 +228,35 @@ impl TryFrom<&Path> for Database {
     type Error = Box<dyn Error>;
 
     fn try_from(path: &Path) -> Result<Self, Box<dyn Error>> {
-        let mut csv = csv::Reader::from_path(path)?;
-        let table_name = Database::get_table_name(path).unwrap();
-        let table_names = vec![table_name.to_string()];
-        let mut database: Database = Database::new(table_names);
-        let funs = vec![Self::build_create_table_query, Self::build_add_data_query];
-        for fun in funs {
-            let query = fun(&mut csv, table_name)?;
-            database.execute(&query, ())?;
-        }
+        let extension = path.extension().unwrap();
+        match extension {
+            os_str if os_str == "csv" => {
+                let mut csv = csv::Reader::from_path(path)?;
+                let table_name = Database::get_table_name(path).unwrap();
+                let table_names = vec![table_name.to_string()];
+                let mut database: Database = Database::new(table_names);
+                let funs = vec![Self::build_create_table_query, Self::build_add_data_query];
+                for fun in funs {
+                    let query = fun(&mut csv, table_name)?;
+                    database.execute(&query, ())?;
+                }
 
-        let query = "SELECT rowid FROM sqlite_master WHERE type='table' ORDER BY rowid LIMIT 1;"
-            .to_string();
-        let table_idx: usize = database
-            .connection
-            .query_row(&query, [], |row| row.get(0))
-            .unwrap();
-        database.current_table_idx = table_idx;
-        Ok(database)
+                let query =
+                    "SELECT rowid FROM sqlite_master WHERE type='table' ORDER BY rowid LIMIT 1;"
+                        .to_string();
+                let table_idx: usize = database
+                    .connection
+                    .query_row(&query, [], |row| row.get(0))
+                    .unwrap();
+                database.current_table_idx = table_idx;
+                Ok(database)
+            }
+            os_str if os_str == "sqlite" => {
+                // Self::try_from_sqlite(path)
+                unimplemented!("sqlite");
+            }
+            _ => panic!("Unsupported file format"),
+        }
     }
 }
 
@@ -286,7 +299,7 @@ impl Database {
             },
         )
     }
-    fn build_create_table_query(
+    pub(crate) fn build_create_table_query(
         csv: &mut Reader<File>,
         table_name: &str,
     ) -> Result<String, Box<dyn Error>> {
@@ -309,7 +322,7 @@ impl Database {
         Ok(query)
     }
 
-    fn build_add_data_query(
+    pub(crate) fn build_add_data_query(
         csv: &mut Reader<File>,
         table_name: &str,
     ) -> Result<String, Box<dyn Error>> {
@@ -343,7 +356,7 @@ impl Database {
         Ok(query)
     }
 
-    fn get_table_name(file: &Path) -> Option<&str> {
+    pub(crate) fn get_table_name(file: &Path) -> Option<&str> {
         file.file_stem()?.to_str()
     }
     pub fn count_headers(&self) -> AppResult<u32> {
