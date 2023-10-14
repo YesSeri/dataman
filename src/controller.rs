@@ -74,8 +74,7 @@ impl Controller {
         let pattern = pattern.trim_end_matches('\n');
         self.ui.set_command(Command::Regex);
         let column_name = self.database.get_current_header()?;
-        self.database.regex(pattern, column_name).unwrap();
-        Ok(())
+        self.database.regex(pattern, column_name)
     }
 
     pub fn derive_column<F>(&mut self, fun: F) -> AppResult<()>

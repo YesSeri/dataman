@@ -116,9 +116,15 @@ impl TUI {
                     };
 
                     if let Err(err) = res {
-                        controller.ui.set_command(Command::IllegalOperation(
-                            "Could not execute command.".to_string(),
-                        ));
+                        controller
+                            .ui
+                            .set_command(Command::IllegalOperation(match err {
+                                AppError::Io(err) => err.to_string(),
+                                AppError::Parse(err) => err.to_string(),
+                                AppError::Regex(err) => err.to_string(),
+                                AppError::Sqlite(err) => err.to_string(),
+                                AppError::Other => err.to_string(),
+                            }));
                     }
                 }
             }

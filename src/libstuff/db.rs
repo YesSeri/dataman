@@ -2,6 +2,7 @@
 
 use csv::Reader;
 use ratatui::widgets::TableState;
+use regex::Regex;
 use rusqlite::types::ValueRef;
 use rusqlite::{params, Connection, Statement};
 use std::error::Error;
@@ -92,13 +93,13 @@ impl Database {
     }
     pub fn prepare(&self, sql: &str) -> rusqlite::Result<Statement> {
         if cfg!(debug_assertions) {
-            log(format!("{}", sql));
+            log(sql.to_string());
         }
         self.connection.prepare(sql)
     }
     pub fn execute<P: rusqlite::Params>(&self, sql: &str, params: P) -> AppResult<()> {
         if cfg!(debug_assertions) {
-            log(format!("{}", sql));
+            log(sql.to_string());
         }
         self.connection.execute(sql, params)?;
         Ok(())
@@ -106,7 +107,7 @@ impl Database {
 
     pub fn execute_batch(&self, sql: &str) -> AppResult<()> {
         if cfg!(debug_assertions) {
-            log(format!("{}", sql));
+            log(sql.to_string());
         }
         self.connection.execute_batch(sql)?;
         Ok(())
@@ -172,7 +173,7 @@ impl Database {
     }
     pub fn get_table_names(&self) -> AppResult<Vec<String>> {
         let query = "SELECT name FROM sqlite_master WHERE type='table' ORDER BY rowid;";
-        let mut stmt = self.prepare(&query)?;
+        let mut stmt = self.prepare(query)?;
         let mut rows = stmt.query([])?;
         let mut table_names = Vec::new();
         while let Some(row) = rows.next()? {
@@ -216,6 +217,19 @@ impl Database {
         self.execute(&create_table_query, [])?;
         self.next_table()?;
         Ok(())
+    }
+
+    pub(crate) fn regex(&self, pattern: &str, column_name: String) -> AppResult<()> {
+        let fun = |s: String| {
+            let re = Regex::new(pattern).map_err(AppError::Regex).ok()?;
+            let first_match: AppResult<_> = re.captures_iter(&s).next().ok_or(AppError::Other);
+            eprintln!("first match: {:?}", first_match);
+            first_match
+                .ok()
+                .map(|m| m.get(0))?
+                .map(|c| c.as_str().to_string())
+        };
+        self.derive_column(column_name, fun)
     }
     // TODO 1. add ability to take input.
     // TODO 2. user sql query
