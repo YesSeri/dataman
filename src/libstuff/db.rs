@@ -106,13 +106,18 @@ impl Database {
     }
 
     pub fn execute_batch(&self, sql: &str) -> AppResult<()> {
+        let query = &format!("BEGIN TRANSACTION;{}COMMIT;", sql);
         if cfg!(debug_assertions) {
-            log(sql.to_string());
+            log(query.to_string());
         }
 
-        self.connection
-            .execute_batch(&format!("BEGIN TRANSACTION; {} COMMIT;", sql))?;
-        Ok(())
+        match self.connection.execute_batch(query) {
+            Ok(_) => Ok(()),
+            Err(err) => {
+                let _ = self.execute("ROLLBACK;", []);
+                AppResult::Err(AppError::Sqlite(err))
+            }
+        }
     }
     pub fn derive_column<F>(&self, column_name: String, fun: F) -> AppResult<()>
     where
@@ -128,7 +133,6 @@ impl Database {
         let create_column_query =
             format!("ALTER TABLE `{table_name}` ADD COLUMN `{derived_column_name}` TEXT;\n");
         let mut transaction = String::new();
-        transaction.push_str("BEGIN TRANSACTION;\n");
         transaction.push_str(create_column_query.as_ref());
         // TODO use a transaction
         while let Some(row) = rows.next()? {
@@ -141,7 +145,6 @@ impl Database {
             );
             transaction.push_str(&update_query);
         }
-        transaction.push_str("COMMIT;\n");
         self.execute_batch(&transaction)?;
         Ok(())
     }
@@ -245,27 +248,32 @@ impl TryFrom<&Path> for Database {
         let extension = path.extension().unwrap();
         match extension {
             os_str if os_str == "csv" => {
-                let mut csv = csv::Reader::from_path(path)?;
-                let table_name = Database::get_table_name(path).unwrap();
-                let table_names = vec![table_name.to_string()];
-                let mut database: Database = Database::new(table_names);
-                let funs = vec![Self::build_create_table_query, Self::build_add_data_query];
-                for fun in funs {
-                    let query = fun(&mut csv, table_name)?;
-                    database.execute(&query, ())?;
-                }
-
-                let query =
-                    "SELECT rowid FROM sqlite_master WHERE type='table' ORDER BY rowid LIMIT 1;"
-                        .to_string();
-                let table_idx: usize = database
-                    .connection
-                    .query_row(&query, [], |row| row.get(0))
-                    .unwrap();
-                database.current_table_idx = table_idx;
+                let database = super::converter::database_from_csv(path)?;
                 Ok(database)
+                // let mut csv = csv::Reader::from_path(path)?;
+                // let table_name = Database::get_table_name(path).unwrap();
+                // let table_names = vec![table_name.to_string()];
+                // let mut database: Database = Database::new(table_names);
+                // let funs = vec![Self::build_create_table_query, Self::build_add_data_query];
+                // for fun in funs {
+                //     let query = fun(&mut csv, table_name)?;
+                //     database.execute(&query, ())?;
+                // }
+
+                // let query =
+                //     "SELECT rowid FROM sqlite_master WHERE type='table' ORDER BY rowid LIMIT 1;"
+                //         .to_string();
+                // let table_idx: usize = database
+                //     .connection
+                //     .query_row(&query, [], |row| row.get(0))
+                //     .unwrap();
+                // database.current_table_idx = table_idx;
+                // Ok(database)
             }
             os_str if os_str == "sqlite" => {
+                let database = super::converter::database_from_sqlite(path)?;
+                todo!();
+                // Ok(database)
                 // Self::try_from_sqlite(path)
                 unimplemented!("sqlite");
             }

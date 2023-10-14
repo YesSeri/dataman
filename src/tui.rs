@@ -215,7 +215,8 @@ impl TUI {
             .unwrap_or("???".to_string());
         let offset = db.state.offset();
         let text = vec![Line::from(vec![Span::raw(format!(
-            "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
+            // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
+            "last command: {last_command}"
         ))])];
         let paragraph = Paragraph::new(text);
 
