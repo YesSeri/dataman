@@ -23,7 +23,7 @@ type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
 #[derive(Debug)]
 pub struct Database {
     pub connection: Connection,
-    pub current_header_idx: u32,
+    pub header_idx: u32,
     pub order_column: String,
     pub is_asc_order: bool,
     pub state: TableState,
@@ -35,7 +35,7 @@ impl Database {
     pub fn get_current_header(&self) -> AppResult<String> {
         let binding = vec!["default table name".to_string()];
         let table_name = self.get_current_table_name()?;
-        Ok(self.get(0, 0, table_name)?.0[self.current_header_idx as usize].clone())
+        Ok(self.get(0, 0, table_name)?.0[self.header_idx as usize].clone())
     }
     pub fn get(
         &self,
@@ -236,6 +236,10 @@ impl Database {
         };
         self.derive_column(column_name, fun)
     }
+
+    pub(crate) fn sql_query(&self, query: String) -> AppResult<()> {
+        self.execute_batch(&query)
+    }
     // TODO 1. add ability to take input.
     // TODO 2. user sql query
     // TODO 3. user regex fn
@@ -272,10 +276,9 @@ impl TryFrom<&Path> for Database {
             }
             os_str if os_str == "sqlite" => {
                 let database = super::converter::database_from_sqlite(path)?;
-                todo!();
+                unimplemented!("sqlite");
                 // Ok(database)
                 // Self::try_from_sqlite(path)
-                unimplemented!("sqlite");
             }
             _ => panic!("Unsupported file format"),
         }
@@ -288,15 +291,15 @@ impl Database {
         state.select(Some(0));
         let connection = if cfg!(debug_assertions) {
             let _ = std::fs::remove_file("db.sqlite");
+            // Connection::open_in_memory().unwrap();
             Connection::open("db.sqlite").unwrap()
-            // Connection::open_in_memory().unwrap()
         } else {
             Connection::open_in_memory().unwrap()
         };
 
         let database = Database {
             connection,
-            current_header_idx: 0,
+            header_idx: 0,
             order_column: "id".to_string(),
             is_asc_order: true,
             row_idx: 0,
@@ -389,19 +392,33 @@ impl Database {
         let r = stmt.query_row([], |row| row.get(0));
         r.map_err(AppError::Sqlite)
     }
-    pub(crate) fn next_header(&mut self) -> AppResult<()> {
-        self.current_header_idx = (self.current_header_idx + 1) % self.count_headers()?;
+
+    pub(crate) fn move_cursor(
+        &mut self,
+        direction: crate::controller::Direction,
+        height: u16,
+    ) -> AppResult<()> {
+        match direction {
+            crate::controller::Direction::Left => self.previous_header()?,
+            crate::controller::Direction::Right => self.next_header()?,
+            crate::controller::Direction::Up => self.previous_row(height),
+            crate::controller::Direction::Down => self.next_row(height),
+        }
         Ok(())
     }
-    pub(crate) fn previous_header(&mut self) -> AppResult<()> {
-        if self.current_header_idx == 0 {
-            self.current_header_idx = self.count_headers()?;
+    fn next_header(&mut self) -> AppResult<()> {
+        self.header_idx = (self.header_idx + 1) % self.count_headers()?;
+        Ok(())
+    }
+    fn previous_header(&mut self) -> AppResult<()> {
+        if self.header_idx == 0 {
+            self.header_idx = self.count_headers()?;
         };
-        self.current_header_idx -= 1;
+        self.header_idx -= 1;
         Ok(())
     }
 
-    pub fn next_row(&mut self, height: u16) {
+    fn next_row(&mut self, height: u16) {
         let i = match self.state.selected() {
             Some(i) if i <= height as usize => i + 1,
             _ => 0,
@@ -410,7 +427,7 @@ impl Database {
         self.state.select(Some(i));
     }
 
-    pub fn previous_row(&mut self, height: u16) {
+    fn previous_row(&mut self, height: u16) {
         let i = match self.state.selected() {
             Some(i) => {
                 if i == 0 {
@@ -446,31 +463,31 @@ mod tests {
     fn inc_header() {
         let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         database.next_header().unwrap();
-        assert_eq!(1, database.current_header_idx);
+        assert_eq!(1, database.header_idx);
         database.next_header().unwrap();
-        assert_eq!(2, database.current_header_idx);
+        assert_eq!(2, database.header_idx);
         database.next_header().unwrap();
-        assert_eq!(3, database.current_header_idx);
+        assert_eq!(3, database.header_idx);
         database.next_header().unwrap();
-        assert_eq!(0, database.current_header_idx);
+        assert_eq!(0, database.header_idx);
     }
 
     #[test]
     fn dec_header() {
         let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         database.previous_header().unwrap();
-        assert_eq!(3, database.current_header_idx);
+        assert_eq!(3, database.header_idx);
         database.previous_header().unwrap();
-        assert_eq!(2, database.current_header_idx);
+        assert_eq!(2, database.header_idx);
         database.previous_header().unwrap();
-        assert_eq!(1, database.current_header_idx);
+        assert_eq!(1, database.header_idx);
         database.previous_header().unwrap();
-        assert_eq!(0, database.current_header_idx);
+        assert_eq!(0, database.header_idx);
     }
 
     #[test]
     fn derive_column_test() {
-        let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         let col = "firstname";
         let fun = |s| Some(format!("{}-changed", s));
         database.derive_column(col.to_string(), fun).unwrap();
@@ -482,7 +499,7 @@ mod tests {
 
     #[test]
     fn update_cell() {
-        let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         database.update_cell("firstname", 1, "hank").unwrap();
         let first = database.get(1, 0, "data".to_string()).unwrap().1[0][1].clone();
         assert_eq!(first, "hank");
@@ -499,7 +516,7 @@ mod tests {
 
     #[test]
     fn get_table_names_test() {
-        let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         let table_names = database.get_table_names().unwrap();
     }
 

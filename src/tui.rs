@@ -14,7 +14,7 @@ use crossterm::{
     terminal::{self, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
-    prelude::{Backend, Constraint, CrosstermBackend, Direction, Layout},
+    prelude::{Backend, Constraint, CrosstermBackend, Layout},
     style::{Color, Modifier, Style, Stylize},
     symbols::block,
     text::{Line, Span, Text},
@@ -23,47 +23,25 @@ use ratatui::{
 };
 
 use crate::{
-    controller::Controller,
+    controller::{Command, CommandWrapper, Controller, Direction},
     error::{AppError, AppResult},
     libstuff::db::Database,
 };
 
-pub enum Command {
-    None,
-    Copy,
-    Regex,
-    Edit,
-    IllegalOperation(String),
-}
-impl Display for Command {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Command::None => write!(f, "none"),
-            Command::Copy => write!(f, "copy"),
-            Command::Regex => write!(f, "regex"),
-            Command::Edit => write!(f, "edit"),
-            Command::IllegalOperation(msg) => write!(f, "illegal operation: {}", msg),
-        }
-    }
-}
 pub struct TUI {
     terminal: Terminal<CrosstermBackend<Stdout>>,
-    last_command: Command,
 }
 impl TUI {
-    pub fn set_command(&mut self, command: Command) {
-        self.last_command = command;
-    }
-
     pub fn new() -> Self {
         let stdout = std::io::stdout();
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend).unwrap();
         enable_raw_mode().unwrap();
-        Self {
-            terminal,
-            last_command: Command::None,
-        }
+        Self { terminal }
+    }
+    pub fn get_terminal_height(&self) -> AppResult<u16> {
+        let size = self.terminal.backend().size()?;
+        Ok(size.height)
     }
 
     pub fn shutdown(&mut self) -> Result<(), AppError> {
@@ -75,59 +53,77 @@ impl TUI {
         terminal::disable_raw_mode()?;
         Ok(())
     }
-    pub fn start(controller: &mut Controller) -> Result<(), AppError> {
-        loop {
-            controller.ui.terminal.draw(|f| {
-                match TUI::update(f, &mut controller.database, &controller.ui.last_command) {
-                    Ok(_) => (),
-                    Err(_) => {
-                        terminal::disable_raw_mode().unwrap();
-                        panic!("error in update");
-                    }
-                }
-            })?;
-            if let Event::Key(key) = event::read()? {
-                let term_height = controller.ui.terminal.backend().size()?.height;
-                if key.kind == KeyEventKind::Press {
-                    let res: AppResult<()> = match key.code {
-                        KeyCode::Char('q') => return Ok(()),
-                        KeyCode::Char('f') => controller.regex_filter(),
-                        KeyCode::Char('c') => controller.copy(),
-                        KeyCode::Char('r') => controller.regex(),
-                        KeyCode::Char('e') => controller.edit_cell(),
-                        KeyCode::Char('s') => {
-                            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                                controller.save()
-                            } else {
-                                controller.sort()
-                            }
-                        }
-                        KeyCode::Right => controller.database.next_header(),
-                        KeyCode::Left => controller.database.previous_header(),
-                        KeyCode::Down => {
-                            controller.database.next_row(term_height);
-                            Ok(())
-                        }
-                        KeyCode::Up => {
-                            controller.database.previous_row(term_height);
-                            Ok(())
-                        }
-                        _ => Ok(()),
-                    };
-
-                    if let Err(err) = res {
-                        controller
-                            .ui
-                            .set_command(Command::IllegalOperation(match err {
-                                AppError::Io(err) => err.to_string(),
-                                AppError::Parse(err) => err.to_string(),
-                                AppError::Regex(err) => err.to_string(),
-                                AppError::Sqlite(err) => err.to_string(),
-                                AppError::Other => err.to_string(),
-                            }));
-                    }
+    pub fn start(controller: &mut Controller) -> Result<Command, AppError> {
+        controller.ui.terminal.draw(|f| {
+            match TUI::update(f, &mut controller.database, &controller.last_command) {
+                Ok(_) => (),
+                Err(_) => {
+                    terminal::disable_raw_mode().unwrap();
+                    panic!("error in update");
                 }
             }
+        })?;
+        if let Event::Key(key) = event::read()? {
+            let term_height = controller.ui.terminal.backend().size()?.height;
+            let command = Command::from(key);
+            Ok(command)
+            // if key.kind == KeyEventKind::Press {
+            // match key.code {
+            //     KeyCode::Char('q') => {
+            //         // controller.ui.set_command(Command::SqlQuery(query.clone()));
+            //         // controller.sql_query()
+            //         Ok(Command::SqlQuery)
+            //     }
+            //     // KeyCode::Char('f') => controller.regex_filter(),
+            //     KeyCode::Char('c') => {
+            //         if key.modifiers.contains(KeyModifiers::CONTROL) {
+            //             Ok(Command::Quit)
+            //         } else {
+            //             // controller.copy()
+            //             Ok(Command::None)
+            //         }
+            //     }
+
+            //     KeyCode::Char('r') => Ok(Command::Regex),
+            //     KeyCode::Char('e') => Ok(Command::Edit),
+            //     KeyCode::Char('s') => {
+            //         if key.modifiers.contains(KeyModifiers::CONTROL) {
+            //             Ok(Command::Save)
+            //         } else {
+            //             Ok(Command::Copy)
+            //         }
+            //     }
+            //     // KeyCode::Char('r') => controller.regex(),
+            //     // KeyCode::Char('e') => controller.edit_cell(),
+            //     // KeyCode::Char('s') => {
+            //     //     if key.modifiers.contains(KeyModifiers::CONTROL) {
+            //     //         controller.save()
+            //     //     } else {
+            //     //         controller.sort()
+            //     //     }
+            //     // }
+            //     // KeyCode::Right | KeyCode::Left | KeyCode::Down | KeyCode::Up => {
+            //     //     let direction = match key.code {
+            //     //         KeyCode::Right => Direction::Right,
+            //     //         KeyCode::Left => Direction::Left,
+            //     //         KeyCode::Down => Direction::Down,
+            //     //         KeyCode::Up => Direction::Up,
+            //     //         _ => unreachable!(),
+            //     //     };
+            //     //     Ok(Command::Move(direction))
+            //     // }
+            //     KeyCode::Right => Ok(Command::Move(Direction::Right)),
+            //     KeyCode::Left => Ok(Command::Move(Direction::Left)),
+            //     KeyCode::Down => Ok(Command::Move(Direction::Down)),
+            //     KeyCode::Up => Ok(Command::Move(Direction::Up)),
+
+            //     _ => Ok(Command::None),
+            // }
+            // } else {
+            //     Ok(todo!())
+            // }
+        } else {
+            Ok(todo!())
         }
     }
 
@@ -150,10 +146,10 @@ impl TUI {
     fn update<B: Backend>(
         f: &mut Frame<B>,
         db: &mut Database,
-        last_command: &Command,
+        last_command: &CommandWrapper,
     ) -> AppResult<()> {
         let rects = Layout::default()
-            .direction(Direction::Vertical)
+            .direction(ratatui::prelude::Direction::Vertical)
             .constraints([Constraint::Max(1000), Constraint::Length(1)].as_ref())
             .split(f.size());
 
@@ -173,7 +169,7 @@ impl TUI {
                 }
             })
             .collect::<Vec<_>>();
-        let current_header: u32 = db.current_header_idx;
+        let current_header: u32 = db.header_idx;
         // mark current header
 
         let header = Row::new(headers.iter().enumerate().map(|(i, h)| {
@@ -207,7 +203,7 @@ impl TUI {
             .bg(Color::Black);
         f.render_stateful_widget(t, rects[0], &mut db.state);
 
-        let a = db.current_header_idx;
+        let a = db.header_idx;
         let b = db.state.selected().unwrap_or(200);
         let c: String = db
             .count_headers()

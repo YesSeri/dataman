@@ -13,9 +13,9 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let database = Database::try_from(path).unwrap();
     let tui = TUI::new();
-    let mut controller = Controller::new(tui, database);
+    let controller = Controller::new(tui, database);
 
-    if let Err(err) = controller.run() {
+    if let Err(err) = controller.start() {
         eprintln!("Program has quit due to error: {err}")
     }
     // clear screen
