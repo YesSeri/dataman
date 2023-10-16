@@ -13,7 +13,7 @@ use std::process::id;
 
 use crossterm::event::KeyCode::F;
 use crossterm::ExecutableCommand;
-use rusqlite::functions::FunctionFlags;
+use rusqlite::functions::{Context, FunctionFlags};
 use std::sync::Arc;
 use std::time;
 
@@ -116,7 +116,8 @@ impl Database {
         match self.connection.execute_batch(query) {
             Ok(_) => Ok(()),
             Err(err) => {
-                let _ = self.execute("ROLLBACK;", []);
+                self.execute("ROLLBACK;", [])?;
+                log(format!("Error executing batch query: {}", err));
                 AppResult::Err(AppError::Sqlite(err))
             }
         }
@@ -221,16 +222,50 @@ impl Database {
     }
 
     pub(crate) fn regex(&self, pattern: &str, column_name: String) -> AppResult<()> {
-        let fun = |s: String| {
-            let re = Regex::new(pattern).map_err(AppError::Regex).ok()?;
-            let first_match: AppResult<_> = re.captures_iter(&s).next().ok_or(AppError::Other);
-            log(format!("first match: {:?}", first_match));
-            first_match
-                .ok()
-                .map(|m| m.get(0))?
-                .map(|c| c.as_str().to_string())
-        };
-        self.derive_column(column_name, fun)
+        regex::Regex::new(pattern)?;
+        let table_name = self.get_current_table_name()?;
+        // for each row in the table, run fun on the value of column name and insert the result into the new column
+        let query = format!("SELECT `id`, `{column_name}` FROM `{table_name}`");
+        let mut binding = self.prepare(&query)?;
+        let mut rows = binding.query([])?;
+        let derived_column_name = format!("derived{}", column_name);
+        let create_column_query =
+            format!("ALTER TABLE `{table_name}` ADD COLUMN `{derived_column_name}` TEXT;\n");
+
+        let mut transaction = String::new();
+        transaction.push_str(create_column_query.as_ref());
+        // TODO use a transaction
+        while let Some(row) = rows.next()? {
+            let id: i32 = row.get(0)?;
+            let value: String = row.get(1)?;
+            // let derived_value = fun(value).unwrap_or("NULL".to_string());
+            let update_query = format!(
+                "UPDATE `{table_name}` SET '{derived_column_name}' = ({value} REGEXP {pattern}) WHERE id = '{id}';\n",
+            );
+            transaction.push_str(&update_query);
+        }
+        self.execute_batch(&transaction)?;
+        Ok(())
+
+        // regex::Regex::new(pattern)?;
+        // let table_name = self.get_current_table_name()?;
+        // let select_query =
+        //     format!("SELECT * FROM `{table_name}` WHERE `{header}` REGEXP '{pattern}'");
+        // let create_table_query =
+        //     format!("CREATE TABLE `{table_name}RegexFiltered` AS {select_query};");
+
+        // self.execute(&create_table_query, [])?;
+        // Ok(())
+        // let fun = |s: String| {
+        //     let re = Regex::new(pattern).map_err(AppError::Regex).ok()?;
+        //     let first_match: AppResult<_> = re.captures_iter(&s).next().ok_or(AppError::Other);
+        //     log(format!("first match: {:?}", first_match));
+        //     first_match
+        //         .ok()
+        //         .map(|m| m.get(0))?
+        //         .map(|c| c.as_str().to_string())
+        // };
+        // self.derive_column(column_name, fun)
     }
 
     pub(crate) fn sql_query(&self, query: String) -> AppResult<()> {
@@ -304,7 +339,22 @@ impl Database {
                 let result = regex::Regex::new(&regex).unwrap().is_match(&text);
                 Ok(result)
             },
+        )?;
+        self.connection.create_scalar_function(
+            "regexp_transform",
+            2,
+            FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
+            Self::regex_transform,
         )
+    }
+    fn regex_transform(ctx: &Context) -> rusqlite::Result<Option<String>> {
+        let regex = ctx.get::<String>(0)?;
+        let text = ctx.get::<String>(1)?;
+        let result = regex::Regex::new(&regex).unwrap().captures(&text);
+        let val = result
+            .and_then(|c| c.get(0))
+            .map(|v| v.as_str().to_string());
+        Ok(val)
     }
     pub(crate) fn build_create_table_query(
         csv: &mut Reader<File>,
@@ -531,5 +581,40 @@ mod tests {
         let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         let headers = database.get_headers().unwrap();
         assert_eq!(headers, vec!["id", "firstname", "lastname", "age"]);
+    }
+
+    #[test]
+    fn custom_functions_regexp_test() {
+        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let query = "SELECT firstname FROM `data` WHERE firstname REGEXP 'hen'";
+        let mut stmt = database.prepare(query).unwrap();
+        let mut rows = stmt.query([]).unwrap();
+        let row = rows.next().unwrap().unwrap();
+        let result: String = row.get(0).unwrap();
+        assert_eq!(result, "henrik");
+    }
+    #[test]
+    fn custom_functions_regexp_transform_test() {
+        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let query = "SELECT regexp_transform('(hen)', 'henrik')";
+        let mut stmt = database.prepare(query).unwrap();
+        let mut rows = stmt.query([]).unwrap();
+        let row = rows.next().unwrap().unwrap();
+        let result: String = row.get(0).unwrap();
+        assert_eq!(result, "hen");
+
+        let query = "SELECT regexp_transform('.*ri', 'henrik')";
+        let mut stmt = database.prepare(query).unwrap();
+        let mut rows = stmt.query([]).unwrap();
+        let row = rows.next().unwrap().unwrap();
+        let result: String = row.get(0).unwrap();
+        assert_eq!(result, "heri");
+
+        let query = "SELECT regexp_transform('(he).*(ri)', 'henrik')";
+        let mut stmt = database.prepare(query).unwrap();
+        let mut rows = stmt.query([]).unwrap();
+        let row = rows.next().unwrap().unwrap();
+        let result: String = row.get(0).unwrap();
+        assert_eq!(result, "heri");
     }
 }
