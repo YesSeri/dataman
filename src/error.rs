@@ -15,6 +15,7 @@ pub enum AppError {
     // IllegalOperation(String),
     Other,
 }
+
 pub fn log(msg: String) {
     if cfg!(debug_assertions) {
         eprintln!("{}", msg);
@@ -35,8 +36,9 @@ impl fmt::Display for AppError {
         }
     }
 }
-impl error::Error for AppError {
-    fn source(&self) -> Option<&(dyn error::Error + 'static)> {
+
+impl Error for AppError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
             AppError::Io(err) => Some(err),
             AppError::Parse(err) => Some(err),

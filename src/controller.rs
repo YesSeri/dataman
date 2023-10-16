@@ -1,3 +1,4 @@
+use std::path::Path;
 use std::{
     fmt::format,
     io::{self, Error, Read, Write},
@@ -12,7 +13,9 @@ use crossterm::{
 };
 use ratatui::widgets::TableState;
 use regex::Regex;
+use rusqlite::Connection;
 
+use crate::libstuff::datarow::{DataRow, DataTable};
 use crate::{error::AppResult, libstuff::db::Database};
 use crate::{
     error::{log, AppError},
@@ -45,6 +48,7 @@ pub enum Command {
     Move(Direction),
     RegexFilter,
 }
+
 impl From<KeyEvent> for Command {
     fn from(key_event: KeyEvent) -> Self {
         match key_event.code {
@@ -75,6 +79,7 @@ impl From<KeyEvent> for Command {
         }
     }
 }
+
 impl From<KeyCode> for Direction {
     fn from(value: KeyCode) -> Self {
         match value {
@@ -94,6 +99,7 @@ pub enum Direction {
     Left,
     Right,
 }
+
 impl std::fmt::Display for CommandWrapper {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.message.clone() {
@@ -102,6 +108,7 @@ impl std::fmt::Display for CommandWrapper {
         }
     }
 }
+
 pub struct Controller {
     pub ui: TUI,
     pub database: Database,
@@ -109,9 +116,10 @@ pub struct Controller {
 }
 
 impl Controller {
-    pub(crate) fn save(&self) -> AppResult<()> {
-        log("save not implemented".to_owned());
-        Ok(())
+    pub(crate) fn save_to_sqlite_file(&self) -> AppResult<()> {
+        let filename = TUI::get_editor_input("Enter file name")?;
+        let path = PathBuf::from(filename);
+        Ok(self.database.backup_db(path)?)
     }
 
     pub(crate) fn sql_query(&self) -> Result<(), AppError> {
@@ -137,17 +145,10 @@ impl Controller {
             if self.last_command.command == Command::Quit {
                 break;
             }
-            match r {
-                Ok(_) => {}
-                Err(e) => {
-                    // if csv parse error the abort
-                    if let AppError::Parse(_) = e {
-                        break;
-                    }
-
-                    if let AppError::Io(_) = e {
-                        break;
-                    }
+            if let Err(e) = r {
+                match e {
+                    AppError::Io(_) | AppError::Parse(_) => break,
+                    _ => (),
                 }
             }
         }
@@ -165,7 +166,7 @@ impl Controller {
                     Ok(())
                 }
                 Command::Copy => self.copy(),
-                Command::Regex => self.regex_filter(),
+                Command::Regex => self.regex(),
                 Command::Edit => self.edit_cell(),
                 Command::SqlQuery => self.sql_query(),
                 Command::IllegalOperation => {
@@ -176,14 +177,14 @@ impl Controller {
                     self.last_command = CommandWrapper::new(Command::None, None);
                     Ok(())
                 }
-                Command::Sort => todo!(),
-                Command::Save => todo!(),
+                Command::Sort => self.sort(),
+                Command::Save => self.save_to_sqlite_file(),
                 Command::Move(direction) => {
                     let height = self.ui.get_terminal_height()?;
                     self.database.move_cursor(direction, height)?;
                     Ok(())
                 }
-                Command::RegexFilter => todo!(),
+                Command::RegexFilter => self.regex_filter(),
             },
             Err(result) => {
                 self.set_last_command(CommandWrapper::new(
@@ -194,10 +195,7 @@ impl Controller {
             }
         }
     }
-    pub fn get_headers_and_rows(
-        &mut self,
-        limit: i32,
-    ) -> AppResult<(Vec<String>, Vec<Vec<String>>)> {
+    pub fn get_headers_and_rows(&mut self, limit: i32) -> AppResult<DataTable> {
         let binding = "default table name".to_string();
         let first_table = self.database.get_current_table_name()?;
         self.database.get(limit, 0, first_table)
@@ -205,23 +203,20 @@ impl Controller {
 
     pub fn regex_filter(&mut self) -> AppResult<()> {
         let pattern = TUI::get_editor_input("Enter regex")?;
-        let pattern = pattern.trim_end_matches('\n');
         log(format!("pattern: {:?}", pattern));
         let header = self.database.get_current_header()?;
-        self.database.regex_filter(&header, pattern)?;
+        self.database.regex_filter(&header, &pattern)?;
 
         Ok(())
     }
     pub fn regex(&mut self) -> AppResult<()> {
         let pattern = TUI::get_editor_input("Enter regex")?;
-        // remove last
-        let pattern = pattern.trim_end_matches('\n');
         self.set_last_command(CommandWrapper::new(
             Command::Regex,
             Some(pattern.to_string()),
         ));
         let column_name = self.database.get_current_header()?;
-        self.database.regex(pattern, column_name)
+        self.database.regex(&pattern, column_name)
     }
 
     pub fn derive_column<F>(&mut self, fun: F) -> AppResult<()>
@@ -271,8 +266,8 @@ mod test {
         database.derive_column(column_name, copy_fun).unwrap();
         let (_, res) = database.get(20, 100, "data".to_string()).unwrap();
         for row in res.iter() {
-            let original = row[1].clone();
-            let copy = row[4].clone();
+            let original = row.get(1);
+            let copy = row.get(4);
             assert_eq!(original, copy);
         }
     }
@@ -289,8 +284,8 @@ mod test {
         let table_name = database.get_current_table_name().unwrap();
         let (_, res) = database.get(20, 0, table_name).unwrap();
         for row in res.iter() {
-            let original = row[1].clone();
-            let copy = row[4].clone();
+            let original = row.get(1);
+            let copy = row.get(4);
             assert_eq!(original, copy);
         }
     }

@@ -22,6 +22,7 @@ use ratatui::{
     Frame, Terminal,
 };
 
+use crate::error::log;
 use crate::{
     controller::{Command, CommandWrapper, Controller, Direction},
     error::{AppError, AppResult},
@@ -31,6 +32,7 @@ use crate::{
 pub struct TUI {
     terminal: Terminal<CrosstermBackend<Stdout>>,
 }
+
 impl TUI {
     pub fn new() -> Self {
         let stdout = std::io::stdout();
@@ -67,63 +69,8 @@ impl TUI {
             let term_height = controller.ui.terminal.backend().size()?.height;
             let command = Command::from(key);
             Ok(command)
-            // if key.kind == KeyEventKind::Press {
-            // match key.code {
-            //     KeyCode::Char('q') => {
-            //         // controller.ui.set_command(Command::SqlQuery(query.clone()));
-            //         // controller.sql_query()
-            //         Ok(Command::SqlQuery)
-            //     }
-            //     // KeyCode::Char('f') => controller.regex_filter(),
-            //     KeyCode::Char('c') => {
-            //         if key.modifiers.contains(KeyModifiers::CONTROL) {
-            //             Ok(Command::Quit)
-            //         } else {
-            //             // controller.copy()
-            //             Ok(Command::None)
-            //         }
-            //     }
-
-            //     KeyCode::Char('r') => Ok(Command::Regex),
-            //     KeyCode::Char('e') => Ok(Command::Edit),
-            //     KeyCode::Char('s') => {
-            //         if key.modifiers.contains(KeyModifiers::CONTROL) {
-            //             Ok(Command::Save)
-            //         } else {
-            //             Ok(Command::Copy)
-            //         }
-            //     }
-            //     // KeyCode::Char('r') => controller.regex(),
-            //     // KeyCode::Char('e') => controller.edit_cell(),
-            //     // KeyCode::Char('s') => {
-            //     //     if key.modifiers.contains(KeyModifiers::CONTROL) {
-            //     //         controller.save()
-            //     //     } else {
-            //     //         controller.sort()
-            //     //     }
-            //     // }
-            //     // KeyCode::Right | KeyCode::Left | KeyCode::Down | KeyCode::Up => {
-            //     //     let direction = match key.code {
-            //     //         KeyCode::Right => Direction::Right,
-            //     //         KeyCode::Left => Direction::Left,
-            //     //         KeyCode::Down => Direction::Down,
-            //     //         KeyCode::Up => Direction::Up,
-            //     //         _ => unreachable!(),
-            //     //     };
-            //     //     Ok(Command::Move(direction))
-            //     // }
-            //     KeyCode::Right => Ok(Command::Move(Direction::Right)),
-            //     KeyCode::Left => Ok(Command::Move(Direction::Left)),
-            //     KeyCode::Down => Ok(Command::Move(Direction::Down)),
-            //     KeyCode::Up => Ok(Command::Move(Direction::Up)),
-
-            //     _ => Ok(Command::None),
-            // }
-            // } else {
-            //     Ok(todo!())
-            // }
         } else {
-            Ok(todo!())
+            Err(AppError::Other)
         }
     }
 
@@ -141,11 +88,12 @@ impl TUI {
 
         let mut editable = String::new();
         std::fs::File::open(file_path)?.read_to_string(&mut editable)?;
-        Ok(editable)
+        let trimmed = editable.trim_end_matches('\n').to_string();
+        Ok(trimmed)
     }
     fn update<B: Backend>(
         f: &mut Frame<B>,
-        db: &mut Database,
+        database: &mut Database,
         last_command: &CommandWrapper,
     ) -> AppResult<()> {
         let rects = Layout::default()
@@ -153,9 +101,12 @@ impl TUI {
             .constraints([Constraint::Max(1000), Constraint::Length(1)].as_ref())
             .split(f.size());
 
-        let binding = "default table name".to_string();
-        let table_name = db.get_current_table_name()?;
-        let (headers, rows) = db.get(150, 0, table_name)?;
+        let table_name = database.get_current_table_name()?;
+
+        let data_table = database.get(100, 0, table_name)?;
+        database.data_table = data_table;
+        let (headers, rows) = &database.data_table;
+
         let id_extra_space = 8 / headers.len() as u16;
 
         let per_header = (100 / headers.len()) as u16 - id_extra_space;
@@ -169,11 +120,11 @@ impl TUI {
                 }
             })
             .collect::<Vec<_>>();
-        let current_header: u32 = db.header_idx;
+        let current_header: usize = database.header_idx;
         // mark current header
 
         let header = Row::new(headers.iter().enumerate().map(|(i, h)| {
-            if current_header == i as u32 {
+            if current_header == i {
                 Cell::from(Span::styled(
                     h.clone(),
                     Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
@@ -182,42 +133,39 @@ impl TUI {
                 Cell::from(h.clone())
             }
         }))
-        // style with bold
-        // .style(Style::default().add_modifier(Modifier::BOLD))
         .height(1);
 
         // // draw border under header
-        let rows = rows.iter().map(|items| {
-            let height = 1;
-            Row::new(items.clone()).height(height as u16)
-        });
+        let tui_rows = rows.iter().map(|data_row| data_row.to_tui_row().height(1));
         let selected_style = Style::default().add_modifier(Modifier::UNDERLINED);
-        let binding = "default table name".to_string();
-        let table_name = db.get_current_table_name()?;
-        let t = Table::new(rows)
+        let table_name = database.get_current_table_name()?;
+        let t = Table::new(tui_rows)
             .header(header)
             .block(Block::default().borders(Borders::ALL).title(table_name))
             .highlight_style(selected_style)
             // .highlight_symbol(">> ")
             .widths(widths.as_slice())
             .bg(Color::Black);
-        f.render_stateful_widget(t, rects[0], &mut db.state);
+        f.render_stateful_widget(t, rects[0], &mut database.state);
 
-        let a = db.header_idx;
-        let b = db.state.selected().unwrap_or(200);
-        let c: String = db
+        let a = database.header_idx;
+        let b = database.state.selected().unwrap_or(0);
+        // let rowid = rows.get(b).unwrap().data.get(0);
+        let row = rows.get(b).unwrap();
+        let rowid = row.get(0);
+        let c: String = database
             .count_headers()
             .map(|r| r.to_string())
             .unwrap_or("???".to_string());
-        let offset = db.state.offset();
-        let text = vec![Line::from(vec![Span::raw(format!(
-            // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
-            "last command: {last_command}"
-        ))])];
-        let paragraph = Paragraph::new(text);
+        let offset = database.state.offset();
+        todo!();
+        // let text = vec![Line::from(vec![Span::raw(format!(
+        //     // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
+        //     "rowid {}, last command: {last_command}", rowid))])];
+        // let paragraph = Paragraph::new(text);
 
-        f.render_widget(paragraph, rects[1]);
-        Ok(())
+        // f.render_widget(paragraph, rects[1]);
+        // Ok(())
     }
 }
 

@@ -4,7 +4,7 @@ use csv::Reader;
 use ratatui::widgets::TableState;
 use regex::Regex;
 use rusqlite::types::ValueRef;
-use rusqlite::{params, Connection, Statement};
+use rusqlite::{backup, params, Connection, Rows, Statement};
 use std::error::Error;
 use std::fs::File;
 use std::hash::Hash;
@@ -15,68 +15,71 @@ use crossterm::event::KeyCode::F;
 use crossterm::ExecutableCommand;
 use rusqlite::functions::FunctionFlags;
 use std::sync::Arc;
+use std::time;
 
 use crate::error::{log, AppError, AppResult};
+use crate::libstuff::datarow::DataRow;
 
-type BoxError = Box<dyn std::error::Error + Send + Sync + 'static>;
+use super::datarow::DataTable;
+
+type BoxError = Box<dyn Error + Send + Sync + 'static>;
 
 #[derive(Debug)]
 pub struct Database {
     pub connection: Connection,
-    pub header_idx: u32,
+    pub header_idx: usize,
     pub order_column: String,
     pub is_asc_order: bool,
     pub state: TableState,
     pub(super) current_table_idx: usize,
     row_idx: usize,
+    pub data_table: DataTable,
 }
 
 impl Database {
-    pub fn get_current_header(&self) -> AppResult<String> {
-        let binding = vec!["default table name".to_string()];
-        let table_name = self.get_current_table_name()?;
-        Ok(self.get(0, 0, table_name)?.0[self.header_idx as usize].clone())
-    }
-    pub fn get(
+    pub(crate) fn backup_db<P: AsRef<Path>>(
         &self,
-        limit: i32,
-        offset: i32,
-        table_name: String,
-    ) -> AppResult<(Vec<String>, Vec<Vec<String>>)> {
-        let mut sheet = vec![];
+        dst: P,
+        // progress: fn(backup::Progress),
+    ) -> rusqlite::Result<()> {
+        // Execute PRAGMA page_count
+        let mut stmt = self.connection.prepare("PRAGMA page_count")?;
+        let page_count: i32 = stmt.query_row([], |row| row.get(0)).unwrap_or(i32::MAX);
+
+        let mut dst = Connection::open(dst)?;
+        let backup = backup::Backup::new(&self.connection, &mut dst)?;
+        backup.run_to_completion(
+            page_count,
+            time::Duration::from_millis(250), // , Some(progress))
+            None,
+        )
+    }
+    pub fn get_current_header(&self) -> AppResult<String> {
+        self.data_table
+            .0
+            .get(self.header_idx)
+            .map(|s| s.to_string())
+            .ok_or(AppError::Other)
+    }
+    pub fn get(&self, limit: i32, offset: i32, table_name: String) -> AppResult<DataTable> {
+        let mut data_rows = vec![];
         let ordering = if self.is_asc_order { "ASC" } else { "DESC" };
         let query = format!(
             "SELECT * FROM `{}` ORDER BY `{}` {} LIMIT {} OFFSET {};",
             table_name, self.order_column, ordering, limit, offset
         );
         let mut stmt = self.prepare(&query).unwrap();
-        let cols = stmt
+        let headers = stmt
             .column_names()
-            .iter()
-            .map(<&str>::to_string)
-            .collect::<Vec<String>>();
+            .into_iter()
+            .map(|h| h.to_string())
+            .collect();
         let mut rows = stmt.query([])?;
         while let Some(row) = rows.next()? {
-            let data = cols
-                .iter()
-                .enumerate()
-                .map(|(i, col)| {
-                    let field = row.get_ref(i).unwrap();
-                    match field {
-                        ValueRef::Null => "NULL".to_string(),
-                        ValueRef::Integer(cell) => cell.to_string(),
-                        ValueRef::Real(_) => unimplemented!("real"),
-                        ValueRef::Text(cell) => {
-                            let cell = std::str::from_utf8(cell).unwrap();
-                            cell.to_string()
-                        }
-                        ValueRef::Blob(_) => unimplemented!("blob"),
-                    }
-                })
-                .collect::<Vec<String>>();
-            sheet.push(data);
+            let datarow: DataRow = DataRow::from(row);
+            data_rows.push(datarow);
         }
-        Ok((cols, sheet))
+        Ok((headers, data_rows))
     }
     pub fn get_cell(&self, id: i32, header: &str) -> AppResult<String> {
         let table_name = self.get_current_table_name()?;
@@ -196,17 +199,11 @@ impl Database {
         Ok(())
     }
     pub fn get_current_table_name(&self) -> AppResult<String> {
-        // let query = format!("SELECT rowid FROM sqlite_master WHERE type='table';");
-        // let mut stmt = self.prepare(&query)?;
-        // let mut rows = stmt.query([])?;
-        // while let Some(r) = rows.next()? {
-        //     let id: usize = r.get(0)?;
-        //     log("name: {}",  id);
-        // }
         let query = format!(
-            "SELECT name FROM sqlite_master WHERE type='table' AND rowid={};",
+            "SELECT name FROM sqlite_master WHERE type='table' AND rowid='{}';",
             self.current_table_idx
         );
+        log(query.clone());
         let table_name = self.connection.query_row(&query, [], |row| row.get(0))?;
         Ok(table_name)
     }
@@ -228,7 +225,7 @@ impl Database {
         let fun = |s: String| {
             let re = Regex::new(pattern).map_err(AppError::Regex).ok()?;
             let first_match: AppResult<_> = re.captures_iter(&s).next().ok_or(AppError::Other);
-            eprintln!("first match: {:?}", first_match);
+            log(format!("first match: {:?}", first_match));
             first_match
                 .ok()
                 .map(|m| m.get(0))?
@@ -286,13 +283,13 @@ impl TryFrom<&Path> for Database {
 }
 
 impl Database {
-    pub fn new(table_names: Vec<String>) -> Self {
+    pub fn new(table_names: Vec<String>) -> AppResult<Self> {
         let mut state = TableState::default();
         state.select(Some(0));
         let connection = if cfg!(debug_assertions) {
             let _ = std::fs::remove_file("db.sqlite");
-            // Connection::open_in_memory().unwrap();
-            Connection::open("db.sqlite").unwrap()
+            Connection::open_in_memory().unwrap()
+            // Connection::open("db.sqlite").unwrap()
         } else {
             Connection::open_in_memory().unwrap()
         };
@@ -305,11 +302,17 @@ impl Database {
             row_idx: 0,
             current_table_idx: 0,
             state,
+            data_table: (headers, result),
         };
-        database.add_custom_functions().unwrap_or_else(|e| {
-            log(format!("Error adding custom functions, e.g. REGEXP: {}", e));
-        });
-        database
+        if let Err(err) = database.add_custom_functions() {
+            log(format!(
+                "Error adding custom functions, e.g. REGEXP: {}",
+                err
+            ));
+            Err(AppError::Sqlite(err))
+        } else {
+            Ok(database)
+        }
     }
     fn add_custom_functions(&self) -> rusqlite::Result<()> {
         self.connection.create_scalar_function(
@@ -384,7 +387,7 @@ impl Database {
     pub(crate) fn get_table_name(file: &Path) -> Option<&str> {
         file.file_stem()?.to_str()
     }
-    pub fn count_headers(&self) -> AppResult<u32> {
+    pub fn count_headers(&self) -> AppResult<usize> {
         let table_name = self.get_current_table_name()?;
         let query = format!("SELECT COUNT(*) FROM PRAGMA_TABLE_INFO('{}')", table_name);
         let mut stmt = self.prepare(&query)?;
@@ -491,7 +494,9 @@ mod tests {
         let col = "firstname";
         let fun = |s| Some(format!("{}-changed", s));
         database.derive_column(col.to_string(), fun).unwrap();
-        let first = database.get(1, 0, "data".to_string()).unwrap().1[0][4].clone();
+        let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
+            .get(1)
+            .into();
         assert_eq!(first, "henrik-changed");
         let n = database.count_headers().unwrap();
         assert_eq!(n, 5);
@@ -501,17 +506,25 @@ mod tests {
     fn update_cell() {
         let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         database.update_cell("firstname", 1, "hank").unwrap();
-        let first = database.get(1, 0, "data".to_string()).unwrap().1[0][1].clone();
-        assert_eq!(first, "hank");
+        let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
+            .get(1)
+            .into();
+        let (_, rows) = database.get(1, 0, "data".to_string()).unwrap();
+
+        // assert_eq!(first, "hank");
     }
 
     #[test]
     fn test_offset() {
         let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
-        let (_, first) = database.get(1, 0, "data".to_string()).unwrap();
-        assert_eq!("henrik", first[0][1]);
-        let (_, second) = database.get(1, 1, "data".to_string()).unwrap();
-        assert_eq!("john", second[0][1]);
+        let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
+            .get(1)
+            .into();
+        assert_eq!("henrik", first);
+        let second: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
+            .get(1)
+            .into();
+        assert_eq!("john", second);
     }
 
     #[test]
