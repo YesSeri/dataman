@@ -21,7 +21,7 @@ use crate::error::{log, AppError, AppResult};
 use crate::libstuff::datarow::DataRow;
 
 use super::datarow::DataTable;
-use super::regexping::{self, build_regex_derive_query, build_regex_filter_query};
+use super::regexping::{self, build_regex_filter_query, build_regex_transform_query};
 
 type BoxError = Box<dyn Error + Send + Sync + 'static>;
 
@@ -209,14 +209,19 @@ impl Database {
         Ok(())
     }
 
-    pub(crate) fn regex(&self, pattern: &str, header: String) -> AppResult<()> {
-        regex::Regex::new(pattern)?;
+    pub(crate) fn regex_transform(
+        &self,
+        pattern: &str,
+        header: String,
+        transformation: Option<String>,
+    ) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
         // for each row in the table, run fun on the value of column name and insert the result into the new column
         let query = format!("SELECT `id`, `{header}` FROM `{table_name}`");
         let mut binding = self.prepare(&query)?;
         let mut rows = binding.query([])?;
-        let queries = build_regex_derive_query(&header, pattern, &table_name, &mut rows)?;
+        let queries =
+            build_regex_transform_query(&header, pattern, transformation, &table_name, &mut rows)?;
         self.execute_batch(&queries)?;
         Ok(())
     }
@@ -225,22 +230,22 @@ impl Database {
         self.execute_batch(&query)
     }
 
-    pub(crate) fn regex_transform(&self, header: &str, pattern: &str) -> AppResult<()> {
-        regex::Regex::new(pattern)?;
-        let table_name = self.get_current_table_name()?;
-        // for each row in the table, run fun on the value of column name and insert the result into the new column
-        let query = format!("SELECT `id`, `{header}` FROM `{table_name}`");
-        let mut binding = self.prepare(&query)?;
-        let mut rows = binding.query([])?;
-        let queries = crate::libstuff::regexping::build_regex_transform_query(
-            header,
-            pattern,
-            &table_name,
-            &mut rows,
-        )?;
-        self.execute_batch(&queries)?;
-        Ok(())
-    }
+    // pub(crate) fn regex_transform(&self, header: &str, pattern: &str) -> AppResult<()> {
+    //     regex::Regex::new(pattern)?;
+    //     let table_name = self.get_current_table_name()?;
+    //     // for each row in the table, run fun on the value of column name and insert the result into the new column
+    //     let query = format!("SELECT `id`, `{header}` FROM `{table_name}`");
+    //     let mut binding = self.prepare(&query)?;
+    //     let mut rows = binding.query([])?;
+    //     let queries = crate::libstuff::regexping::build_regex_transform_query(
+    //         header,
+    //         pattern,
+    //         &table_name,
+    //         &mut rows,
+    //     )?;
+    //     self.execute_batch(&queries)?;
+    //     Ok(())
+    // }
     // TODO 1. add ability to take input.
     // TODO 2. user sql query
     // TODO 3. user regex fn
@@ -431,6 +436,8 @@ impl TryFrom<&Path> for Database {
 
 #[cfg(test)]
 mod tests {
+    use rusqlite::Row;
+
     use super::*;
 
     #[test]
@@ -527,35 +534,58 @@ mod tests {
     #[test]
     fn custom_functions_regexp_test() {
         let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
-        let query = "SELECT firstname FROM `data` WHERE firstname REGEXP 'hen'";
-        let mut stmt = database.prepare(query).unwrap();
-        let mut rows = stmt.query([]).unwrap();
-        let row = rows.next().unwrap().unwrap();
-        let result: String = row.get(0).unwrap();
+        // let query = "SELECT firstname FROM `data` WHERE firstname REGEXP 'hen'";
+        let query = "SELECT firstname FROM `data` WHERE regexp_filter('h.*k', firstname)";
+        let result: String = database
+            .connection
+            .query_row(query, [], |row| row.get(0))
+            .unwrap_or("john".to_string());
         assert_eq!(result, "henrik");
     }
     #[test]
     fn custom_functions_regexp_transform_test() {
         let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
-        let query = "SELECT regexp_transform('(hen)', 'henrik')";
-        let mut stmt = database.prepare(query).unwrap();
-        let mut rows = stmt.query([]).unwrap();
-        let row = rows.next().unwrap().unwrap();
-        let result: String = row.get(0).unwrap();
-        assert_eq!(result, "hen");
+        let first_name_header = database.get_headers().unwrap()[1].clone();
+        let table_name = database.get_current_table_name().unwrap();
+        let pattern = "n.*";
 
-        let query = "SELECT regexp_transform('.*ri', 'henrik')";
-        let mut stmt = database.prepare(query).unwrap();
-        let mut rows = stmt.query([]).unwrap();
-        let row = rows.next().unwrap().unwrap();
-        let result: String = row.get(0).unwrap();
-        assert_eq!(result, "heri");
+        let rows_query = format!("SELECT `id`, `{first_name_header}` FROM `{table_name}`");
+        let mut binding = database.prepare(&rows_query).unwrap();
+        let mut rows = binding.query([]).unwrap();
+        let query =
+            build_regex_transform_query(&first_name_header, pattern, None, &table_name, &mut rows)
+                .unwrap();
 
-        let query = "SELECT regexp_transform('(he).*(ri)', 'henrik')";
-        let mut stmt = database.prepare(query).unwrap();
-        let mut rows = stmt.query([]).unwrap();
-        let row = rows.next().unwrap().unwrap();
-        let result: String = row.get(0).unwrap();
-        assert_eq!(result, "heri");
+        database.connection.execute_batch(&query).unwrap();
+
+        let result: String = database
+            .connection
+            .query_row(
+                "SELECT * FROM `data` WHERE id = 1 ORDER BY rowid ASC",
+                [],
+                |row| row.get(4),
+            )
+            .unwrap();
+        assert_eq!(result, "nrik");
+        // let query = "SELECT regexp_simple('h.*r', 'henrik')";
+        // let mut stmt = database.prepare(query).unwrap();
+        // let mut rows = stmt.query([]).unwrap();
+        // let row = rows.next().unwrap().unwrap();
+        // let result: String = row.get(0).unwrap();
+        // assert_eq!(result, "henr");
+
+        // let query = "SELECT regexp_transform('.*ri', 'henrik')";
+        // let mut stmt = database.prepare(query).unwrap();
+        // let mut rows = stmt.query([]).unwrap();
+        // let row = rows.next().unwrap().unwrap();
+        // let result: String = row.get(0).unwrap();
+        // assert_eq!(result, "heri");
+
+        // let query = "SELECT regexp_transform('(he).*(ri)', 'henrik')";
+        // let mut stmt = database.prepare(query).unwrap();
+        // let mut rows = stmt.query([]).unwrap();
+        // let row = rows.next().unwrap().unwrap();
+        // let result: String = row.get(0).unwrap();
+        // assert_eq!(result, "heri");
     }
 }

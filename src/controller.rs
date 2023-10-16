@@ -38,7 +38,7 @@ impl CommandWrapper {
 pub enum Command {
     None,
     Copy,
-    Regex,
+    RegexTransform,
     Edit,
     SqlQuery,
     IllegalOperation,
@@ -47,13 +47,13 @@ pub enum Command {
     Save,
     Move(Direction),
     RegexFilter,
-    RegexTransform,
+    // RegexTransform,
 }
 
 impl From<KeyEvent> for Command {
     fn from(key_event: KeyEvent) -> Self {
         match key_event.code {
-            KeyCode::Char('r') => Command::Regex,
+            KeyCode::Char('r') => Command::RegexTransform,
             KeyCode::Char('e') => Command::Edit,
             KeyCode::Right | KeyCode::Left | KeyCode::Up | KeyCode::Down => {
                 Command::Move(Direction::from(key_event.code))
@@ -62,7 +62,7 @@ impl From<KeyEvent> for Command {
             KeyCode::Char('a') => Command::Save,
             KeyCode::Char('q') => Command::SqlQuery,
             KeyCode::Char('f') => Command::RegexFilter,
-            KeyCode::Char('t') => Command::RegexTransform,
+            // KeyCode::Char('t') => Command::RegexTransform,
             KeyCode::Char('c') => {
                 if key_event.modifiers.contains(KeyModifiers::CONTROL) {
                     Command::Quit
@@ -168,7 +168,7 @@ impl Controller {
                     Ok(())
                 }
                 Command::Copy => self.copy(),
-                Command::Regex => self.regex(),
+                Command::RegexTransform => self.regex_transform(),
                 Command::Edit => self.edit_cell(),
                 Command::SqlQuery => self.sql_query(),
                 Command::IllegalOperation => {
@@ -187,9 +187,10 @@ impl Controller {
                     Ok(())
                 }
                 Command::RegexFilter => self.regex_filter(),
-                Command::RegexTransform => self.regex_derive(),
+                // Command::RegexTransform => self.regex_derive(),
             },
             Err(result) => {
+                log(format!("result: {:?}", result));
                 self.set_last_command(CommandWrapper::new(
                     Command::IllegalOperation,
                     Some(result.to_string()),
@@ -214,25 +215,35 @@ impl Controller {
     }
 
     pub fn regex_transform(&mut self) -> AppResult<()> {
-        let pattern = TUI::get_editor_input(r"Enter regex, e.g.(?<last>[^,\s]+),\s+(?<first>\S+)")?;
-        let transformation = TUI::get_editor_input(r"Enter transformation, e.g. '$first $last'")?;
+        let pattern =
+            TUI::get_editor_input(r"Enter regex, e.g. (?<last>[^,\s]+),\s+(?<first>\S+)")?;
+        let regex = regex::Regex::new(&pattern)?;
+        let contains_capture_pattern = regex.capture_names().len() > 1;
+        let transformation = if contains_capture_pattern {
+            Some(TUI::get_editor_input(
+                r"Enter transformation, e.g. '$first $last'",
+            )?)
+        } else {
+            None
+        };
         log(format!(
             "pattern: {:?}, transformation: {:?}",
             pattern, transformation
         ));
         let header = self.database.get_current_header()?;
-        self.database.regex_transform(&header, &pattern)?;
+        self.database
+            .regex_transform(&pattern, header, transformation)?;
         Ok(())
     }
-    pub fn regex(&mut self) -> AppResult<()> {
-        let pattern = TUI::get_editor_input("Enter regex")?;
-        self.set_last_command(CommandWrapper::new(
-            Command::Regex,
-            Some(pattern.to_string()),
-        ));
-        let column_name = self.database.get_current_header()?;
-        self.database.regex(&pattern, column_name)
-    }
+    // pub fn regex(&mut self) -> AppResult<()> {
+    //     let pattern = TUI::get_editor_input("Enter regex")?;
+    //     self.set_last_command(CommandWrapper::new(
+    //         Command::RegexTransform,
+    //         Some(pattern.to_string()),
+    //     ));
+    //     let column_name = self.database.get_current_header()?;
+    //     self.database.regex_transform(&pattern, column_name, None)
+    // }
 
     pub fn derive_column<F>(&mut self, fun: F) -> AppResult<()>
     where
@@ -261,10 +272,6 @@ impl Controller {
 
     pub(crate) fn sort(&mut self) -> AppResult<()> {
         self.database.sort()
-    }
-
-    fn regex_derive(&self) -> Result<(), AppError> {
-        todo!()
     }
 }
 
