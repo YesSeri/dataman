@@ -33,7 +33,6 @@ pub struct Database {
     pub state: TableState,
     pub(super) current_table_idx: usize,
     row_idx: usize,
-    pub data_table: DataTable,
 }
 
 impl Database {
@@ -55,11 +54,11 @@ impl Database {
         )
     }
     pub fn get_current_header(&self) -> AppResult<String> {
-        self.data_table
-            .0
+        Ok(self
+            .get_headers()?
             .get(self.header_idx)
-            .map(|s| s.to_string())
-            .ok_or(AppError::Other)
+            .ok_or(AppError::Other)?
+            .clone())
     }
     pub fn get(&self, limit: i32, offset: i32, table_name: String) -> AppResult<DataTable> {
         let mut data_rows = vec![];
@@ -251,25 +250,6 @@ impl TryFrom<&Path> for Database {
             os_str if os_str == "csv" => {
                 let database = super::converter::database_from_csv(path)?;
                 Ok(database)
-                // let mut csv = csv::Reader::from_path(path)?;
-                // let table_name = Database::get_table_name(path).unwrap();
-                // let table_names = vec![table_name.to_string()];
-                // let mut database: Database = Database::new(table_names);
-                // let funs = vec![Self::build_create_table_query, Self::build_add_data_query];
-                // for fun in funs {
-                //     let query = fun(&mut csv, table_name)?;
-                //     database.execute(&query, ())?;
-                // }
-
-                // let query =
-                //     "SELECT rowid FROM sqlite_master WHERE type='table' ORDER BY rowid LIMIT 1;"
-                //         .to_string();
-                // let table_idx: usize = database
-                //     .connection
-                //     .query_row(&query, [], |row| row.get(0))
-                //     .unwrap();
-                // database.current_table_idx = table_idx;
-                // Ok(database)
             }
             os_str if os_str == "sqlite" => {
                 let database = super::converter::database_from_sqlite(path)?;
@@ -302,7 +282,6 @@ impl Database {
             row_idx: 0,
             current_table_idx: 0,
             state,
-            data_table: (headers, result),
         };
         if let Err(err) = database.add_custom_functions() {
             log(format!(
@@ -387,13 +366,20 @@ impl Database {
     pub(crate) fn get_table_name(file: &Path) -> Option<&str> {
         file.file_stem()?.to_str()
     }
-    pub fn count_headers(&self) -> AppResult<usize> {
-        let table_name = self.get_current_table_name()?;
-        let query = format!("SELECT COUNT(*) FROM PRAGMA_TABLE_INFO('{}')", table_name);
-        let mut stmt = self.prepare(&query)?;
 
-        let r = stmt.query_row([], |row| row.get(0));
-        r.map_err(AppError::Sqlite)
+    pub fn get_headers(&self) -> AppResult<Vec<String>> {
+        let table_name = self.get_current_table_name()?;
+        let query = format!("SELECT * FROM '{}'", table_name);
+        let query = format!("PRAGMA table_info({})", table_name);
+        let mut stmt = self.connection.prepare(&query)?;
+        let column_names: Vec<String> = stmt
+            .query_map([], |row| row.get(1))?
+            .map(|result| result.expect("Failed to retrieve column name"))
+            .collect();
+        Ok(column_names)
+    }
+    pub fn count_headers(&self) -> AppResult<usize> {
+        Ok(self.get_headers()?.len())
     }
 
     pub(crate) fn move_cursor(
@@ -538,5 +524,12 @@ mod tests {
         // let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         // let table_name = database.get_current_table_name().unwrap();
         // assert_eq!(table_name, "data".to_string());
+    }
+
+    #[test]
+    fn get_headers_test() {
+        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let headers = database.get_headers().unwrap();
+        assert_eq!(headers, vec!["id", "firstname", "lastname", "age"]);
     }
 }

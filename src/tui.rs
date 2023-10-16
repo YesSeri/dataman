@@ -103,9 +103,7 @@ impl TUI {
 
         let table_name = database.get_current_table_name()?;
 
-        let data_table = database.get(100, 0, table_name)?;
-        database.data_table = data_table;
-        let (headers, rows) = &database.data_table;
+        let (headers, rows) = database.get(100, 0, table_name)?;
 
         let id_extra_space = 8 / headers.len() as u16;
 
@@ -152,20 +150,21 @@ impl TUI {
         let b = database.state.selected().unwrap_or(0);
         // let rowid = rows.get(b).unwrap().data.get(0);
         let row = rows.get(b).unwrap();
-        let rowid = row.get(0);
+        let item = row.get(0);
+        let rowid = item.to_string();
         let c: String = database
             .count_headers()
             .map(|r| r.to_string())
             .unwrap_or("???".to_string());
         let offset = database.state.offset();
-        todo!();
-        // let text = vec![Line::from(vec![Span::raw(format!(
-        //     // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
-        //     "rowid {}, last command: {last_command}", rowid))])];
-        // let paragraph = Paragraph::new(text);
+        let text = vec![Line::from(vec![Span::raw(format!(
+            // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
+            "rowid {rowid}, last command: {last_command}",
+        ))])];
+        let paragraph = Paragraph::new(text);
 
-        // f.render_widget(paragraph, rects[1]);
-        // Ok(())
+        f.render_widget(paragraph, rects[1]);
+        Ok(())
     }
 }
 

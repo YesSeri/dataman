@@ -1,3 +1,5 @@
+use std::fmt::Display;
+
 use rusqlite::types::ValueRef;
 use rusqlite::Row;
 
@@ -6,6 +8,13 @@ pub type DataTable = (Vec<String>, Vec<DataRow>);
 #[derive(Debug, Clone)]
 pub struct DataRow {
     pub data: Vec<DataItem>,
+}
+
+impl Display for DataItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s: String = self.clone().into();
+        write!(f, "{}", s)
+    }
 }
 
 impl DataRow {

@@ -30,21 +30,6 @@ pub(crate) fn database_from_csv(path: &Path) -> crate::error::AppResult<Database
         "SELECT * FROM `{}` ORDER BY rowid ASC LIMIT 50 OFFSET 0;",
         table_name,
     );
-    let mut result = Vec::new();
-    let mut headers = Vec::new();
-    {
-        let mut stmt = database.connection.prepare(&query)?;
-        for header in stmt.column_names().iter() {
-            headers.push(header.to_string());
-        }
-
-        let mut rows = stmt.query([])?;
-
-        while let Some(row) = rows.next()? {
-            let data: DataRow = DataRow::from(row);
-            result.push(data);
-        }
-    }
     Ok(database)
 }
 
