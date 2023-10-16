@@ -47,6 +47,7 @@ pub enum Command {
     Save,
     Move(Direction),
     RegexFilter,
+    RegexTransform,
 }
 
 impl From<KeyEvent> for Command {
@@ -61,6 +62,7 @@ impl From<KeyEvent> for Command {
             KeyCode::Char('a') => Command::Save,
             KeyCode::Char('q') => Command::SqlQuery,
             KeyCode::Char('f') => Command::RegexFilter,
+            KeyCode::Char('t') => Command::RegexTransform,
             KeyCode::Char('c') => {
                 if key_event.modifiers.contains(KeyModifiers::CONTROL) {
                     Command::Quit
@@ -185,6 +187,7 @@ impl Controller {
                     Ok(())
                 }
                 Command::RegexFilter => self.regex_filter(),
+                Command::RegexTransform => self.regex_derive(),
             },
             Err(result) => {
                 self.set_last_command(CommandWrapper::new(
@@ -207,6 +210,18 @@ impl Controller {
         let header = self.database.get_current_header()?;
         self.database.regex_filter(&header, &pattern)?;
 
+        Ok(())
+    }
+
+    pub fn regex_transform(&mut self) -> AppResult<()> {
+        let pattern = TUI::get_editor_input(r"Enter regex, e.g.(?<last>[^,\s]+),\s+(?<first>\S+)")?;
+        let transformation = TUI::get_editor_input(r"Enter transformation, e.g. '$first $last'")?;
+        log(format!(
+            "pattern: {:?}, transformation: {:?}",
+            pattern, transformation
+        ));
+        let header = self.database.get_current_header()?;
+        self.database.regex_transform(&header, &pattern)?;
         Ok(())
     }
     pub fn regex(&mut self) -> AppResult<()> {
@@ -246,6 +261,10 @@ impl Controller {
 
     pub(crate) fn sort(&mut self) -> AppResult<()> {
         self.database.sort()
+    }
+
+    fn regex_derive(&self) -> Result<(), AppError> {
+        todo!()
     }
 }
 

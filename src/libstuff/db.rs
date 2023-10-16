@@ -2,7 +2,7 @@
 
 use csv::Reader;
 use ratatui::widgets::TableState;
-use regex::Regex;
+use regex::{Captures, Regex};
 use rusqlite::types::ValueRef;
 use rusqlite::{backup, params, Connection, Rows, Statement};
 use std::error::Error;
@@ -21,6 +21,7 @@ use crate::error::{log, AppError, AppResult};
 use crate::libstuff::datarow::DataRow;
 
 use super::datarow::DataTable;
+use super::regexping::{self, build_regex_derive_query, build_regex_filter_query};
 
 type BoxError = Box<dyn Error + Send + Sync + 'static>;
 
@@ -36,22 +37,13 @@ pub struct Database {
 }
 
 impl Database {
-    pub(crate) fn backup_db<P: AsRef<Path>>(
-        &self,
-        dst: P,
-        // progress: fn(backup::Progress),
-    ) -> rusqlite::Result<()> {
-        // Execute PRAGMA page_count
+    pub(crate) fn backup_db<P: AsRef<Path>>(&self, dst: P) -> rusqlite::Result<()> {
         let mut stmt = self.connection.prepare("PRAGMA page_count")?;
         let page_count: i32 = stmt.query_row([], |row| row.get(0)).unwrap_or(i32::MAX);
 
         let mut dst = Connection::open(dst)?;
         let backup = backup::Backup::new(&self.connection, &mut dst)?;
-        backup.run_to_completion(
-            page_count,
-            time::Duration::from_millis(250), // , Some(progress))
-            None,
-        )
+        backup.run_to_completion(page_count, time::Duration::from_millis(250), None)
     }
     pub fn get_current_header(&self) -> AppResult<String> {
         Ok(self
@@ -209,95 +201,49 @@ impl Database {
     }
     pub fn regex_filter(&mut self, header: &str, pattern: &str) -> AppResult<()> {
         // create new table with filter applied using create table as sqlite statement.
-        regex::Regex::new(pattern)?;
         let table_name = self.get_current_table_name()?;
-        let select_query =
-            format!("SELECT * FROM `{table_name}` WHERE `{header}` REGEXP '{pattern}'");
-        let create_table_query =
-            format!("CREATE TABLE `{table_name}RegexFiltered` AS {select_query};");
+        let query = build_regex_filter_query(header, pattern, &table_name)?;
 
-        self.execute(&create_table_query, [])?;
+        self.execute(&query, [])?;
         self.next_table()?;
         Ok(())
     }
 
-    pub(crate) fn regex(&self, pattern: &str, column_name: String) -> AppResult<()> {
+    pub(crate) fn regex(&self, pattern: &str, header: String) -> AppResult<()> {
         regex::Regex::new(pattern)?;
         let table_name = self.get_current_table_name()?;
         // for each row in the table, run fun on the value of column name and insert the result into the new column
-        let query = format!("SELECT `id`, `{column_name}` FROM `{table_name}`");
+        let query = format!("SELECT `id`, `{header}` FROM `{table_name}`");
         let mut binding = self.prepare(&query)?;
         let mut rows = binding.query([])?;
-        let derived_column_name = format!("derived{}", column_name);
-        let create_column_query =
-            format!("ALTER TABLE `{table_name}` ADD COLUMN `{derived_column_name}` TEXT;\n");
-
-        let mut transaction = String::new();
-        transaction.push_str(create_column_query.as_ref());
-        // TODO use a transaction
-        while let Some(row) = rows.next()? {
-            let id: i32 = row.get(0)?;
-            let value: String = row.get(1)?;
-            // let derived_value = fun(value).unwrap_or("NULL".to_string());
-            let update_query = format!(
-                "UPDATE `{table_name}` SET '{derived_column_name}' = ({value} REGEXP {pattern}) WHERE id = '{id}';\n",
-            );
-            transaction.push_str(&update_query);
-        }
-        self.execute_batch(&transaction)?;
+        let queries = build_regex_derive_query(&header, pattern, &table_name, &mut rows)?;
+        self.execute_batch(&queries)?;
         Ok(())
-
-        // regex::Regex::new(pattern)?;
-        // let table_name = self.get_current_table_name()?;
-        // let select_query =
-        //     format!("SELECT * FROM `{table_name}` WHERE `{header}` REGEXP '{pattern}'");
-        // let create_table_query =
-        //     format!("CREATE TABLE `{table_name}RegexFiltered` AS {select_query};");
-
-        // self.execute(&create_table_query, [])?;
-        // Ok(())
-        // let fun = |s: String| {
-        //     let re = Regex::new(pattern).map_err(AppError::Regex).ok()?;
-        //     let first_match: AppResult<_> = re.captures_iter(&s).next().ok_or(AppError::Other);
-        //     log(format!("first match: {:?}", first_match));
-        //     first_match
-        //         .ok()
-        //         .map(|m| m.get(0))?
-        //         .map(|c| c.as_str().to_string())
-        // };
-        // self.derive_column(column_name, fun)
     }
 
     pub(crate) fn sql_query(&self, query: String) -> AppResult<()> {
         self.execute_batch(&query)
     }
+
+    pub(crate) fn regex_transform(&self, header: &str, pattern: &str) -> AppResult<()> {
+        regex::Regex::new(pattern)?;
+        let table_name = self.get_current_table_name()?;
+        // for each row in the table, run fun on the value of column name and insert the result into the new column
+        let query = format!("SELECT `id`, `{header}` FROM `{table_name}`");
+        let mut binding = self.prepare(&query)?;
+        let mut rows = binding.query([])?;
+        let queries = crate::libstuff::regexping::build_regex_transform_query(
+            header,
+            pattern,
+            &table_name,
+            &mut rows,
+        )?;
+        self.execute_batch(&queries)?;
+        Ok(())
+    }
     // TODO 1. add ability to take input.
     // TODO 2. user sql query
     // TODO 3. user regex fn
-}
-
-impl TryFrom<&Path> for Database {
-    type Error = Box<dyn Error>;
-
-    fn try_from(path: &Path) -> Result<Self, Box<dyn Error>> {
-        let extension = path.extension().unwrap();
-        match extension {
-            os_str if os_str == "csv" => {
-                let database = super::converter::database_from_csv(path)?;
-                Ok(database)
-            }
-            os_str if os_str == "sqlite" => {
-                let database = super::converter::database_from_sqlite(path)?;
-                unimplemented!("sqlite");
-                // Ok(database)
-                // Self::try_from_sqlite(path)
-            }
-            _ => panic!("Unsupported file format"),
-        }
-    }
-}
-
-impl Database {
     pub fn new(table_names: Vec<String>) -> AppResult<Self> {
         let mut state = TableState::default();
         state.select(Some(0));
@@ -318,7 +264,9 @@ impl Database {
             current_table_idx: 0,
             state,
         };
-        if let Err(err) = database.add_custom_functions() {
+        if let Err(err) =
+            crate::libstuff::regexping::custom_functions::add_custom_functions(&database)
+        {
             log(format!(
                 "Error adding custom functions, e.g. REGEXP: {}",
                 err
@@ -328,34 +276,7 @@ impl Database {
             Ok(database)
         }
     }
-    fn add_custom_functions(&self) -> rusqlite::Result<()> {
-        self.connection.create_scalar_function(
-            "regexp",
-            2,
-            FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
-            |ctx| {
-                let regex = ctx.get::<String>(0)?;
-                let text = ctx.get::<String>(1)?;
-                let result = regex::Regex::new(&regex).unwrap().is_match(&text);
-                Ok(result)
-            },
-        )?;
-        self.connection.create_scalar_function(
-            "regexp_transform",
-            2,
-            FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
-            Self::regex_transform,
-        )
-    }
-    fn regex_transform(ctx: &Context) -> rusqlite::Result<Option<String>> {
-        let regex = ctx.get::<String>(0)?;
-        let text = ctx.get::<String>(1)?;
-        let result = regex::Regex::new(&regex).unwrap().captures(&text);
-        let val = result
-            .and_then(|c| c.get(0))
-            .map(|v| v.as_str().to_string());
-        Ok(val)
-    }
+
     pub(crate) fn build_create_table_query(
         csv: &mut Reader<File>,
         table_name: &str,
@@ -486,7 +407,27 @@ impl Database {
         Ok(())
     }
 }
-// tests
+
+impl TryFrom<&Path> for Database {
+    type Error = Box<dyn Error>;
+
+    fn try_from(path: &Path) -> Result<Self, Box<dyn Error>> {
+        let extension = path.extension().unwrap();
+        match extension {
+            os_str if os_str == "csv" => {
+                let database = super::converter::database_from_csv(path)?;
+                Ok(database)
+            }
+            os_str if os_str == "sqlite" => {
+                let database = super::converter::database_from_sqlite(path)?;
+                unimplemented!("sqlite");
+                // Ok(database)
+                // Self::try_from_sqlite(path)
+            }
+            _ => panic!("Unsupported file format"),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
