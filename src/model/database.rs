@@ -18,10 +18,13 @@ use std::sync::Arc;
 use std::time;
 
 use crate::error::{log, AppError, AppResult};
-use crate::libstuff::datarow::DataRow;
+use crate::model::datarow::DataRow;
 
 use super::datarow::DataTable;
-use super::regexping::{self, build_regex_filter_query, build_regex_transform_query};
+use super::regexping::{
+    self, build_regex_filter_query, build_regex_no_capture_group_transform_query,
+    build_regex_transform_query,
+};
 
 type BoxError = Box<dyn Error + Send + Sync + 'static>;
 
@@ -46,8 +49,9 @@ impl Database {
         backup.run_to_completion(page_count, time::Duration::from_millis(250), None)
     }
     pub fn get_current_header(&self) -> AppResult<String> {
+        let table_name = self.get_current_table_name()?;
         Ok(self
-            .get_headers()?
+            .get_headers(&table_name)?
             .get(self.header_idx)
             .ok_or(AppError::Other)?
             .clone())
@@ -100,7 +104,7 @@ impl Database {
     }
 
     pub fn execute_batch(&self, sql: &str) -> AppResult<()> {
-        let query = &format!("BEGIN TRANSACTION;{}COMMIT;", sql);
+        let query = &format!("BEGIN TRANSACTION;\n{}\nCOMMIT;", sql);
         if cfg!(debug_assertions) {
             log(query.to_string());
         }
@@ -110,7 +114,7 @@ impl Database {
             Err(err) => {
                 self.execute("ROLLBACK;", [])?;
                 log(format!("Error executing batch query: {}", err));
-                AppResult::Err(AppError::Sqlite(err))
+                Err(AppError::Sqlite(err))
             }
         }
     }
@@ -209,11 +213,13 @@ impl Database {
         Ok(())
     }
 
-    pub(crate) fn regex_transform(
+    /// This is a regex capture without capture groups e.g. [g-k].*n.
+    /// Get the first capture that matches the pattern, a letter between g and k, followed by any number of characters, followed by n.
+    pub(crate) fn regex_capture_group_transform(
         &self,
         pattern: &str,
-        header: String,
-        transformation: Option<String>,
+        header: &str,
+        transformation: String,
     ) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
         // for each row in the table, run fun on the value of column name and insert the result into the new column
@@ -221,31 +227,33 @@ impl Database {
         let mut binding = self.prepare(&query)?;
         let mut rows = binding.query([])?;
         let queries =
-            build_regex_transform_query(&header, pattern, transformation, &table_name, &mut rows)?;
+            build_regex_transform_query(header, pattern, transformation, &table_name, &mut rows)?;
         self.execute_batch(&queries)?;
         Ok(())
     }
+    pub(crate) fn regex_no_capture_group_transform(
+        &self,
+        pattern: &str,
+        header: &str,
+    ) -> AppResult<()> {
+        let table_name = self.get_current_table_name()?;
+        // for each row in the table, run fun on the value of column name and insert the result into the new column
+        let query = format!("SELECT `id`, `{header}` FROM `{table_name}`");
+        let mut binding = self.prepare(&query)?;
+        let mut rows = binding.query([])?;
+        let queries =
+            build_regex_no_capture_group_transform_query(header, pattern, &table_name, &mut rows)?;
+        self.execute_batch(&queries)?;
+        Ok(())
+    }
+
+    /// This is a regex capture without capture groups e.g. [g-k].*n.
+    /// Get the first capture that matches the pattern, a letter between g and k, followed by any number of characters, followed by n.
 
     pub(crate) fn sql_query(&self, query: String) -> AppResult<()> {
         self.execute_batch(&query)
     }
 
-    // pub(crate) fn regex_transform(&self, header: &str, pattern: &str) -> AppResult<()> {
-    //     regex::Regex::new(pattern)?;
-    //     let table_name = self.get_current_table_name()?;
-    //     // for each row in the table, run fun on the value of column name and insert the result into the new column
-    //     let query = format!("SELECT `id`, `{header}` FROM `{table_name}`");
-    //     let mut binding = self.prepare(&query)?;
-    //     let mut rows = binding.query([])?;
-    //     let queries = crate::libstuff::regexping::build_regex_transform_query(
-    //         header,
-    //         pattern,
-    //         &table_name,
-    //         &mut rows,
-    //     )?;
-    //     self.execute_batch(&queries)?;
-    //     Ok(())
-    // }
     // TODO 1. add ability to take input.
     // TODO 2. user sql query
     // TODO 3. user regex fn
@@ -269,9 +277,7 @@ impl Database {
             current_table_idx: 0,
             state,
         };
-        if let Err(err) =
-            crate::libstuff::regexping::custom_functions::add_custom_functions(&database)
-        {
+        if let Err(err) = regexping::custom_functions::add_custom_functions(&database) {
             log(format!(
                 "Error adding custom functions, e.g. REGEXP: {}",
                 err
@@ -343,10 +349,8 @@ impl Database {
         file.file_stem()?.to_str()
     }
 
-    pub fn get_headers(&self) -> AppResult<Vec<String>> {
-        let table_name = self.get_current_table_name()?;
-        let query = format!("SELECT * FROM '{}'", table_name);
-        let query = format!("PRAGMA table_info({})", table_name);
+    pub fn get_headers(&self, table_name: &str) -> AppResult<Vec<String>> {
+        let query = format!("PRAGMA table_info(`{}`)", table_name);
         let mut stmt = self.connection.prepare(&query)?;
         let column_names: Vec<String> = stmt
             .query_map([], |row| row.get(1))?
@@ -355,7 +359,8 @@ impl Database {
         Ok(column_names)
     }
     pub fn count_headers(&self) -> AppResult<usize> {
-        Ok(self.get_headers()?.len())
+        let table_name = self.get_current_table_name()?;
+        Ok(self.get_headers(&table_name)?.len())
     }
 
     pub(crate) fn move_cursor(
@@ -479,7 +484,7 @@ mod tests {
         let fun = |s| Some(format!("{}-changed", s));
         database.derive_column(col.to_string(), fun).unwrap();
         let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
-            .get(1)
+            .get(4)
             .into();
         assert_eq!(first, "henrik-changed");
         let n = database.count_headers().unwrap();
@@ -505,7 +510,7 @@ mod tests {
             .get(1)
             .into();
         assert_eq!("henrik", first);
-        let second: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
+        let second: String = database.get(1, 1, "data".to_string()).unwrap().1[0]
             .get(1)
             .into();
         assert_eq!("john", second);
@@ -519,15 +524,16 @@ mod tests {
 
     #[test]
     fn get_current_table_name_test() {
-        // let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
-        // let table_name = database.get_current_table_name().unwrap();
-        // assert_eq!(table_name, "data".to_string());
+        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let table_name = database.get_current_table_name().unwrap();
+        assert_eq!(table_name, "data".to_string());
     }
 
     #[test]
     fn get_headers_test() {
         let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
-        let headers = database.get_headers().unwrap();
+        let table_name = database.get_current_table_name().unwrap();
+        let headers = database.get_headers(&table_name).unwrap();
         assert_eq!(headers, vec!["id", "firstname", "lastname", "age"]);
     }
 
@@ -542,28 +548,29 @@ mod tests {
             .unwrap_or("john".to_string());
         assert_eq!(result, "henrik");
     }
+
     #[test]
     fn custom_functions_regexp_transform_test() {
         let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
-        let first_name_header = database.get_headers().unwrap()[1].clone();
         let table_name = database.get_current_table_name().unwrap();
+        let header = database.get_headers(&table_name).unwrap()[1].clone();
         let pattern = "n.*";
 
-        let rows_query = format!("SELECT `id`, `{first_name_header}` FROM `{table_name}`");
+        let rows_query = format!("SELECT `id`, `{header}` FROM `{table_name}`");
         let mut binding = database.prepare(&rows_query).unwrap();
         let mut rows = binding.query([]).unwrap();
         let query =
-            build_regex_transform_query(&first_name_header, pattern, None, &table_name, &mut rows)
+            build_regex_no_capture_group_transform_query(&header, pattern, &table_name, &mut rows)
                 .unwrap();
 
-        database.connection.execute_batch(&query).unwrap();
+        database.execute_batch(&query).unwrap();
 
         let result: String = database
             .connection
             .query_row(
-                "SELECT * FROM `data` WHERE id = 1 ORDER BY rowid ASC",
+                "SELECT derivedfirstname FROM `data` WHERE id = 1 ORDER BY rowid ASC",
                 [],
-                |row| row.get(4),
+                |row| row.get(0),
             )
             .unwrap();
         assert_eq!(result, "nrik");

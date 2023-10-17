@@ -1,6 +1,6 @@
 use std::{error::Error, path::Path};
 
-use dataman::{controller::Controller, error::log, libstuff::db::Database, tui::TUI};
+use dataman::{controller::Controller, error::log, model::database::Database, tui::TUI};
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = std::env::args().collect::<Vec<_>>();

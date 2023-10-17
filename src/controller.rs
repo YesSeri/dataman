@@ -15,8 +15,8 @@ use ratatui::widgets::TableState;
 use regex::Regex;
 use rusqlite::Connection;
 
-use crate::libstuff::datarow::{DataRow, DataTable};
-use crate::{error::AppResult, libstuff::db::Database};
+use crate::model::datarow::{DataRow, DataTable};
+use crate::{error::AppResult, model::database::Database};
 use crate::{
     error::{log, AppError},
     tui::TUI,
@@ -187,10 +187,9 @@ impl Controller {
                     Ok(())
                 }
                 Command::RegexFilter => self.regex_filter(),
-                // Command::RegexTransform => self.regex_derive(),
             },
             Err(result) => {
-                log(format!("result: {:?}", result));
+                log(format!("APP ERROR: {:?}", result));
                 self.set_last_command(CommandWrapper::new(
                     Command::IllegalOperation,
                     Some(result.to_string()),
@@ -214,36 +213,33 @@ impl Controller {
         Ok(())
     }
 
+    /// The user enters a regex and we will derive a new column from that.
+    /// If the user enter a capture group we will ask for a second input that shows how the capture group should be transformed.
+    /// If the user doesn't enter a capture group we will just copy the regex match.
     pub fn regex_transform(&mut self) -> AppResult<()> {
         let pattern =
             TUI::get_editor_input(r"Enter regex, e.g. (?<last>[^,\s]+),\s+(?<first>\S+)")?;
         let regex = regex::Regex::new(&pattern)?;
         let contains_capture_pattern = regex.capture_names().len() > 1;
-        let transformation = if contains_capture_pattern {
-            Some(TUI::get_editor_input(
-                r"Enter transformation, e.g. '$first $last'",
-            )?)
-        } else {
-            None
-        };
-        log(format!(
-            "pattern: {:?}, transformation: {:?}",
-            pattern, transformation
-        ));
         let header = self.database.get_current_header()?;
-        self.database
-            .regex_transform(&pattern, header, transformation)?;
+        if contains_capture_pattern {
+            let transformation =
+                TUI::get_editor_input(r"Enter transformation, e.g. '$first $last'")?;
+
+            log(format!(
+                "pattern: {pattern:?}, transformation: {transformation:?}"
+            ));
+
+            self.database
+                .regex_capture_group_transform(&pattern, &header, transformation)?;
+        } else {
+            log(format!("pattern: {pattern:?}"));
+            self.database
+                .regex_no_capture_group_transform(&pattern, &header)?;
+        }
+
         Ok(())
     }
-    // pub fn regex(&mut self) -> AppResult<()> {
-    //     let pattern = TUI::get_editor_input("Enter regex")?;
-    //     self.set_last_command(CommandWrapper::new(
-    //         Command::RegexTransform,
-    //         Some(pattern.to_string()),
-    //     ));
-    //     let column_name = self.database.get_current_header()?;
-    //     self.database.regex_transform(&pattern, column_name, None)
-    // }
 
     pub fn derive_column<F>(&mut self, fun: F) -> AppResult<()>
     where

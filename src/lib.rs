@@ -4,5 +4,5 @@
 
 pub mod controller;
 pub mod error;
-pub mod libstuff;
+pub mod model;
 pub mod tui;

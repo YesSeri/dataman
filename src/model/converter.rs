@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use super::{datarow::DataRow, db::Database};
+use super::{datarow::DataRow, database::Database};
 
 pub(crate) fn database_from_csv(path: &Path) -> crate::error::AppResult<Database> {
     let mut csv = csv::Reader::from_path(path)?;

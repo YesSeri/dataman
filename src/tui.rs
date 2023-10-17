@@ -26,7 +26,7 @@ use crate::error::log;
 use crate::{
     controller::{Command, CommandWrapper, Controller, Direction},
     error::{AppError, AppResult},
-    libstuff::db::Database,
+    model::database::Database,
 };
 
 pub struct TUI {
@@ -147,11 +147,12 @@ impl TUI {
         f.render_stateful_widget(t, rects[0], &mut database.state);
 
         let a = database.header_idx;
-        let b = database.state.selected().unwrap_or(0);
+        let row = database.state.selected().unwrap_or(0);
         // let rowid = rows.get(b).unwrap().data.get(0);
-        let row = rows.get(b).unwrap();
-        let item = row.get(0);
-        let rowid = item.to_string();
+        let rowid = rows
+            .get(row)
+            .map(|el| el.get(0).to_string())
+            .unwrap_or("xxx".to_owned());
         let c: String = database
             .count_headers()
             .map(|r| r.to_string())
@@ -159,7 +160,7 @@ impl TUI {
         let offset = database.state.offset();
         let text = vec![Line::from(vec![Span::raw(format!(
             // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
-            "rowid {rowid}, last command: {last_command}",
+            "row: {row}, rowid {rowid}, last command: {last_command}",
         ))])];
         let paragraph = Paragraph::new(text);
 
