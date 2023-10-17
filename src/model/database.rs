@@ -23,7 +23,7 @@ use crate::model::datarow::DataRow;
 use super::datarow::DataTable;
 use super::regexping::{
     self, build_regex_filter_query, build_regex_no_capture_group_transform_query,
-    build_regex_transform_query,
+    build_regex_with_capture_group_transform_query,
 };
 
 type BoxError = Box<dyn Error + Send + Sync + 'static>;
@@ -37,6 +37,13 @@ pub struct Database {
     pub state: TableState,
     pub(super) current_table_idx: usize,
     row_idx: usize,
+    pub(super) regex_handler: Option<RegexHandler>,
+}
+
+#[derive(Debug)]
+pub(super) struct RegexHandler {
+    pub(super) regex: Regex,
+    // transformation: Option<String>,
 }
 
 impl Database {
@@ -226,8 +233,13 @@ impl Database {
         let query = format!("SELECT `id`, `{header}` FROM `{table_name}`");
         let mut binding = self.prepare(&query)?;
         let mut rows = binding.query([])?;
-        let queries =
-            build_regex_transform_query(header, pattern, transformation, &table_name, &mut rows)?;
+        let queries = build_regex_with_capture_group_transform_query(
+            header,
+            pattern,
+            transformation,
+            &table_name,
+            &mut rows,
+        )?;
         self.execute_batch(&queries)?;
         Ok(())
     }
@@ -238,11 +250,7 @@ impl Database {
     ) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
         // for each row in the table, run fun on the value of column name and insert the result into the new column
-        let query = format!("SELECT `id`, `{header}` FROM `{table_name}`");
-        let mut binding = self.prepare(&query)?;
-        let mut rows = binding.query([])?;
-        let queries =
-            build_regex_no_capture_group_transform_query(header, pattern, &table_name, &mut rows)?;
+        let queries = build_regex_no_capture_group_transform_query(header, pattern, &table_name)?;
         self.execute_batch(&queries)?;
         Ok(())
     }
@@ -262,8 +270,8 @@ impl Database {
         state.select(Some(0));
         let connection = if cfg!(debug_assertions) {
             let _ = std::fs::remove_file("db.sqlite");
-            Connection::open_in_memory().unwrap()
-            // Connection::open("db.sqlite").unwrap()
+            // Connection::open_in_memory().unwrap()
+            Connection::open("db.sqlite").unwrap()
         } else {
             Connection::open_in_memory().unwrap()
         };
@@ -276,6 +284,7 @@ impl Database {
             row_idx: 0,
             current_table_idx: 0,
             state,
+            regex_handler: None,
         };
         if let Err(err) = regexping::custom_functions::add_custom_functions(&database) {
             log(format!(
@@ -441,6 +450,8 @@ impl TryFrom<&Path> for Database {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
+
     use rusqlite::Row;
 
     use super::*;
@@ -556,12 +567,8 @@ mod tests {
         let header = database.get_headers(&table_name).unwrap()[1].clone();
         let pattern = "n.*";
 
-        let rows_query = format!("SELECT `id`, `{header}` FROM `{table_name}`");
-        let mut binding = database.prepare(&rows_query).unwrap();
-        let mut rows = binding.query([]).unwrap();
         let query =
-            build_regex_no_capture_group_transform_query(&header, pattern, &table_name, &mut rows)
-                .unwrap();
+            build_regex_no_capture_group_transform_query(&header, pattern, &table_name).unwrap();
 
         database.execute_batch(&query).unwrap();
 
@@ -594,5 +601,79 @@ mod tests {
         // let row = rows.next().unwrap().unwrap();
         // let result: String = row.get(0).unwrap();
         // assert_eq!(result, "heri");
+    }
+    #[test]
+    fn my_benching_stuff() {
+        let before = Instant::now();
+        let database = Database::try_from(Path::new("assets/c.csv")).unwrap();
+        let table_name = database.get_current_table_name().unwrap();
+        let header = database.get_headers(&table_name).unwrap()[2].clone();
+        let pattern = "n.*";
+
+        let query = build_regex_filter_query(&header, pattern, &table_name).unwrap();
+
+        database.execute_batch(&query).unwrap();
+
+        let table_name = database.get_table_names().unwrap()[1].clone();
+        let result: usize = database
+            .connection
+            .query_row(
+                &format!("SELECT COUNT(*) FROM `{table_name}`;"),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        println!("result: {}", result);
+
+        println!("Elapsed time: {:.2?}", before.elapsed());
+        assert_ne!(true, true);
+    }
+
+    #[test]
+    fn my_benching_no_capture() {
+        let before = Instant::now();
+        let database = Database::try_from(Path::new("assets/c.csv")).unwrap();
+        let table_name = database.get_current_table_name().unwrap();
+        let header = database.get_headers(&table_name).unwrap()[2].clone();
+        let pattern = "n.*";
+
+        // let query =
+        //     build_regex_no_capture_group_transform_query(&header, pattern, &table_name).unwrap();
+
+        // let sql =
+        //     "UPDATE TABLE `cRegexFiltered` AS SELECT * FROM `c` WHERE regexp('n.*', `firstname`);";
+
+        let sql = "ALTER TABLE `c` ADD COLUMN `derivedfirstname` TEXT;\n";
+        database.execute(sql, []).unwrap();
+        let sql = "UPDATE `c` \
+                SET 'derivedfirstname' = regexp_transform_no_capture_group('n.*', `firstname`) \
+                WHERE id IN (SELECT id FROM `c` WHERE `firstname` REGEXP 'n.*');\n";
+        database.execute(sql, []).unwrap();
+        let names = database.get_table_names().unwrap();
+        dbg!(names);
+
+        let query = "SELECT * FROM `c` ORDER BY rowid ASC LIMIT 10;".to_string();
+        let mut stmt = database.prepare(&query).unwrap();
+        let mut rows = stmt.query([]).unwrap();
+
+        while let Some(row) = rows.next().unwrap_or(None) {
+            let datarow: DataRow = DataRow::from(row);
+            println!("{:?}", datarow);
+        }
+        // database.execute_batch(&query).unwrap();
+
+        // let table_name = database.get_table_names().unwrap()[1].clone();
+        let result: usize = database
+            .connection
+            .query_row(
+                "SELECT COUNT(*) FROM `c` WHERE `c`.`derivedfirstname` IS NOT NULL;",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        println!("result: {}", result);
+
+        println!("Elapsed time: {:.2?}", before.elapsed());
+        assert_ne!(true, true);
     }
 }
