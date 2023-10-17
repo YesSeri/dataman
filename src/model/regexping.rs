@@ -22,7 +22,6 @@ pub(crate) fn build_regex_with_capture_group_transform_query(
     pattern: &str,
     transformation: String,
     table_name: &str,
-    rows: &mut Rows,
 ) -> AppResult<String> {
     regex::Regex::new(pattern)?;
     // for each row in the table, run fun on the value of column name and insert the result into the new column
@@ -33,17 +32,17 @@ pub(crate) fn build_regex_with_capture_group_transform_query(
     let mut queries = String::new();
     queries.push_str(&create_header_query);
     // TODO use a transaction
-    while let Some(row) = rows.next()? {
-        let id: i32 = row.get(0)?;
-        let value: String = row.get(1)?;
-        // let derived_value = fun(value).unwrap_or("NULL".to_string());
-        let update_query = format!(
-                "UPDATE `{table_name}` \
-                SET '{derived_header_name}' = regexp_transform_with_capture_group('{pattern}', '{value}', '{transformation}') \
-                WHERE id = '{id}';\n",
-            );
-        queries.push_str(&update_query);
-    }
+    // while let Some(row) = rows.next()? {
+    //     let id: i32 = row.get(0)?;
+    //     let value: String = row.get(1)?;
+    //     // let derived_value = fun(value).unwrap_or("NULL".to_string());
+    //     let update_query = format!(
+    //             "UPDATE `{table_name}` \
+    //             SET '{derived_header_name}' = regexp_transform_with_capture_group('{pattern}', '{value}', '{transformation}') \
+    //             WHERE id = '{id}';\n",
+    //         );
+    //     queries.push_str(&update_query);
+    // }
     log(format!("with capture group queries: {}", queries));
     Ok(queries)
 }
@@ -62,10 +61,15 @@ pub(crate) fn build_regex_no_capture_group_transform_query(
     let mut queries = String::new();
     queries.push_str(&create_header_query);
     let update_query = format!(
-            "UPDATE `{table_name}` \
-                SET '{derived_header_name}' = regexp_transform_no_capture_group('{pattern}', `{header}`') \
-                WHERE id IN (SELECT id FROM `{table_name}` WHERE `{header}` REGEXP '{pattern}');\n",
-        );
+        "UPDATE `{table_name}` \
+                SET `{derived_header_name}` 
+				= regexp_transform_no_capture_group('{pattern}', `{header}`) \
+                WHERE id IN (SELECT id FROM `{table_name}` WHERE `{header}` REGEXP '{pattern}');\n"
+    );
+    // "UPDATE `{table_name}` \
+    //     SET '{derived_header_name}' = regexp_transform_no_capture_group('{pattern}', `{header}`') \
+    //     WHERE id IN (SELECT id FROM `{table_name}` WHERE `{header}` REGEXP '{pattern}');\n",
+
     queries.push_str(&update_query);
     log(format!("no capture group queries: {}", queries));
     Ok(queries)

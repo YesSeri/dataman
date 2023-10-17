@@ -34,7 +34,7 @@ impl CommandWrapper {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command {
     None,
     Copy,
@@ -60,7 +60,7 @@ impl From<KeyEvent> for Command {
             }
             KeyCode::Char('w') => Command::Sort,
             KeyCode::Char('a') => Command::Save,
-            KeyCode::Char('q') => Command::SqlQuery,
+            // KeyCode::Char('q') => Command::SqlQuery,
             KeyCode::Char('f') => Command::RegexFilter,
             // KeyCode::Char('t') => Command::RegexTransform,
             KeyCode::Char('c') => {
@@ -94,7 +94,7 @@ impl From<KeyCode> for Direction {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Direction {
     Up,
     Down,
@@ -159,35 +159,51 @@ impl Controller {
     }
 
     pub fn run(&mut self) -> Result<(), AppError> {
-        let res = TUI::start(self);
-        log(format!("res: {:?}", res));
-        match res {
-            Ok(command) => match command {
-                Command::Quit => {
-                    self.last_command = CommandWrapper::new(Command::Quit, None);
-                    Ok(())
+        let command = TUI::start(self);
+        log(format!("command: {:?}", command));
+        match command {
+            Ok(command) => {
+                let result = match command {
+                    Command::Quit => {
+                        self.last_command = CommandWrapper::new(Command::Quit, None);
+                        Ok(())
+                    }
+                    Command::Copy => self.copy(),
+                    Command::RegexTransform => self.regex_transform(),
+                    Command::Edit => self.edit_cell(),
+                    Command::SqlQuery => self.sql_query(),
+                    Command::IllegalOperation => {
+                        self.last_command = CommandWrapper::new(Command::IllegalOperation, None);
+                        Ok(())
+                    }
+                    Command::None => {
+                        self.last_command = CommandWrapper::new(Command::None, None);
+                        Ok(())
+                    }
+                    Command::Sort => self.sort(),
+                    Command::Save => self.save_to_sqlite_file(),
+                    Command::Move(direction) => {
+                        let height = self.ui.get_terminal_height()?;
+                        self.database.move_cursor(direction, height)?;
+                        Ok(())
+                    }
+                    Command::RegexFilter => self.regex_filter(),
+                };
+                match command {
+                    Command::Copy
+                    | Command::RegexTransform
+                    | Command::Edit
+                    | Command::SqlQuery
+                    | Command::Sort
+                    | Command::Save
+                    | Command::RegexFilter => self.database.is_unchanged = false,
+                    Command::None
+                    | Command::IllegalOperation
+                    | Command::Quit
+                    | Command::Move(_) => (),
                 }
-                Command::Copy => self.copy(),
-                Command::RegexTransform => self.regex_transform(),
-                Command::Edit => self.edit_cell(),
-                Command::SqlQuery => self.sql_query(),
-                Command::IllegalOperation => {
-                    self.last_command = CommandWrapper::new(Command::IllegalOperation, None);
-                    Ok(())
-                }
-                Command::None => {
-                    self.last_command = CommandWrapper::new(Command::None, None);
-                    Ok(())
-                }
-                Command::Sort => self.sort(),
-                Command::Save => self.save_to_sqlite_file(),
-                Command::Move(direction) => {
-                    let height = self.ui.get_terminal_height()?;
-                    self.database.move_cursor(direction, height)?;
-                    Ok(())
-                }
-                Command::RegexFilter => self.regex_filter(),
-            },
+                result
+            }
             Err(result) => {
                 log(format!("APP ERROR: {:?}", result));
                 self.set_last_command(CommandWrapper::new(

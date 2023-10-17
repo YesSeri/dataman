@@ -18,7 +18,7 @@ pub enum AppError {
 
 pub fn log(msg: String) {
     if cfg!(debug_assertions) {
-        // eprintln!("{}", msg);
+        eprintln!("{}", msg);
     }
 }
 

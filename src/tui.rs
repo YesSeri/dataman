@@ -104,6 +104,7 @@ impl TUI {
         let table_name = database.get_current_table_name()?;
 
         let (headers, rows) = database.get(100, 0, table_name)?;
+        log(format!("headers: {:?} rows: {:?}", headers, rows));
 
         let id_extra_space = 8 / headers.len() as u16;
 
@@ -144,10 +145,10 @@ impl TUI {
             // .highlight_symbol(">> ")
             .widths(widths.as_slice())
             .bg(Color::Black);
-        f.render_stateful_widget(t, rects[0], &mut database.state);
+        f.render_stateful_widget(t, rects[0], &mut database.table_state);
 
         let a = database.header_idx;
-        let row = database.state.selected().unwrap_or(0);
+        let row = database.table_state.selected().unwrap_or(0);
         // let rowid = rows.get(b).unwrap().data.get(0);
         let rowid = rows
             .get(row)
@@ -157,7 +158,7 @@ impl TUI {
             .count_headers()
             .map(|r| r.to_string())
             .unwrap_or("???".to_string());
-        let offset = database.state.offset();
+        let offset = database.table_state.offset();
         let text = vec![Line::from(vec![Span::raw(format!(
             // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
             "row: {row}, rowid {rowid}, last command: {last_command}",

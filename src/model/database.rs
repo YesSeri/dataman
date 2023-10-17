@@ -20,7 +20,7 @@ use std::time;
 use crate::error::{log, AppError, AppResult};
 use crate::model::datarow::DataRow;
 
-use super::datarow::DataTable;
+use super::datarow::{self, DataTable};
 use super::regexping::{
     self, build_regex_filter_query, build_regex_no_capture_group_transform_query,
     build_regex_with_capture_group_transform_query,
@@ -34,9 +34,12 @@ pub struct Database {
     pub header_idx: usize,
     pub order_column: String,
     pub is_asc_order: bool,
-    pub state: TableState,
+    pub table_state: TableState,
     pub(super) current_table_idx: usize,
     row_idx: usize,
+    pub is_unchanged: bool,
+    headers: Vec<String>,
+    data_rows: Vec<DataRow>,
 }
 
 impl Database {
@@ -56,25 +59,36 @@ impl Database {
             .ok_or(AppError::Other)?
             .clone())
     }
-    pub fn get(&self, limit: i32, offset: i32, table_name: String) -> AppResult<DataTable> {
-        let mut data_rows = vec![];
-        let ordering = if self.is_asc_order { "ASC" } else { "DESC" };
-        let query = format!(
-            "SELECT * FROM `{}` ORDER BY `{}` {} LIMIT {} OFFSET {};",
-            table_name, self.order_column, ordering, limit, offset
-        );
-        let mut stmt = self.prepare(&query).unwrap();
-        let headers = stmt
-            .column_names()
-            .into_iter()
-            .map(|h| h.to_string())
-            .collect();
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            let datarow: DataRow = DataRow::from(row);
-            data_rows.push(datarow);
+    pub fn get(&mut self, limit: i32, offset: i32, table_name: String) -> AppResult<DataTable> {
+        // if false {
+        if self.is_unchanged {
+            Ok((self.headers.clone(), self.data_rows.clone()))
+        } else {
+            let ordering = if self.is_asc_order { "ASC" } else { "DESC" };
+            let query = format!(
+                "SELECT * FROM `{}` ORDER BY `{}` {} LIMIT {} OFFSET {};",
+                table_name, self.order_column, ordering, limit, offset
+            );
+            let (headers, data_rows) = {
+                let mut data_rows = vec![];
+                let mut stmt = self.prepare(&query).unwrap();
+                let headers: Vec<String> = stmt
+                    .column_names()
+                    .into_iter()
+                    .map(|h| h.to_string())
+                    .collect();
+                let mut rows = stmt.query([])?;
+                while let Some(row) = rows.next()? {
+                    let datarow: DataRow = DataRow::from(row);
+                    data_rows.push(datarow);
+                }
+                (headers, data_rows)
+            };
+            self.data_rows = data_rows.clone();
+            self.headers = headers.clone();
+            self.is_unchanged = true;
+            Ok((headers, data_rows))
         }
-        Ok((headers, data_rows))
     }
     pub fn get_cell(&self, id: i32, header: &str) -> AppResult<String> {
         let table_name = self.get_current_table_name()?;
@@ -149,7 +163,7 @@ impl Database {
     }
 
     pub(crate) fn get_current_id(&self) -> AppResult<i32> {
-        let i = self.state.selected().unwrap_or(0);
+        let i = self.table_state.selected().unwrap_or(0);
         let query = format!(
             "SELECT rowid FROM `{}` LIMIT 1 OFFSET {};",
             self.get_current_table_name()?,
@@ -165,7 +179,7 @@ impl Database {
     pub(crate) fn sort(&mut self) -> AppResult<()> {
         // sort by current header
         let header = self.get_current_header()?;
-        self.state.select(Some(0));
+        self.table_state.select(Some(0));
         if self.order_column == header {
             self.is_asc_order = !self.is_asc_order;
         } else {
@@ -223,15 +237,11 @@ impl Database {
     ) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
         // for each row in the table, run fun on the value of column name and insert the result into the new column
-        let query = format!("SELECT `id`, `{header}` FROM `{table_name}`");
-        let mut binding = self.prepare(&query)?;
-        let mut rows = binding.query([])?;
         let queries = build_regex_with_capture_group_transform_query(
             header,
             pattern,
             transformation,
             &table_name,
-            &mut rows,
         )?;
         self.execute_batch(&queries)?;
         Ok(())
@@ -259,13 +269,14 @@ impl Database {
     // TODO 2. user sql query
     // TODO 3. user regex fn
     pub fn new(table_names: Vec<String>) -> AppResult<Self> {
-        let mut state = TableState::default();
-        state.select(Some(0));
+        let mut table_state = TableState::default();
+        table_state.select(Some(0));
         let connection = if cfg!(debug_assertions) {
-            let _ = std::fs::remove_file("db.sqlite");
-            // Connection::open_in_memory().unwrap()
-            Connection::open("db.sqlite").unwrap()
+            Connection::open_in_memory().unwrap()
+            // let _ = std::fs::remove_file("db.sqlite");
+            // Connection::open("db.sqlite").unwrap()
         } else {
+            let xx = 12;
             Connection::open_in_memory().unwrap()
         };
 
@@ -276,7 +287,10 @@ impl Database {
             is_asc_order: true,
             row_idx: 0,
             current_table_idx: 0,
-            state,
+            table_state,
+            is_unchanged: false,
+            data_rows: vec![],
+            headers: vec![],
         };
         if let Err(err) = regexping::custom_functions::add_custom_functions(&database) {
             log(format!(
@@ -390,16 +404,16 @@ impl Database {
     }
 
     fn next_row(&mut self, height: u16) {
-        let i = match self.state.selected() {
+        let i = match self.table_state.selected() {
             Some(i) if i <= height as usize => i + 1,
             _ => 0,
         };
         // let query = format!("SELECT id FROM '{}' LIMIT 1 OFFSET {}", self.get_first_table(), self.state.offset());
-        self.state.select(Some(i));
+        self.table_state.select(Some(i));
     }
 
     fn previous_row(&mut self, height: u16) {
-        let i = match self.state.selected() {
+        let i = match self.table_state.selected() {
             Some(i) => {
                 if i == 0 {
                     height as usize + 1
@@ -409,7 +423,7 @@ impl Database {
             }
             None => 0,
         };
-        self.state.select(Some(i));
+        self.table_state.select(Some(i));
     }
     pub fn update_cell(&self, header: &str, id: i32, content: &str) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
@@ -482,7 +496,7 @@ mod tests {
 
     #[test]
     fn derive_column_test() {
-        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         let col = "firstname";
         let fun = |s| Some(format!("{}-changed", s));
         database.derive_column(col.to_string(), fun).unwrap();
@@ -496,7 +510,7 @@ mod tests {
 
     #[test]
     fn update_cell() {
-        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         database.update_cell("firstname", 1, "hank").unwrap();
         let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
             .get(1)
@@ -508,7 +522,7 @@ mod tests {
 
     #[test]
     fn test_offset() {
-        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
             .get(1)
             .into();
