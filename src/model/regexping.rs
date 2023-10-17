@@ -107,16 +107,24 @@ pub(crate) mod custom_functions {
             },
         )?;
 
+        let cached_with_capture_regex = Arc::new(Mutex::new(Regex::new("").unwrap()));
         database.connection.create_scalar_function(
             // this one is used to filter, to create new tables
             "regexp_transform_with_capture_group",
             2,
             FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
             move |ctx| {
-                let regex = ctx.get::<String>(0)?;
-                // let regex = &my_regex;
+                let regex_str = ctx.get::<String>(0)?;
                 let text = ctx.get::<String>(1)?;
-                let result = regex::Regex::new(&regex).unwrap().is_match(&text);
+
+                // Check if the regex has changed, and recompile if necessary
+                let mut cached_with_capture_regex = cached_with_capture_regex.lock().unwrap();
+                if cached_with_capture_regex.as_str() != regex_str {
+                    *cached_with_capture_regex = Regex::new(&regex_str).unwrap();
+                }
+
+                let result = cached_with_capture_regex.captures(&text);
+                let result = regex::Regex::new(&regex_str).unwrap().is_match(&text);
                 // let result = regex.is_match(&text);
                 Ok(result)
             },

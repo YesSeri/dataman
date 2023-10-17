@@ -37,13 +37,6 @@ pub struct Database {
     pub state: TableState,
     pub(super) current_table_idx: usize,
     row_idx: usize,
-    pub(super) regex_handler: Option<RegexHandler>,
-}
-
-#[derive(Debug)]
-pub(super) struct RegexHandler {
-    pub(super) regex: Regex,
-    // transformation: Option<String>,
 }
 
 impl Database {
@@ -284,7 +277,6 @@ impl Database {
             row_idx: 0,
             current_table_idx: 0,
             state,
-            regex_handler: None,
         };
         if let Err(err) = regexping::custom_functions::add_custom_functions(&database) {
             log(format!(

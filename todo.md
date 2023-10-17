@@ -4,6 +4,7 @@
 - [x] add wrapper to `TableState` to keep track of rowid. The problem is that you can't access the data in *Ratatui's* TableState.
 	- This was unneccesary because we already have rows in update function in tui. It is very inefficent because it is a new call to the db for every action, even if you just move cursor, but it is okay for now. Later the current 200 rows we are viewing should be stored in the `Database struct` and updated only when neccessary.
 - [ ] Regex is compiled to much. It should be compiled once and then used. The problem is that the custom functions we give to out sqlite3 database can't recieve a compiled regex, only a string and therefore needs to be compiled every time. In the regex documentation it says that this should be avoided. Maybe a closure can solve this together with `RefCell<Rc<Regex>`. The idea is that our `Database struct` has the compiled regex and the custom functions recieve a reference to this regex. Then we can mutate the regex when we get new user input and the custom functions will use the new regex.
+	- easier to just use closure inside of custom funciton adder, and not using `RefCell<Rc<Regex>>` at all, and `Database struct`
 
 # regex 
 
