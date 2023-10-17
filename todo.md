@@ -1,3 +1,4 @@
-- Add sql query `q` shortcut 
-- `TryFrom<Path>` amd `TryFrom<String>` is only two inputs. Within these two we can decide which file to use, .csv, .sqlite3, .tsv.
-- add wrapper to `TableState` to keep track of rowid. The problem is that you can't access the data in *Ratatui's* TableState.
+- [x] Add sql query `q` shortcut 
+- [ ] `TryFrom<Path>` amd `TryFrom<String>` is only two inputs. Within these two we can decide which file to use, .csv, .sqlite3, .tsv.
+- [x] add wrapper to `TableState` to keep track of rowid. The problem is that you can't access the data in *Ratatui's* TableState.
+	- This was unneccesary because we already have rows in update function in tui. It is very inefficent because it is a new call to the db for every action, even if you just move cursor, but it is okay for now. Later the current 200 rows we are viewing should be stored in the `Database struct` and updated only when neccessary.
