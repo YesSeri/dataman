@@ -94,9 +94,7 @@ impl Database {
         let table_name = self.get_current_table_name()?;
         let query = format!("SELECT `{}` FROM `{}` WHERE id = ?;", header, table_name);
         let mut stmt = self.prepare(&query)?;
-        if cfg!(debug_assertions) {
-            log(format!("id: {}", id));
-        }
+        log(format!("id: {}", id));
         let mut rows = stmt.query(params![id])?;
         let row = rows.next()?.unwrap();
         let cell = row.get(0)?;
@@ -169,11 +167,8 @@ impl Database {
             self.get_current_table_name()?,
             i
         );
-        let a: i32 = self
-            .connection
-            .query_row(&query, [i], |row| row.get(0))
-            .unwrap();
-        Ok(a)
+        let id: i32 = self.connection.query_row(&query, [], |row| row.get(0))?;
+        Ok(id)
     }
 
     pub(crate) fn sort(&mut self) -> AppResult<()> {
@@ -213,7 +208,7 @@ impl Database {
             "SELECT name FROM sqlite_master WHERE type='table' AND rowid='{}';",
             self.current_table_idx
         );
-        log(query.clone());
+        // log(query.clone());
         let table_name = self.connection.query_row(&query, [], |row| row.get(0))?;
         Ok(table_name)
     }
@@ -272,9 +267,9 @@ impl Database {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
         let connection = if cfg!(debug_assertions) {
-            Connection::open_in_memory().unwrap()
-            // let _ = std::fs::remove_file("db.sqlite");
-            // Connection::open("db.sqlite").unwrap()
+            // Connection::open_in_memory().unwrap()
+            let _ = std::fs::remove_file("db.sqlite");
+            Connection::open("db.sqlite").unwrap()
         } else {
             let xx = 12;
             Connection::open_in_memory().unwrap()
@@ -405,7 +400,7 @@ impl Database {
 
     fn next_row(&mut self, height: u16) {
         let i = match self.table_state.selected() {
-            Some(i) if i <= height as usize => i + 1,
+            Some(i) if i < height as usize => i + 1,
             _ => 0,
         };
         // let query = format!("SELECT id FROM '{}' LIMIT 1 OFFSET {}", self.get_first_table(), self.state.offset());
@@ -416,7 +411,7 @@ impl Database {
         let i = match self.table_state.selected() {
             Some(i) => {
                 if i == 0 {
-                    height as usize + 1
+                    height as usize
                 } else {
                     i - 1
                 }

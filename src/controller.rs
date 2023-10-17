@@ -143,7 +143,6 @@ impl Controller {
     pub fn start(mut self) -> Result<(), AppError> {
         loop {
             let r = self.run();
-            log(format!("last cmd r: {:?}", self.last_command.command));
             if self.last_command.command == Command::Quit {
                 break;
             }
@@ -160,9 +159,9 @@ impl Controller {
 
     pub fn run(&mut self) -> Result<(), AppError> {
         let command = TUI::start(self);
-        log(format!("command: {:?}", command));
         match command {
             Ok(command) => {
+                log(format!("\ncommand: {:?}", command));
                 let result = match command {
                     Command::Quit => {
                         self.last_command = CommandWrapper::new(Command::Quit, None);
@@ -183,7 +182,7 @@ impl Controller {
                     Command::Sort => self.sort(),
                     Command::Save => self.save_to_sqlite_file(),
                     Command::Move(direction) => {
-                        let height = self.ui.get_terminal_height()?;
+                        let height = self.ui.get_table_height()?;
                         self.database.move_cursor(direction, height)?;
                         Ok(())
                     }
@@ -195,17 +194,18 @@ impl Controller {
                     | Command::Edit
                     | Command::SqlQuery
                     | Command::Sort
-                    | Command::Save
                     | Command::RegexFilter => self.database.is_unchanged = false,
                     Command::None
                     | Command::IllegalOperation
+                    | Command::Save
                     | Command::Quit
                     | Command::Move(_) => (),
                 }
                 result
             }
             Err(result) => {
-                log(format!("APP ERROR: {:?}", result));
+                log(format!("\nAPP ERROR: {:?}", result));
+                self.database.is_unchanged = false;
                 self.set_last_command(CommandWrapper::new(
                     Command::IllegalOperation,
                     Some(result.to_string()),
@@ -274,8 +274,11 @@ impl Controller {
 
     pub(crate) fn edit_cell(&mut self) -> AppResult<()> {
         let header = self.database.get_current_header()?;
+        log(format!("header: {:?}", header));
         let id = self.database.get_current_id()?;
+        log(format!("id: {:?}", id));
         let data = self.database.get_cell(id, &header)?;
+        log(format!("data: {:?}", data));
 
         let result = TUI::get_editor_input(&data)?;
         self.database.update_cell(header.as_str(), id, &result)?;

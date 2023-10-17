@@ -41,9 +41,9 @@ impl TUI {
         enable_raw_mode().unwrap();
         Self { terminal }
     }
-    pub fn get_terminal_height(&self) -> AppResult<u16> {
-        let size = self.terminal.backend().size()?;
-        Ok(size.height)
+    pub fn get_table_height(&self) -> AppResult<u16> {
+        let height = self.terminal.backend().size()?.height - 5;
+        Ok(height)
     }
 
     pub fn shutdown(&mut self) -> Result<(), AppError> {
@@ -104,7 +104,6 @@ impl TUI {
         let table_name = database.get_current_table_name()?;
 
         let (headers, rows) = database.get(100, 0, table_name)?;
-        log(format!("headers: {:?} rows: {:?}", headers, rows));
 
         let id_extra_space = 8 / headers.len() as u16;
 
@@ -154,10 +153,6 @@ impl TUI {
             .get(row)
             .map(|el| el.get(0).to_string())
             .unwrap_or("xxx".to_owned());
-        let c: String = database
-            .count_headers()
-            .map(|r| r.to_string())
-            .unwrap_or("???".to_string());
         let offset = database.table_state.offset();
         let text = vec![Line::from(vec![Span::raw(format!(
             // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
