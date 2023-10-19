@@ -50,7 +50,7 @@ impl TUI {
         Self { terminal }
     }
     pub fn get_table_height(&self) -> AppResult<u16> {
-        let height = self.terminal.backend().size()?.height - 5;
+        let height = self.terminal.backend().size()?.height - 4;
         Ok(height)
     }
 
@@ -64,13 +64,18 @@ impl TUI {
         Ok(())
     }
     pub fn start(controller: &mut Controller) -> Result<Command, AppError> {
+        let table_height = controller.ui.get_table_height().unwrap();
         controller.ui.terminal.draw(|f| {
-            match TUI::update(f, &mut controller.database, &controller.last_command) {
+            match TUI::update(
+                f,
+                &mut controller.database,
+                &controller.last_command,
+                table_height,
+            ) {
                 Ok(_) => (),
                 Err(err) => {
                     terminal::disable_raw_mode().unwrap();
                     eprintln!("error: {}", err);
-
                     panic!("error in update");
                 }
             }
@@ -86,9 +91,7 @@ impl TUI {
 
     pub fn get_editor_input(data: &str) -> AppResult<String> {
         let editor_var = std::env::var("EDITOR").unwrap();
-        // split editor var into editor and args, like if $EDITOR is "emacs -nw"
         let editor_and_args = editor_var.split_whitespace().collect::<Vec<_>>();
-        // let editor = editor_and_args.get(0).unwrap_or(&"nano");
         let (editor, args) = editor_and_args.split_first().unwrap_or((&"nano", &[]));
         let mut args = args.to_vec();
         let mut file_path = std::env::temp_dir();
@@ -111,6 +114,7 @@ impl TUI {
         f: &mut Frame<B>,
         database: &mut Database,
         last_command: &CommandWrapper,
+        table_height: u16,
     ) -> AppResult<()> {
         let rects = Layout::default()
             .direction(ratatui::prelude::Direction::Vertical)
@@ -160,20 +164,20 @@ impl TUI {
             // .highlight_symbol(">> ")
             .widths(widths.as_slice())
             .bg(Color::Black);
-        f.render_stateful_widget(t, rects[0], &mut database.table_state);
+        f.render_stateful_widget(t, rects[0], &mut database.current_view.table_state);
 
         let a = database.header_idx;
-        let row = database.table_state.selected().unwrap_or(0);
+        let row = database.current_view.table_state.selected().unwrap_or(0);
         let total_rows = database.count_rows().unwrap_or(0);
         // let rowid = rows.get(b).unwrap().data.get(0);
         let rowid = rows
             .get(row)
             .map(|el| el.get(0).to_string())
             .unwrap_or("xxx".to_owned());
-        let offset = database.table_state.offset();
+        let offset = database.current_view.table_state.offset();
         let text = vec![Line::from(vec![Span::raw(format!(
             // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
-            "total rows: {total_rows},  last command: {last_command}",
+            "row: {row}, total rows: {total_rows},  last command: {last_command}, height: {table_height}",
         ))])];
         let paragraph = Paragraph::new(text);
 

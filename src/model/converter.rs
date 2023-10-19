@@ -2,7 +2,6 @@ use std::{error::Error, fmt::format, fs::File, path::Path};
 
 use csv::{Reader, StringRecord, StringRecordsIter};
 use rusqlite::Connection;
-use rusqlite::Connection;
 
 use crate::error::log;
 
@@ -12,20 +11,16 @@ pub(crate) fn database_from_csv(
     path: &Path,
     connection: Connection,
 ) -> crate::error::AppResult<Database> {
-pub(crate) fn database_from_csv(
-    path: &Path,
-    connection: Connection,
-) -> crate::error::AppResult<Database> {
     let mut csv = csv::Reader::from_path(path)?;
     let table_name = Database::get_table_name(path).unwrap();
     let table_names = vec![table_name.to_string()];
-    let mut database = Database::new(table_names, connection)?;
     let mut queries = String::new();
     let query = build_create_table_query(&mut csv, table_name).unwrap();
     queries.push_str(&query);
-    database.execute_batch(&queries)?;
+    connection.execute_batch(&queries)?;
     queries.clear();
     let columns = get_headers_for_query(&mut csv, table_name).unwrap();
+    let mut database = Database::new(connection)?;
     let limit = 10000;
     let mut i = 0;
 
@@ -74,6 +69,7 @@ pub(crate) fn database_from_csv(
     );
     Ok(database)
 }
+
 fn build_value_query(record: &StringRecord) -> String {
     let row = record
         .iter()
@@ -84,10 +80,7 @@ fn build_value_query(record: &StringRecord) -> String {
 }
 
 pub(crate) fn database_from_sqlite(connection: Connection) -> crate::error::AppResult<Database> {
-    let query = "SELECT name FROM sqlite_master WHERE type='table' LIMIT 1;".to_string();
-    //         SELECT name FROM sqlite_master WHERE type='table' AND rowid=0;,
-    let (rowid, name) = connection.query_row(&query, [], |row| (row.get(0), r))?;
-    let database = Database::new(vec![table_name], connection)?;
+    let database = Database::new(connection)?;
 
     Ok(database)
 }

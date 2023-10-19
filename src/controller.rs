@@ -70,7 +70,7 @@ impl From<KeyEvent> for Command {
             }
             KeyCode::Char('w') => Command::Sort,
             KeyCode::Char('a') => Command::Save,
-            // KeyCode::Char('q') => Command::SqlQuery,
+            KeyCode::Char('q') => Command::SqlQuery,
             KeyCode::Char('f') => Command::RegexFilter,
             KeyCode::Char('c') => {
                 if key_event.modifiers.contains(KeyModifiers::CONTROL) {

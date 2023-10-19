@@ -18,6 +18,7 @@ use std::time;
 use crate::error::{log, AppError, AppResult};
 use crate::model::datarow::DataRow;
 
+use super::current_view::CurrentView;
 use super::datarow::{self, DataTable};
 use super::regexping::{
     self, build_regex_filter_query, build_regex_no_capture_group_transform_query,
@@ -28,16 +29,13 @@ type BoxError = Box<dyn Error + Send + Sync + 'static>;
 
 #[derive(Debug)]
 pub struct Database {
-    pub connection: Connection,
-    pub header_idx: usize,
-    pub order_column: String,
-    pub is_asc_order: bool,
-    pub table_state: TableState,
+    pub(crate) connection: Connection,
+    pub(crate) header_idx: usize,
+    pub(crate) order_column: String,
+    pub(crate) is_asc_order: bool,
     pub(super) current_table_idx: usize,
-    row_idx: usize,
-    pub is_unchanged: bool,
-    headers: Vec<String>,
-    data_rows: Vec<DataRow>,
+    pub(crate) is_unchanged: bool,
+    pub(crate) current_view: CurrentView,
 }
 
 impl Database {
@@ -60,7 +58,10 @@ impl Database {
     pub fn get(&mut self, limit: i32, offset: i32, table_name: String) -> AppResult<DataTable> {
         // if false {
         if self.is_unchanged {
-            Ok((self.headers.clone(), self.data_rows.clone()))
+            Ok((
+                self.current_view.headers.clone(),
+                self.current_view.data_rows.clone(),
+            ))
         } else {
             let ordering = if self.is_asc_order { "ASC" } else { "DESC" };
             let query = format!(
@@ -82,8 +83,8 @@ impl Database {
                 }
                 (headers, data_rows)
             };
-            self.data_rows = data_rows.clone();
-            self.headers = headers.clone();
+            self.current_view.data_rows = data_rows.clone();
+            self.current_view.headers = headers.clone();
             self.is_unchanged = true;
             Ok((headers, data_rows))
         }
@@ -170,7 +171,7 @@ impl Database {
     }
 
     pub(crate) fn get_current_id(&self) -> AppResult<i32> {
-        let i = self.table_state.selected().unwrap_or(0);
+        let i = self.current_view.table_state.selected().unwrap_or(0);
         let query = format!(
             "SELECT rowid FROM `{}` LIMIT 1 OFFSET {};",
             self.get_current_table_name()?,
@@ -183,7 +184,7 @@ impl Database {
     pub(crate) fn sort(&mut self) -> AppResult<()> {
         // sort by current header
         let header = self.get_current_header()?;
-        self.table_state.select(Some(0));
+        self.current_view.table_state.select(Some(0));
         if self.order_column == header {
             self.is_asc_order = !self.is_asc_order;
         } else {
@@ -278,29 +279,21 @@ impl Database {
     // TODO 1. add ability to take input.
     // TODO 2. user sql query
     // TODO 3. user regex fn
-    pub fn new(table_names: Vec<String>, connection: Connection) -> AppResult<Self> {
-        let mut table_state = TableState::default();
-        table_state.select(Some(0));
-        // let connection = if cfg!(debug_assertions) {
-        //     Connection::open_in_memory().unwrap()
-        //     // let _ = std::fs::remove_file("db.sqlite");
-        //     // Connection::open("db.sqlite").unwrap()
-        // } else {
-        //     let xx = 12;
-        //     Connection::open_in_memory().unwrap()
-        // };
+    pub fn new(connection: Connection) -> AppResult<Self> {
+        let query = "SELECT rowid FROM sqlite_master WHERE type='table' ORDER BY rowid LIMIT 1;"
+            .to_string();
+        let rowid: usize = connection.query_row(&query, [], |row| row.get(0))?;
+
+        let current_view = CurrentView::new(vec![], vec![], TableState::default(), 0, 0);
 
         let database = Database {
             connection,
             header_idx: 0,
             order_column: "id".to_string(),
             is_asc_order: true,
-            row_idx: 0,
-            current_table_idx: 0,
-            table_state,
+            current_table_idx: rowid,
             is_unchanged: false,
-            data_rows: vec![],
-            headers: vec![],
+            current_view,
         };
         if let Err(err) = regexping::custom_functions::add_custom_functions(&database) {
             log(format!(
@@ -357,26 +350,25 @@ impl Database {
     }
 
     fn next_row(&mut self, height: u16) {
-        let i = match self.table_state.selected() {
-            Some(i) if i < height as usize => i + 1,
+        let i = match self.current_view.table_state.selected() {
+            Some(i) if i < (height - 1) as usize => i + 1,
             _ => 0,
         };
-        // let query = format!("SELECT id FROM '{}' LIMIT 1 OFFSET {}", self.get_first_table(), self.state.offset());
-        self.table_state.select(Some(i));
+        self.current_view.table_state.select(Some(i));
     }
 
     fn previous_row(&mut self, height: u16) {
-        let i = match self.table_state.selected() {
+        let i = match self.current_view.table_state.selected() {
             Some(i) => {
                 if i == 0 {
-                    height as usize
+                    (height - 1) as usize
                 } else {
                     i - 1
                 }
             }
             None => 0,
         };
-        self.table_state.select(Some(i));
+        self.current_view.table_state.select(Some(i));
     }
     pub fn update_cell(&self, header: &str, id: i32, content: &str) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
@@ -594,6 +586,7 @@ mod tests {
         // let result: String = row.get(0).unwrap();
         // assert_eq!(result, "heri");
     }
+
     #[test]
     fn my_benching_stuff() {
         let before = Instant::now();
