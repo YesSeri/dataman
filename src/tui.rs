@@ -1,6 +1,6 @@
 use core::panic;
 use std::{
-    fmt::{format, Display},
+    fmt::{format, Debug, Display},
     io::{Read, Stdout, Write},
     process::exit,
     result, thread,
@@ -33,6 +33,14 @@ pub struct TUI {
     terminal: Terminal<CrosstermBackend<Stdout>>,
 }
 
+impl std::fmt::Debug for TUI {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TUI")
+            .field("terminal", &self.terminal)
+            .finish()
+    }
+}
+
 impl TUI {
     pub fn new() -> Self {
         let stdout = std::io::stdout();
@@ -59,8 +67,10 @@ impl TUI {
         controller.ui.terminal.draw(|f| {
             match TUI::update(f, &mut controller.database, &controller.last_command) {
                 Ok(_) => (),
-                Err(_) => {
+                Err(err) => {
                     terminal::disable_raw_mode().unwrap();
+                    eprintln!("error: {}", err);
+
                     panic!("error in update");
                 }
             }

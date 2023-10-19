@@ -120,6 +120,7 @@ impl std::fmt::Display for CommandWrapper {
     }
 }
 
+#[derive(Debug)]
 pub struct Controller {
     pub ui: TUI,
     pub database: Database,

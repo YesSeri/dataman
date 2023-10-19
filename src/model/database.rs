@@ -278,17 +278,17 @@ impl Database {
     // TODO 1. add ability to take input.
     // TODO 2. user sql query
     // TODO 3. user regex fn
-    pub fn new(table_names: Vec<String>) -> AppResult<Self> {
+    pub fn new(table_names: Vec<String>, connection: Connection) -> AppResult<Self> {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
-        let connection = if cfg!(debug_assertions) {
-            Connection::open_in_memory().unwrap()
-            // let _ = std::fs::remove_file("db.sqlite");
-            // Connection::open("db.sqlite").unwrap()
-        } else {
-            let xx = 12;
-            Connection::open_in_memory().unwrap()
-        };
+        // let connection = if cfg!(debug_assertions) {
+        //     Connection::open_in_memory().unwrap()
+        //     // let _ = std::fs::remove_file("db.sqlite");
+        //     // Connection::open("db.sqlite").unwrap()
+        // } else {
+        //     let xx = 12;
+        //     Connection::open_in_memory().unwrap()
+        // };
 
         let database = Database {
             connection,
@@ -408,17 +408,25 @@ impl TryFrom<&Path> for Database {
     type Error = Box<dyn Error>;
 
     fn try_from(path: &Path) -> Result<Self, Box<dyn Error>> {
-        let extension = path.extension().unwrap();
+        let extension = path.extension().unwrap().to_str().unwrap();
         match extension {
-            os_str if os_str == "csv" => {
-                let database = super::converter::database_from_csv(path)?;
+            "csv" => {
+                let connection = if cfg!(debug_assertions) {
+                    // Connection::open_in_memory().unwrap()
+                    let _ = std::fs::remove_file("db.sqlite");
+                    Connection::open("db.sqlite").unwrap()
+                } else {
+                    let xx = 12;
+                    Connection::open_in_memory().unwrap()
+                };
+                let database = super::converter::database_from_csv(path, connection)?;
                 Ok(database)
             }
-            os_str if os_str == "sqlite" => {
-                let database = super::converter::database_from_sqlite(path)?;
-                unimplemented!("sqlite");
-                // Ok(database)
-                // Self::try_from_sqlite(path)
+            "sqlite" | "sql" | "sqlite3" => {
+                let connection = Connection::open(path).unwrap();
+
+                let database = super::converter::database_from_sqlite(connection)?;
+                Ok(database)
             }
             _ => panic!("Unsupported file format"),
         }
