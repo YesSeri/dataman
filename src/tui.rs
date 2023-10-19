@@ -1,6 +1,6 @@
 use core::panic;
 use std::{
-    fmt::Display,
+    fmt::{format, Display},
     io::{Read, Stdout, Write},
     process::exit,
     result, thread,
@@ -75,20 +75,26 @@ impl TUI {
     }
 
     pub fn get_editor_input(data: &str) -> AppResult<String> {
-        let editor = std::env::var("EDITOR").unwrap();
+        let editor_var = std::env::var("EDITOR").unwrap();
+        // split editor var into editor and args, like if $EDITOR is "emacs -nw"
+        let editor_and_args = editor_var.split_whitespace().collect::<Vec<_>>();
+        // let editor = editor_and_args.get(0).unwrap_or(&"nano");
+        let (editor, args) = editor_and_args.split_first().unwrap_or((&"nano", &[]));
+        let mut args = args.to_vec();
         let mut file_path = std::env::temp_dir();
         file_path.push("dataman_input.txt");
+        args.push(file_path.to_str().unwrap());
 
         let mut file = std::fs::File::create(&file_path)?;
         file.write_all(data.as_bytes())?;
 
-        std::process::Command::new(editor)
-            .arg(&file_path)
-            .status()?;
+        log(format!("editor: {:?} args: {:?}", editor, args));
+        std::process::Command::new(editor).args(args).status()?;
 
         let mut editable = String::new();
         std::fs::File::open(file_path)?.read_to_string(&mut editable)?;
         let trimmed = editable.trim_end_matches('\n').to_string();
+        log(format!("editable: {:?} | trimmed: {:?}", editable, trimmed));
         Ok(trimmed)
     }
     fn update<B: Backend>(
@@ -148,6 +154,7 @@ impl TUI {
 
         let a = database.header_idx;
         let row = database.table_state.selected().unwrap_or(0);
+        let total_rows = database.count_rows().unwrap_or(0);
         // let rowid = rows.get(b).unwrap().data.get(0);
         let rowid = rows
             .get(row)
@@ -156,7 +163,7 @@ impl TUI {
         let offset = database.table_state.offset();
         let text = vec![Line::from(vec![Span::raw(format!(
             // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
-            "row: {row}, rowid {rowid}, last command: {last_command}",
+            "total rows: {total_rows},  last command: {last_command}",
         ))])];
         let paragraph = Paragraph::new(text);
 

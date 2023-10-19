@@ -1,5 +1,3 @@
-// read csv file to in memory database
-
 use csv::Reader;
 use ratatui::widgets::TableState;
 use regex::{Captures, Regex};
@@ -90,6 +88,18 @@ impl Database {
             Ok((headers, data_rows))
         }
     }
+    // TODO fix this
+    pub(crate) fn count_rows(&self) -> Option<usize> {
+        let table_name = self.get_current_table_name().ok()?;
+        log(table_name.clone());
+        self.connection
+            .query_row(
+                &format!("SELECT COUNT(*) FROM {};", table_name),
+                [],
+                |row| row.get(0),
+            )
+            .ok()
+    }
     pub fn get_cell(&self, id: i32, header: &str) -> AppResult<String> {
         let table_name = self.get_current_table_name()?;
         let query = format!("SELECT `{}` FROM `{}` WHERE id = ?;", header, table_name);
@@ -101,13 +111,13 @@ impl Database {
 
         Ok(cell)
     }
-    pub fn prepare(&self, sql: &str) -> rusqlite::Result<Statement> {
+    fn prepare(&self, sql: &str) -> rusqlite::Result<Statement> {
         if cfg!(debug_assertions) {
             log(sql.to_string());
         }
         self.connection.prepare(sql)
     }
-    pub fn execute<P: rusqlite::Params>(&self, sql: &str, params: P) -> AppResult<()> {
+    fn execute<P: rusqlite::Params>(&self, sql: &str, params: P) -> AppResult<()> {
         if cfg!(debug_assertions) {
             log(sql.to_string());
         }
@@ -115,7 +125,7 @@ impl Database {
         Ok(())
     }
 
-    pub fn execute_batch(&self, sql: &str) -> AppResult<()> {
+    pub(super) fn execute_batch(&self, sql: &str) -> AppResult<()> {
         let query = &format!("BEGIN TRANSACTION;\n{}\nCOMMIT;", sql);
         if cfg!(debug_assertions) {
             log(query.to_string());
@@ -150,7 +160,6 @@ impl Database {
             let id: i32 = row.get(0)?;
             let value: String = row.get(1)?;
             let derived_value = fun(value).unwrap_or("NULL".to_string());
-            let table_name = self.get_table_names()?[0].clone();
             let update_query = format!(
                 "UPDATE `{table_name}` SET '{derived_column_name}' = '{derived_value}' WHERE id = '{id}';\n",
             );
@@ -194,14 +203,6 @@ impl Database {
             table_names.push(name);
         }
         Ok(table_names)
-    }
-    pub fn next_table(&mut self) -> AppResult<()> {
-        let query = format!(
-            "SELECT rowid FROM sqlite_master WHERE type='table' AND rowid > {} ORDER BY rowid;",
-            self.current_table_idx
-        );
-        self.current_table_idx = self.connection.query_row(&query, [], |row| row.get(0))?;
-        Ok(())
     }
     pub fn get_current_table_name(&self) -> AppResult<String> {
         let query = format!(
@@ -253,6 +254,20 @@ impl Database {
         Ok(())
     }
 
+    pub(crate) fn copy(&self) -> AppResult<()> {
+        let table_name = self.get_current_table_name()?;
+        let header = self.get_current_header()?;
+        let derived_header_name = format!("derived{}", header);
+        let create_header_query =
+            format!("ALTER TABLE `{table_name}` ADD COLUMN `{derived_header_name}` TEXT;\n");
+
+        let mut queries = String::new();
+        queries.push_str(&create_header_query);
+        let update_query =
+            format!("UPDATE `{table_name}` SET `{derived_header_name}` = `{header}`;");
+        queries.push_str(&update_query);
+        self.execute_batch(&queries)
+    }
     /// This is a regex capture without capture groups e.g. [g-k].*n.
     /// Get the first capture that matches the pattern, a letter between g and k, followed by any number of characters, followed by n.
 
@@ -267,9 +282,9 @@ impl Database {
         let mut table_state = TableState::default();
         table_state.select(Some(0));
         let connection = if cfg!(debug_assertions) {
-            // Connection::open_in_memory().unwrap()
-            let _ = std::fs::remove_file("db.sqlite");
-            Connection::open("db.sqlite").unwrap()
+            Connection::open_in_memory().unwrap()
+            // let _ = std::fs::remove_file("db.sqlite");
+            // Connection::open("db.sqlite").unwrap()
         } else {
             let xx = 12;
             Connection::open_in_memory().unwrap()
@@ -296,63 +311,6 @@ impl Database {
         } else {
             Ok(database)
         }
-    }
-
-    pub(crate) fn build_create_table_query(
-        csv: &mut Reader<File>,
-        table_name: &str,
-    ) -> Result<String, Box<dyn Error>> {
-        let headers = csv.headers()?;
-        let columns: String = headers
-            .iter()
-            .map(|header| format!("`{}`", header))
-            .collect::<Vec<String>>()
-            .join(", ");
-
-        let headers_string: String = headers
-            .iter()
-            .map(|header| format!("\n\t`{}` TEXT", header))
-            .collect::<Vec<String>>()
-            .join(",");
-        let query = format!(
-            "CREATE TABLE IF NOT EXISTS '{}' (\n\tid INTEGER PRIMARY KEY, {}\n);",
-            table_name, headers_string
-        );
-        Ok(query)
-    }
-
-    pub(crate) fn build_add_data_query(
-        csv: &mut Reader<File>,
-        table_name: &str,
-    ) -> Result<String, Box<dyn Error>> {
-        let headers = csv.headers()?;
-        let columns: String = headers
-            .iter()
-            .map(|header| format!("'{}'", header))
-            .collect::<Vec<String>>()
-            .join(", ");
-
-        let values = csv
-            .records()
-            .map(|row| {
-                let row = row.unwrap();
-                format!(
-                    "\n\t({})",
-                    row.iter()
-                        .map(|el| format!("'{}'", el))
-                        .collect::<Vec<String>>()
-                        .join(", ")
-                )
-            })
-            .collect::<Vec<String>>()
-            .join(",");
-
-        let query = format!(
-            "INSERT INTO '{}' ({}) VALUES {};",
-            table_name, columns, values
-        );
-
-        Ok(query)
     }
 
     pub(crate) fn get_table_name(file: &Path) -> Option<&str> {
@@ -424,6 +382,24 @@ impl Database {
         let table_name = self.get_current_table_name()?;
         let update_query = format!("UPDATE `{}` SET '{}' = ? WHERE id = ?;", table_name, header);
         self.execute(&update_query, params![content, id])?;
+        Ok(())
+    }
+
+    pub fn next_table(&mut self) -> AppResult<()> {
+        let query = format!(
+            "SELECT rowid FROM sqlite_master WHERE type='table' AND rowid > {} ORDER BY rowid ASC LIMIT 1;",
+            self.current_table_idx
+        );
+        self.current_table_idx = self.connection.query_row(&query, [], |row| row.get(0))?;
+        Ok(())
+    }
+
+    pub(crate) fn prev_table(&mut self) -> AppResult<()> {
+        let query = format!(
+            "SELECT rowid FROM sqlite_master WHERE type='table' AND rowid < {} ORDER BY rowid DESC LIMIT 1;",
+            self.current_table_idx
+        );
+        self.current_table_idx = self.connection.query_row(&query, [], |row| row.get(0))?;
         Ok(())
     }
 }
@@ -550,6 +526,13 @@ mod tests {
     }
 
     #[test]
+    fn count_rows_test() {
+        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let rows_len = database.count_rows().unwrap();
+        assert_eq!(rows_len, 6)
+    }
+
+    #[test]
     fn custom_functions_regexp_test() {
         let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         // let query = "SELECT firstname FROM `data` WHERE firstname REGEXP 'hen'";
@@ -606,7 +589,7 @@ mod tests {
     #[test]
     fn my_benching_stuff() {
         let before = Instant::now();
-        let database = Database::try_from(Path::new("assets/c.csv")).unwrap();
+        let database = Database::try_from(Path::new("assets/customers-1000000.csv")).unwrap();
         let table_name = database.get_current_table_name().unwrap();
         let header = database.get_headers(&table_name).unwrap()[2].clone();
         let pattern = "n.*";
@@ -633,7 +616,7 @@ mod tests {
     #[test]
     fn my_benching_no_capture() {
         let before = Instant::now();
-        let database = Database::try_from(Path::new("assets/c.csv")).unwrap();
+        let database = Database::try_from(Path::new("assets/customers-1000000.csv")).unwrap();
         let table_name = database.get_current_table_name().unwrap();
         let header = database.get_headers(&table_name).unwrap()[2].clone();
         let pattern = "n.*";
@@ -644,33 +627,31 @@ mod tests {
         // let sql =
         //     "UPDATE TABLE `cRegexFiltered` AS SELECT * FROM `c` WHERE regexp('n.*', `firstname`);";
 
-        let sql = "ALTER TABLE `c` ADD COLUMN `derivedfirstname` TEXT;\n";
-        database.execute(sql, []).unwrap();
-        let sql = "UPDATE `c` \
-                SET 'derivedfirstname' = regexp_transform_no_capture_group('n.*', `firstname`) \
-                WHERE id IN (SELECT id FROM `c` WHERE `firstname` REGEXP 'n.*');\n";
-        database.execute(sql, []).unwrap();
-        let names = database.get_table_names().unwrap();
-        dbg!(names);
+        // let sql = "ALTER TABLE `c` ADD COLUMN `derivedfirstname` TEXT;\n";
+        // database.execute(sql, []).unwrap();
+        // let sql = "UPDATE `c` \
+        //         SET 'derivedfirstname' = regexp_transform_no_capture_group('n.*', `firstname`) \
+        //         WHERE id IN (SELECT id FROM `c` WHERE `firstname` REGEXP 'n.*');\n";
+        // database.execute(sql, []).unwrap();
+        // let names = database.get_table_names().unwrap();
+        // dbg!(names);
 
-        let query = "SELECT * FROM `c` ORDER BY rowid ASC LIMIT 10;".to_string();
-        let mut stmt = database.prepare(&query).unwrap();
-        let mut rows = stmt.query([]).unwrap();
+        // let query = "SELECT * FROM `c` ORDER BY rowid ASC LIMIT 10;".to_string();
+        // let mut stmt = database.prepare(&query).unwrap();
+        // let mut rows = stmt.query([]).unwrap();
 
-        while let Some(row) = rows.next().unwrap_or(None) {
-            let datarow: DataRow = DataRow::from(row);
-            println!("{:?}", datarow);
-        }
+        // while let Some(row) = rows.next().unwrap_or(None) {
+        //     let datarow: DataRow = DataRow::from(row);
+        //     println!("{:?}", datarow);
+        // }
         // database.execute_batch(&query).unwrap();
 
         // let table_name = database.get_table_names().unwrap()[1].clone();
         let result: usize = database
             .connection
-            .query_row(
-                "SELECT COUNT(*) FROM `c` WHERE `c`.`derivedfirstname` IS NOT NULL;",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT COUNT(*) FROM `customers-1000000`;", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         println!("result: {}", result);
 

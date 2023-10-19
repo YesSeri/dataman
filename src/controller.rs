@@ -1,3 +1,4 @@
+use std::f32::consts::E;
 use std::path::Path;
 use std::{
     fmt::format,
@@ -47,6 +48,8 @@ pub enum Command {
     Save,
     Move(Direction),
     RegexFilter,
+    NextTable,
+    PrevTable,
     // RegexTransform,
 }
 
@@ -56,13 +59,19 @@ impl From<KeyEvent> for Command {
             KeyCode::Char('r') => Command::RegexTransform,
             KeyCode::Char('e') => Command::Edit,
             KeyCode::Right | KeyCode::Left | KeyCode::Up | KeyCode::Down => {
+                if key_event.modifiers.contains(KeyModifiers::CONTROL) {
+                    match key_event.code {
+                        KeyCode::Right => return Command::NextTable,
+                        KeyCode::Left => return Command::PrevTable,
+                        _ => (),
+                    }
+                }
                 Command::Move(Direction::from(key_event.code))
             }
             KeyCode::Char('w') => Command::Sort,
             KeyCode::Char('a') => Command::Save,
             // KeyCode::Char('q') => Command::SqlQuery,
             KeyCode::Char('f') => Command::RegexFilter,
-            // KeyCode::Char('t') => Command::RegexTransform,
             KeyCode::Char('c') => {
                 if key_event.modifiers.contains(KeyModifiers::CONTROL) {
                     Command::Quit
@@ -159,7 +168,7 @@ impl Controller {
 
     pub fn run(&mut self) -> Result<(), AppError> {
         let command = TUI::start(self);
-        match command {
+        let res = match command {
             Ok(command) => {
                 log(format!("\ncommand: {:?}", command));
                 let result = match command {
@@ -187,13 +196,24 @@ impl Controller {
                         Ok(())
                     }
                     Command::RegexFilter => self.regex_filter(),
+                    Command::NextTable => {
+                        self.last_command = CommandWrapper::new(Command::NextTable, None);
+                        self.database.next_table()
+                    }
+                    Command::PrevTable => {
+                        self.last_command = CommandWrapper::new(Command::PrevTable, None);
+                        self.database.prev_table()
+                    }
                 };
+
                 match command {
                     Command::Copy
                     | Command::RegexTransform
                     | Command::Edit
                     | Command::SqlQuery
                     | Command::Sort
+                    | Command::NextTable
+                    | Command::PrevTable
                     | Command::RegexFilter => self.database.is_unchanged = false,
                     Command::None
                     | Command::IllegalOperation
@@ -212,7 +232,16 @@ impl Controller {
                 ));
                 Ok(())
             }
+        };
+        if let Err(e) = res {
+            log(format!("\nAPP ERROR: {:?}", e));
+            self.database.is_unchanged = false;
+            self.set_last_command(CommandWrapper::new(
+                Command::IllegalOperation,
+                Some(format!(": {}", e)),
+            ));
         }
+        Ok(())
     }
     pub fn get_headers_and_rows(&mut self, limit: i32) -> AppResult<DataTable> {
         let binding = "default table name".to_string();
@@ -257,18 +286,9 @@ impl Controller {
         Ok(())
     }
 
-    pub fn derive_column<F>(&mut self, fun: F) -> AppResult<()>
-    where
-        F: Fn(String) -> Option<String>,
-    {
-        let column_name = self.database.get_current_header()?;
-        self.database.derive_column(column_name, fun)
-    }
-
     pub fn copy(&mut self) -> AppResult<()> {
-        let fun = |s: String| Some(s.to_string());
+        self.database.copy()?;
         self.set_last_command(CommandWrapper::new(Command::Copy, None));
-        self.derive_column(fun)?;
         Ok(())
     }
 
