@@ -1,3 +1,4 @@
+use std::cmp::max;
 use csv::Reader;
 use ratatui::widgets::TableState;
 use regex::{Captures, Regex};
@@ -30,15 +31,41 @@ type BoxError = Box<dyn Error + Send + Sync + 'static>;
 #[derive(Debug)]
 pub struct Database {
     pub(crate) connection: Connection,
-    pub(crate) header_idx: usize,
+    pub(crate) header_idx: u16,
     pub(crate) order_column: String,
     pub(crate) is_asc_order: bool,
-    pub(super) current_table_idx: usize,
+    pub(super) current_table_idx: u16,
     pub(crate) is_unchanged: bool,
     pub(crate) current_view: CurrentView,
 }
 
 impl Database {
+    pub fn new(connection: Connection) -> AppResult<Self> {
+        let query = "SELECT rowid FROM sqlite_master WHERE type='table' ORDER BY rowid LIMIT 1;"
+            .to_string();
+        let rowid: u16 = connection.query_row(&query, [], |row| row.get(0))?;
+
+        let current_view = CurrentView::new(vec![], vec![], TableState::default(), 0, 0);
+
+        let database = Database {
+            connection,
+            header_idx: 0,
+            order_column: "id".to_string(),
+            is_asc_order: true,
+            current_table_idx: rowid,
+            is_unchanged: false,
+            current_view,
+        };
+        if let Err(err) = regexping::custom_functions::add_custom_functions(&database) {
+            log(format!(
+                "Error adding custom functions, e.g. REGEXP: {}",
+                err
+            ));
+            Err(AppError::Sqlite(err))
+        } else {
+            Ok(database)
+        }
+    }
     pub(crate) fn backup_db<P: AsRef<Path>>(&self, dst: P) -> rusqlite::Result<()> {
         let mut stmt = self.connection.prepare("PRAGMA page_count")?;
         let page_count: i32 = stmt.query_row([], |row| row.get(0)).unwrap_or(i32::MAX);
@@ -49,13 +76,11 @@ impl Database {
     }
     pub fn get_current_header(&self) -> AppResult<String> {
         let table_name = self.get_current_table_name()?;
-        Ok(self
+        self
             .get_headers(&table_name)?
-            .get(self.header_idx)
-            .ok_or(AppError::Other)?
-            .clone())
+            .get(self.header_idx as usize).cloned().ok_or(AppError::Other)
     }
-    pub fn get(&mut self, limit: i32, offset: i32, table_name: String) -> AppResult<DataTable> {
+    pub fn get(&mut self, limit: u32, offset: u32, table_name: String) -> AppResult<DataTable> {
         // if false {
         if self.is_unchanged {
             Ok((
@@ -90,7 +115,7 @@ impl Database {
         }
     }
     // TODO fix this
-    pub(crate) fn count_rows(&self) -> Option<usize> {
+    pub(crate) fn count_rows(&self) -> Option<u32> {
         let table_name = self.get_current_table_name().ok()?;
         log(table_name.clone());
         self.connection
@@ -142,8 +167,8 @@ impl Database {
         }
     }
     pub fn derive_column<F>(&self, column_name: String, fun: F) -> AppResult<()>
-    where
-        F: Fn(String) -> Option<String>,
+        where
+            F: Fn(String) -> Option<String>,
     {
         // create a new column in the table. The new value for each row is the value string value of column name after running fun function on it.
         let table_name = self.get_current_table_name()?;
@@ -279,32 +304,6 @@ impl Database {
     // TODO 1. add ability to take input.
     // TODO 2. user sql query
     // TODO 3. user regex fn
-    pub fn new(connection: Connection) -> AppResult<Self> {
-        let query = "SELECT rowid FROM sqlite_master WHERE type='table' ORDER BY rowid LIMIT 1;"
-            .to_string();
-        let rowid: usize = connection.query_row(&query, [], |row| row.get(0))?;
-
-        let current_view = CurrentView::new(vec![], vec![], TableState::default(), 0, 0);
-
-        let database = Database {
-            connection,
-            header_idx: 0,
-            order_column: "id".to_string(),
-            is_asc_order: true,
-            current_table_idx: rowid,
-            is_unchanged: false,
-            current_view,
-        };
-        if let Err(err) = regexping::custom_functions::add_custom_functions(&database) {
-            log(format!(
-                "Error adding custom functions, e.g. REGEXP: {}",
-                err
-            ));
-            Err(AppError::Sqlite(err))
-        } else {
-            Ok(database)
-        }
-    }
 
     pub(crate) fn get_table_name(file: &Path) -> Option<&str> {
         file.file_stem()?.to_str()
@@ -319,9 +318,9 @@ impl Database {
             .collect();
         Ok(column_names)
     }
-    pub fn count_headers(&self) -> AppResult<usize> {
+    pub fn count_headers(&self) -> AppResult<u16> {
         let table_name = self.get_current_table_name()?;
-        Ok(self.get_headers(&table_name)?.len())
+        Ok(self.get_headers(&table_name)?.len() as u16)
     }
 
     pub(crate) fn move_cursor(
@@ -352,19 +351,34 @@ impl Database {
     fn next_row(&mut self, height: u16) {
         let i = match self.current_view.table_state.selected() {
             Some(i) if i < (height - 1) as usize => i + 1,
-            _ => 0,
+            Some(i) if i >= (height - 1) as usize=> {
+                let max = self.count_rows().unwrap_or(u32::MAX);
+                if  (self.current_view.row_offset + i as u32) < max{
+                    self.current_view.row_offset = self.current_view.row_offset.saturating_add(height as u32);
+                    self.is_unchanged = false;
+                    0
+                } else {
+                    i
+                }
+            }
+            _ => {
+                0
+            },
         };
+
         self.current_view.table_state.select(Some(i));
     }
 
     fn previous_row(&mut self, height: u16) {
         let i = match self.current_view.table_state.selected() {
+            Some(i) if i == 0 && self.current_view.row_offset != 0 => {
+                self.current_view.row_offset = self.current_view.row_offset.saturating_sub(height as u32);
+                self.is_unchanged = false;
+                height as usize - 1
+            }
+
             Some(i) => {
-                if i == 0 {
-                    (height - 1) as usize
-                } else {
-                    i - 1
-                }
+                i.saturating_sub(1)
             }
             None => 0,
         };
@@ -472,8 +486,7 @@ mod tests {
         let fun = |s| Some(format!("{}-changed", s));
         database.derive_column(col.to_string(), fun).unwrap();
         let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
-            .get(4)
-            .into();
+            .get(4).unwrap().to_string();
         assert_eq!(first, "henrik-changed");
         let n = database.count_headers().unwrap();
         assert_eq!(n, 5);
@@ -485,7 +498,8 @@ mod tests {
         database.update_cell("firstname", 1, "hank").unwrap();
         let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
             .get(1)
-            .into();
+            .unwrap().to_string();
+
         let (_, rows) = database.get(1, 0, "data".to_string()).unwrap();
 
         // assert_eq!(first, "hank");
@@ -496,11 +510,11 @@ mod tests {
         let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
             .get(1)
-            .into();
+            .unwrap().to_string();
         assert_eq!("henrik", first);
         let second: String = database.get(1, 1, "data".to_string()).unwrap().1[0]
             .get(1)
-            .into();
+            .unwrap().to_string();
         assert_eq!("john", second);
     }
 
@@ -600,7 +614,7 @@ mod tests {
         database.execute_batch(&query).unwrap();
 
         let table_name = database.get_table_names().unwrap()[1].clone();
-        let result: usize = database
+        let result: u32 = database
             .connection
             .query_row(
                 &format!("SELECT COUNT(*) FROM `{table_name}`;"),
@@ -648,7 +662,7 @@ mod tests {
         // database.execute_batch(&query).unwrap();
 
         // let table_name = database.get_table_names().unwrap()[1].clone();
-        let result: usize = database
+        let result: u32 = database
             .connection
             .query_row("SELECT COUNT(*) FROM `customers-1000000`;", [], |row| {
                 row.get(0)

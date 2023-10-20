@@ -18,8 +18,8 @@ impl Display for DataItem {
 }
 
 impl DataRow {
-    pub(crate) fn get(&self, i: i32) -> DataItem {
-        self.data.get(i as usize).unwrap_or(&DataItem::Null).clone()
+    pub(crate) fn get(&self, i: u32) -> Option<&DataItem> {
+        self.data.get(i as usize)
     }
 }
 

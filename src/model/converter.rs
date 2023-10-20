@@ -42,7 +42,7 @@ pub(crate) fn database_from_csv(
                 columns,
                 items.join(",\n")
             );
-            database.execute_batch(&queries)?;
+            database.connection.execute_batch(&queries)?;
             items.clear();
         }
     }
@@ -54,11 +54,11 @@ pub(crate) fn database_from_csv(
             columns,
             items.join(",")
         );
-        database.execute_batch(&queries)?;
+        database.connection.execute_batch(&queries)?;
     }
     let query =
         "SELECT rowid FROM sqlite_master WHERE type='table' ORDER BY rowid LIMIT 1;".to_string();
-    let table_idx: usize = database
+    let table_idx: u16 = database
         .connection
         .query_row(&query, [], |row| row.get(0))?;
     database.current_table_idx = table_idx;

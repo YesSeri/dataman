@@ -28,6 +28,7 @@ use crate::{
     error::{AppError, AppResult},
     model::database::Database,
 };
+use crate::model::datarow::DataTable;
 
 pub struct TUI {
     terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -123,26 +124,32 @@ impl TUI {
 
         let table_name = database.get_current_table_name()?;
 
-        let (headers, rows) = database.get(100, 0, table_name)?;
+        let (headers, rows): DataTable = database.get(100, database.current_view.row_offset, table_name)?;
+        let id_space: u16 = rows.iter().fold(0, |acc, row| {
+            let id = row.get(0).unwrap().to_string().len() as u16;
+            if id > acc {
+                id
+            } else {
+                acc
+            }
+        }) + 1;
 
-        let id_extra_space = 8 / headers.len() as u16;
-
-        let per_header = (100 / headers.len()) as u16 - id_extra_space;
+        let per_header = (100 / headers.len()) as u16 - id_space;
         let widths = headers
             .iter()
             .map(|header| {
                 if header == "id" {
-                    Constraint::Length(8)
+                    Constraint::Length(id_space)
                 } else {
                     Constraint::Percentage(per_header)
                 }
             })
             .collect::<Vec<_>>();
-        let current_header: usize = database.header_idx;
+        let current_header = database.header_idx;
         // mark current header
 
         let header = Row::new(headers.iter().enumerate().map(|(i, h)| {
-            if current_header == i {
+            if current_header == i as u16 {
                 Cell::from(Span::styled(
                     h.clone(),
                     Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
@@ -151,7 +158,7 @@ impl TUI {
                 Cell::from(h.clone())
             }
         }))
-        .height(1);
+            .height(1);
 
         // // draw border under header
         let tui_rows = rows.iter().map(|data_row| data_row.to_tui_row().height(1));
@@ -172,7 +179,7 @@ impl TUI {
         // let rowid = rows.get(b).unwrap().data.get(0);
         let rowid = rows
             .get(row)
-            .map(|el| el.get(0).to_string())
+            .map(|el| el.get(0).unwrap().to_string())
             .unwrap_or("xxx".to_owned());
         let offset = database.current_view.table_state.offset();
         let text = vec![Line::from(vec![Span::raw(format!(

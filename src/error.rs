@@ -58,7 +58,6 @@ impl Error for AppError {
         }
     }
 }
-
 impl From<csv::Error> for AppError {
     fn from(err: csv::Error) -> AppError {
         AppError::Parse(err)

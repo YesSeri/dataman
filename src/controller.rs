@@ -244,7 +244,7 @@ impl Controller {
         }
         Ok(())
     }
-    pub fn get_headers_and_rows(&mut self, limit: i32) -> AppResult<DataTable> {
+    pub fn get_headers_and_rows(&mut self, limit: u32) -> AppResult<DataTable> {
         let binding = "default table name".to_string();
         let first_table = self.database.get_current_table_name()?;
         self.database.get(limit, 0, first_table)
