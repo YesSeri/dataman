@@ -1,33 +1,28 @@
 use core::panic;
 use std::{
-    fmt::{format, Debug, Display},
+    fmt::{Debug, Display},
     io::{Read, Stdout, Write},
-    process::exit,
-    result, thread,
-    time::Duration,
 };
 
-use crossterm::event::KeyModifiers;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind},
+    event::{self, Event},
     execute,
-    terminal::{self, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{self, enable_raw_mode},
 };
 use ratatui::{
+    Frame,
     prelude::{Backend, Constraint, CrosstermBackend, Layout},
     style::{Color, Modifier, Style, Stylize},
-    symbols::block,
-    text::{Line, Span, Text},
-    widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table},
-    Frame, Terminal,
+    Terminal,
+    text::{Line, Span}, widgets::{Block, Borders, Cell, Paragraph, Row, Table},
 };
 
-use crate::error::log;
 use crate::{
-    controller::{Command, CommandWrapper, Controller, Direction},
+    controller::{Command, CommandWrapper, Controller},
     error::{AppError, AppResult},
     model::database::Database,
 };
+use crate::error::log;
 use crate::model::datarow::DataTable;
 
 pub struct TUI {

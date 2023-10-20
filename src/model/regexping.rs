@@ -1,6 +1,4 @@
-use rusqlite::Rows;
-
-use crate::error::{log, AppResult};
+use crate::error::{AppResult, log};
 
 pub fn build_regex_filter_query(
     header: &str,
@@ -82,15 +80,13 @@ pub(crate) fn build_regex_no_capture_group_transform_query(
 
 pub(crate) mod custom_functions {
     use std::{
-        cell::RefCell,
-        rc::Rc,
         sync::{Arc, Mutex},
     };
 
     use regex::Regex;
-    use rusqlite::functions::{Context, FunctionFlags};
+    use rusqlite::functions::FunctionFlags;
 
-    use crate::{error::log, model::database::Database};
+    use crate::model::database::Database;
 
     pub fn add_custom_functions(database: &Database) -> rusqlite::Result<()> {
         let cached_filter_regex = Arc::new(Mutex::new(Regex::new("").unwrap())); // Initialize with a default regex
@@ -104,6 +100,8 @@ pub(crate) mod custom_functions {
             move |ctx| {
                 let regex_str = ctx.get::<String>(0)?;
                 let text = ctx.get::<String>(1);
+
+
                 match text {
                     Ok(text) => {
                         // Check if the regex has changed, and recompile if necessary
@@ -111,8 +109,8 @@ pub(crate) mod custom_functions {
                         if cached_filter_regex.as_str() != regex_str {
                             *cached_filter_regex = Regex::new(&regex_str).unwrap();
                         }
-
                         let result = cached_filter_regex.is_match(&text);
+
                         Ok(result)
                     }
 
@@ -173,7 +171,9 @@ pub(crate) mod custom_functions {
                             *cached_no_capture_regex = Regex::new(&regex_str).unwrap();
                         }
 
+
                         let result = cached_no_capture_regex.captures(&text);
+
 
                         // let result = my_regex.captures(&text);
                         let val = result

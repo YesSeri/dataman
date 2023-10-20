@@ -1,7 +1,7 @@
 use std::fmt::Display;
 
-use rusqlite::types::ValueRef;
 use rusqlite::Row;
+use rusqlite::types::ValueRef;
 
 pub type DataTable = (Vec<String>, Vec<DataRow>);
 

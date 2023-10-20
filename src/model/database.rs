@@ -1,28 +1,19 @@
-use std::cmp::max;
-use csv::Reader;
-use ratatui::widgets::TableState;
-use regex::{Captures, Regex};
-use rusqlite::types::ValueRef;
-use rusqlite::{backup, params, Connection, Rows, Statement};
 use std::error::Error;
-use std::fs::File;
 use std::hash::Hash;
 use std::path::Path;
-use std::process::id;
-
-use crossterm::event::KeyCode::F;
-use crossterm::ExecutableCommand;
-use rusqlite::functions::{Context, FunctionFlags};
-use std::sync::Arc;
 use std::time;
 
-use crate::error::{log, AppError, AppResult};
+use crossterm::ExecutableCommand;
+use ratatui::widgets::TableState;
+use rusqlite::{backup, Connection, params, Statement};
+
+use crate::error::{AppError, AppResult, log};
 use crate::model::datarow::DataRow;
 use crate::model::regexping::build_exact_search_query;
 use crate::tui::TUI;
 
 use super::current_view::CurrentView;
-use super::datarow::{self, DataTable};
+use super::datarow::DataTable;
 use super::regexping::{
     self, build_regex_filter_query, build_regex_no_capture_group_transform_query,
     build_regex_with_capture_group_transform_query,
@@ -472,8 +463,6 @@ impl TryFrom<&Path> for Database {
 mod tests {
     use std::time::Instant;
 
-    use rusqlite::Row;
-
     use super::*;
 
     #[test]
@@ -689,8 +678,8 @@ mod tests {
         let header = database.get_headers(&table_name).unwrap()[2].clone();
         let pattern = "n.*";
 
-        // let query =
-        //     build_regex_no_capture_group_transform_query(&header, pattern, &table_name).unwrap();
+        let query =
+            build_regex_no_capture_group_transform_query(&header, pattern, &table_name).unwrap();
 
         // let sql =
         //     "UPDATE TABLE `cRegexFiltered` AS SELECT * FROM `c` WHERE regexp('n.*', `firstname`);";
@@ -712,7 +701,7 @@ mod tests {
         //     let datarow: DataRow = DataRow::from(row);
         //     println!("{:?}", datarow);
         // }
-        // database.execute_batch(&query).unwrap();
+        database.execute_batch(&query).unwrap();
 
         // let table_name = database.get_table_names().unwrap()[1].clone();
         let result: u32 = database

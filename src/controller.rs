@@ -1,27 +1,20 @@
-use std::f32::consts::E;
-use std::path::Path;
 use std::{
-    fmt::format,
-    io::{self, Error, Read, Write},
+    io::{Read, Write},
     path::PathBuf,
-    thread::sleep,
-    time::Duration,
 };
+use std::path::Path;
 
 use crossterm::{
-    event::{poll, read, Event, KeyCode, KeyEvent, KeyModifiers},
-    terminal, ExecutableCommand,
+    event::{KeyCode, KeyEvent, KeyModifiers},
+    ExecutableCommand,
 };
-use ratatui::widgets::TableState;
-use regex::Regex;
-use rusqlite::Connection;
 
-use crate::model::datarow::{DataRow, DataTable};
 use crate::{error::AppResult, model::database::Database};
 use crate::{
-    error::{log, AppError},
+    error::{AppError, log},
     tui::TUI,
 };
+use crate::model::datarow::DataTable;
 
 #[derive(Debug, Clone)]
 pub struct CommandWrapper {

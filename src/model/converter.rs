@@ -1,11 +1,9 @@
-use std::{error::Error, fmt::format, fs::File, path::Path};
+use std::{error::Error, fs::File, path::Path};
 
-use csv::{Reader, StringRecord, StringRecordsIter};
+use csv::{Reader, StringRecord};
 use rusqlite::Connection;
 
-use crate::error::log;
-
-use super::{database::Database, datarow::DataRow};
+use super::database::Database;
 
 pub(crate) fn database_from_csv(
     path: &Path,

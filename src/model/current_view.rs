@@ -1,5 +1,4 @@
 use ratatui::widgets::TableState;
-use crate::error::log;
 
 use super::datarow::DataRow;
 

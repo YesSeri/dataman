@@ -1,6 +1,4 @@
 use std::{error::Error, path::Path};
-use std::process::exit;
-use regex::Regex;
 
 use dataman::{controller::Controller, error::log, model::database::Database, tui::TUI};
 

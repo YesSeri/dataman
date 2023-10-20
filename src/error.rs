@@ -1,10 +1,9 @@
-use std::fmt::write;
 use std::{
-    error::{self, Error},
+    error::Error,
     fmt,
 };
 
-pub type AppResult<T> = std::result::Result<T, AppError>;
+pub type AppResult<T> = Result<T, AppError>;
 
 #[derive(Debug)]
 pub enum AppError {
