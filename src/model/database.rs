@@ -18,6 +18,8 @@ use std::time;
 
 use crate::error::{log, AppError, AppResult};
 use crate::model::datarow::DataRow;
+use crate::model::regexping::build_regex_search_query_find_row_number;
+use crate::tui::TUI;
 
 use super::current_view::CurrentView;
 use super::datarow::{self, DataTable};
@@ -35,9 +37,9 @@ pub struct Database {
     pub(crate) order_column: String,
     pub(crate) is_asc_order: bool,
     pub(super) current_table_idx: u16,
-    pub(crate) is_unchanged: bool,
     pub(crate) current_view: CurrentView,
 }
+
 
 impl Database {
     pub fn new(connection: Connection) -> AppResult<Self> {
@@ -53,7 +55,6 @@ impl Database {
             order_column: "id".to_string(),
             is_asc_order: true,
             current_table_idx: rowid,
-            is_unchanged: false,
             current_view,
         };
         if let Err(err) = regexping::custom_functions::add_custom_functions(&database) {
@@ -82,7 +83,7 @@ impl Database {
     }
     pub fn get(&mut self, limit: u32, offset: u32, table_name: String) -> AppResult<DataTable> {
         // if false {
-        if self.is_unchanged {
+        if self.current_view.is_unchanged() {
             Ok((
                 self.current_view.headers.clone(),
                 self.current_view.data_rows.clone(),
@@ -110,7 +111,7 @@ impl Database {
             };
             self.current_view.data_rows = data_rows.clone();
             self.current_view.headers = headers.clone();
-            self.is_unchanged = true;
+            self.current_view.has_changed();
             Ok((headers, data_rows))
         }
     }
@@ -249,8 +250,30 @@ impl Database {
         Ok(())
     }
 
+    // go to first match
+    pub(crate) fn regex_search(&mut self, header: &str, pattern: &str) -> AppResult<()> {
+        let table_name = self.get_current_table_name()?;
+        let query = build_regex_search_query_find_row_number(
+            self.is_asc_order,
+            &self.order_column,
+            header,
+            pattern,
+            &table_name,
+        )?;
+        log(format!("query: {}", query));
+        let row_number: u32 = self.connection.query_row(&query, [], |row| row.get(0))?;
+        log(format!("row_number: {}", row_number));
+        let height = TUI::get_table_height()?;
+        let row_idx = row_number % height as u32;
+        let row_offset = row_number - row_idx;
+        log(format!("row_idx: {}, row_offset: {}, rownum {}", row_idx, row_offset, row_number));
+        self.current_view.update(row_idx, row_offset);
+        Ok(())
+    }
+
     /// This is a regex capture without capture groups e.g. [g-k].*n.
     /// Get the first capture that matches the pattern, a letter between g and k, followed by any number of characters, followed by n.
+    // TODO GET THIS WORKING
     pub(crate) fn regex_capture_group_transform(
         &self,
         pattern: &str,
@@ -323,16 +346,12 @@ impl Database {
         Ok(self.get_headers(&table_name)?.len() as u16)
     }
 
-    pub(crate) fn move_cursor(
-        &mut self,
-        direction: crate::controller::Direction,
-        height: u16,
-    ) -> AppResult<()> {
+    pub(crate) fn move_cursor(&mut self, direction: crate::controller::Direction) -> AppResult<()> {
         match direction {
             crate::controller::Direction::Left => self.previous_header()?,
             crate::controller::Direction::Right => self.next_header()?,
-            crate::controller::Direction::Up => self.previous_row(height),
-            crate::controller::Direction::Down => self.next_row(height),
+            crate::controller::Direction::Up => self.previous_row()?,
+            crate::controller::Direction::Down => self.next_row()?,
         }
         Ok(())
     }
@@ -348,14 +367,15 @@ impl Database {
         Ok(())
     }
 
-    fn next_row(&mut self, height: u16) {
+    fn next_row(&mut self) -> AppResult<()> {
+        let height = TUI::get_table_height()?;
         let i = match self.current_view.table_state.selected() {
             Some(i) if i < (height - 1) as usize => i + 1,
-            Some(i) if i >= (height - 1) as usize=> {
+            Some(i) if i >= (height - 1) as usize => {
                 let max = self.count_rows().unwrap_or(u32::MAX);
-                if  (self.current_view.row_offset + i as u32) < max{
+                if (self.current_view.row_offset + i as u32) < max {
                     self.current_view.row_offset = self.current_view.row_offset.saturating_add(height as u32);
-                    self.is_unchanged = false;
+                    self.current_view.has_changed();
                     0
                 } else {
                     i
@@ -363,17 +383,22 @@ impl Database {
             }
             _ => {
                 0
-            },
+            }
         };
 
         self.current_view.table_state.select(Some(i));
+        Ok(())
     }
 
-    fn previous_row(&mut self, height: u16) {
+    fn set_current_row(&mut self, value: usize) {
+        self.current_view.table_state.select(Some(value));
+    }
+    fn previous_row(&mut self) -> AppResult<()> {
         let i = match self.current_view.table_state.selected() {
             Some(i) if i == 0 && self.current_view.row_offset != 0 => {
+                let height = TUI::get_table_height()?;
                 self.current_view.row_offset = self.current_view.row_offset.saturating_sub(height as u32);
-                self.is_unchanged = false;
+                self.current_view.has_changed();
                 height as usize - 1
             }
 
@@ -383,6 +408,7 @@ impl Database {
             None => 0,
         };
         self.current_view.table_state.select(Some(i));
+        Ok(())
     }
     pub fn update_cell(&self, header: &str, id: i32, content: &str) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;

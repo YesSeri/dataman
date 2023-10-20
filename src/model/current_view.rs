@@ -7,9 +7,10 @@ pub(crate) struct CurrentView {
     pub(super) headers: Vec<String>,
     pub(super) data_rows: Vec<DataRow>,
     pub(crate) table_state: TableState,
-    pub(crate)  row_idx: u32,
     pub(crate) row_offset: u32,
+    pub(crate) is_unchanged: bool,
 }
+
 impl CurrentView {
     pub(crate) fn new(
         headers: Vec<String>,
@@ -22,8 +23,18 @@ impl CurrentView {
             headers,
             data_rows,
             table_state,
-            row_idx,
             row_offset,
+            is_unchanged: false,
         }
+    }
+    pub(crate) fn update(&mut self, row_idx: u32, row_offset: u32) {
+        self.row_offset = row_offset;
+        self.is_unchanged = false;
+    }
+    pub(crate) fn is_unchanged(&self) -> bool {
+        self.is_unchanged
+    }
+    pub(crate) fn has_changed(&mut self) {
+        self.is_unchanged = false;
     }
 }

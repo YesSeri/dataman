@@ -14,6 +14,30 @@ pub fn build_regex_filter_query(
     Ok(create_table_query)
 }
 
+// We need to find the correct query and then find the row it is at. Then we move the row_offset and row_limit to that row.
+// TODO this is not working yet.
+pub fn build_regex_search_query_find_row_number(
+    is_asc_order: bool,
+    order_column: &str,
+    header: &str,
+    pattern: &str,
+    table_name: &str,
+) -> AppResult<String> {
+    // SELECT * FROM (SELECT ROW_NUMBER() OVER (ORDER BY dm.age) as num, * FROM dataMid as dm ORDER BY age) as dm WHERE dm.lastname = 'zenkert';
+    //
+    // create new table with filter applied using create table as sqlite statement.
+    regex::Regex::new(pattern)?;
+    let order = if is_asc_order { "ASC" } else { "DESC" };
+
+    let subquery_name = format!("rgxsearch{}", table_name);
+    let query = format!("\
+    SELECT `{subquery_name}`.rownum FROM \
+        (SELECT ROW_NUMBER() OVER (ORDER BY age) as rownum, `{header}` \
+        FROM `{table_name}` ORDER BY `{order_column}` {order} LIMIT 1) AS `{subquery_name}` \
+    WHERE `{header}` REGEXP '{pattern}';");
+    Ok(query)
+}
+
 pub(crate) fn build_regex_with_capture_group_transform_query(
     header: &str,
     pattern: &str,

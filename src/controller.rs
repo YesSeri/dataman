@@ -35,6 +35,7 @@ impl CommandWrapper {
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command {
     None,
@@ -51,6 +52,7 @@ pub enum Command {
     NextTable,
     PrevTable,
     // RegexTransform,
+    RegexSearch,
 }
 
 impl From<KeyEvent> for Command {
@@ -86,6 +88,7 @@ impl From<KeyEvent> for Command {
                     Command::Sort
                 }
             }
+            KeyCode::Char('/') => Command::RegexSearch,
             _ => Command::None,
         }
     }
@@ -192,8 +195,7 @@ impl Controller {
                     Command::Sort => self.sort(),
                     Command::Save => self.save_to_sqlite_file(),
                     Command::Move(direction) => {
-                        let height = self.ui.get_table_height()?;
-                        self.database.move_cursor(direction, height)?;
+                        self.database.move_cursor(direction)?;
                         Ok(())
                     }
                     Command::RegexFilter => self.regex_filter(),
@@ -205,6 +207,11 @@ impl Controller {
                         self.last_command = CommandWrapper::new(Command::PrevTable, None);
                         self.database.prev_table()
                     }
+                    Command::RegexSearch => {
+                        self.last_command = CommandWrapper::new(Command::RegexSearch, None);
+                        self.regex_search()?;
+                        Ok(())
+                    }
                 };
 
                 match command {
@@ -215,18 +222,20 @@ impl Controller {
                     | Command::Sort
                     | Command::NextTable
                     | Command::PrevTable
-                    | Command::RegexFilter => self.database.is_unchanged = false,
+                    | Command::RegexFilter => self.database.current_view.has_changed(),
                     Command::None
                     | Command::IllegalOperation
                     | Command::Save
                     | Command::Quit
+                    | Command::RegexSearch
                     | Command::Move(_) => (),
                 }
                 result
             }
             Err(result) => {
                 log(format!("\nAPP ERROR: {:?}", result));
-                self.database.is_unchanged = false;
+                self.database.current_view.has_changed();
+
                 self.set_last_command(CommandWrapper::new(
                     Command::IllegalOperation,
                     Some(result.to_string()),
@@ -236,7 +245,8 @@ impl Controller {
         };
         if let Err(e) = res {
             log(format!("\nAPP ERROR: {:?}", e));
-            self.database.is_unchanged = false;
+
+            self.database.current_view.has_changed();
             self.set_last_command(CommandWrapper::new(
                 Command::IllegalOperation,
                 Some(format!(": {}", e)),
@@ -309,6 +319,13 @@ impl Controller {
     pub(crate) fn sort(&mut self) -> AppResult<()> {
         self.database.sort()
     }
+    fn regex_search(&mut self) -> AppResult<()> {
+        let pattern = TUI::get_editor_input("Enter regex")?;
+        log(format!("pattern: {:?}", pattern));
+        let header = self.database.get_current_header()?;
+        self.database.regex_search(&header, &pattern).unwrap();
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -323,7 +340,7 @@ mod test {
         let mut database = Database::try_from(p).unwrap();
         let copy_fun = |s: String| Some(s.to_string());
 
-        database.move_cursor(Direction::Right, 256).unwrap();
+        database.move_cursor(Direction::Right).unwrap();
         let column_name = database.get_current_header().unwrap();
         database.derive_column(column_name, copy_fun).unwrap();
         let (_, res) = database.get(20, 100, "data".to_string()).unwrap();
@@ -340,7 +357,7 @@ mod test {
         let mut database = Database::try_from(p).unwrap();
 
         let copy_fun = |s: String| Some(s.to_string());
-        database.move_cursor(Direction::Right, 256).unwrap();
+        database.move_cursor(Direction::Right).unwrap();
         let column_name = database.get_current_header().unwrap();
         database.derive_column(column_name, copy_fun).unwrap();
         let table_name = database.get_current_table_name().unwrap();

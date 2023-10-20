@@ -50,8 +50,8 @@ impl TUI {
         enable_raw_mode().unwrap();
         Self { terminal }
     }
-    pub fn get_table_height(&self) -> AppResult<u16> {
-        let height = self.terminal.backend().size()?.height - 4;
+    pub fn get_table_height() -> AppResult<u16> {
+        let height = crossterm::terminal::size()?.1 - 4;
         Ok(height)
     }
 
@@ -65,7 +65,7 @@ impl TUI {
         Ok(())
     }
     pub fn start(controller: &mut Controller) -> Result<Command, AppError> {
-        let table_height = controller.ui.get_table_height().unwrap();
+        let table_height = TUI::get_table_height().unwrap();
         controller.ui.terminal.draw(|f| {
             match TUI::update(
                 f,
