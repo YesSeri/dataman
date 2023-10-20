@@ -281,7 +281,7 @@ impl Database {
         &self,
         pattern: &str,
         header: &str,
-        transformation: String,
+        transformation: &str,
     ) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
         // for each row in the table, run fun on the value of column name and insert the result into the new column
@@ -588,7 +588,7 @@ mod tests {
     }
 
     #[test]
-    fn custom_functions_regexp_transform_test() {
+    fn custom_functions_regexp_transform_no_capture_test() {
         let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         let table_name = database.get_current_table_name().unwrap();
         let header = database.get_headers(&table_name).unwrap()[1].clone();
@@ -628,6 +628,30 @@ mod tests {
         // let row = rows.next().unwrap().unwrap();
         // let result: String = row.get(0).unwrap();
         // assert_eq!(result, "heri");
+    }
+
+    #[test]
+    fn custom_functions_regexp_transform_with_capture_test() {
+        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let table_name = database.get_current_table_name().unwrap();
+        let header = database.get_headers(&table_name).unwrap()[1].clone();
+        let pattern = "(e.).*(r)";
+        let transformation = "${1}x${2}";
+
+        let query =
+            build_regex_with_capture_group_transform_query(&header, pattern, transformation, &table_name).unwrap();
+
+        database.execute_batch(&query).unwrap();
+
+        let result: String = database
+            .connection
+            .query_row(
+                "SELECT derivedfirstname FROM `data` WHERE id = 1 ORDER BY rowid ASC",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(result, "rxen");
     }
 
     #[test]

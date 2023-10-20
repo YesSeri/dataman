@@ -19,15 +19,15 @@ pub enum AppError {
 pub fn log(msg: String) {
     if cfg!(debug_assertions) {
         let limit = 300;
-        if msg.len() > limit {
-            eprintln!(
-                "{}\n...\n{}",
-                &msg[..limit / 2],
-                &msg[msg.len() - limit / 2..]
-            );
-        } else {
+        // if msg.len() > limit {
+        //     eprintln!(
+        //         "{}\n...\n{}",
+        //         &msg[..limit / 2],
+        //         &msg[msg.len() - limit / 2..]
+        //     );
+        // } else {
             eprintln!("{}", msg);
-        }
+        // }
     }
 }
 

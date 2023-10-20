@@ -7,7 +7,27 @@
 	- easier to just use closure inside of custom funciton adder, and not using `RefCell<Rc<Regex>>` at all, and `Database struct`. 
     - Since `rusqlite` is multithreaded I need to use `Arc<Mutex<Regex>>`.
 
-- [ ] make it so you can view more than the ca 50 you view when you open app. Use offset and each time we go past height increase `CurrentView` offset by height.
+from regex docs
+```rust
+use {
+    once_cell::sync::Lazy,
+    regex::Regex,
+};
+
+fn some_helper_function(haystack: &str) -> bool {
+    static RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"...").unwrap());
+    RE.is_match(haystack)
+}
+
+fn main() {
+    assert!(some_helper_function("abc"));
+    assert!(!some_helper_function("ac"));
+}
+
+```
+this is better I think than arc mutex stuff I am doing onw.
+
+- [x] make it so you can view more than the ca 50 you view when you open app. Use offset and each time we go past height increase `CurrentView` offset by height.
 # regex 
 
 ## filter stats
@@ -18,3 +38,6 @@
 
 - 10_000 Elapsed time: 3.03s without cache, filter is cached
 - 10_000 Elapsed time: 101.73ms with cache, filter is cached
+
+## input
+make it possible to input from either small input box in bottom or open new alternate window with `$EDITOR`

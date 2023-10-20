@@ -39,18 +39,21 @@ pub fn build_exact_search_query(
 pub(crate) fn build_regex_with_capture_group_transform_query(
     header: &str,
     pattern: &str,
-    transformation: String,
+    transformation: &str,
     table_name: &str,
 ) -> AppResult<String> {
     regex::Regex::new(pattern)?;
-    // for each row in the table, run fun on the value of column name and insert the result into the new column
     let derived_header_name = format!("derived{}", header);
     let create_header_query =
         format!("ALTER TABLE `{table_name}` ADD COLUMN `{derived_header_name}` TEXT;\n");
 
     let mut queries = String::new();
     queries.push_str(&create_header_query);
-    log(format!("with capture group queries: {}", queries));
+    let update_query = format!(
+        "UPDATE `{table_name}` SET `{derived_header_name}` = regexp_transform_with_capture_group('{pattern}', `{header}`, \"{transformation}\");\n"
+    );
+
+    queries.push_str(&update_query);
     Ok(queries)
 }
 
@@ -68,10 +71,8 @@ pub(crate) fn build_regex_no_capture_group_transform_query(
     let mut queries = String::new();
     queries.push_str(&create_header_query);
     let update_query = format!(
-        "UPDATE `{table_name}` \
-                SET `{derived_header_name}` 
-				= regexp_transform_no_capture_group('{pattern}', `{header}`) \
-                WHERE id IN (SELECT id FROM `{table_name}` WHERE `{header}` REGEXP '{pattern}');\n"
+        "UPDATE `{table_name}` SET `{derived_header_name}` \n
+        = regexp_transform_no_capture_group('{pattern}', `{header}`);\n"
     );
 
     queries.push_str(&update_query);
@@ -127,35 +128,34 @@ pub(crate) mod custom_functions {
         database.connection.create_scalar_function(
             // this one is used to filter, to create new tables
             "regexp_transform_with_capture_group",
-            2,
+            3,
             FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
             move |ctx| {
                 let regex_str = ctx.get::<String>(0)?;
-
                 let text = ctx.get::<String>(1);
+                let substitution_pattern = ctx.get::<String>(2)?;
                 match text {
                     Ok(text) => {
                         // Check if the regex has changed, and recompile if necessary
-                        let mut cached_with_capture_regex =
-                            cached_with_capture_regex.lock().unwrap();
+                        let mut cached_with_capture_regex = cached_with_capture_regex.lock().unwrap();
                         if cached_with_capture_regex.as_str() != regex_str {
                             *cached_with_capture_regex = Regex::new(&regex_str).unwrap();
                         }
-
-                        todo!();
-                        // let result = cached_with_capture_regex.captures(&text);
-                        // let result = regex::Regex::new(&regex_str).unwrap().is_match(&text);
-                        // let result = regex.is_match(&text);
-                        // Ok(result)
+                        // let re = Regex::new(r"(?P<first>\w+)\s+(?P<second>\w+)").unwrap();
+                        // let result = re.replace("deep fried", "${first}_$second");
+                        // assert_eq!(result, "deep_fried");
+                        let is_match = cached_with_capture_regex.is_match(&text);
+                        if is_match {
+                            let val = cached_with_capture_regex.replace(&text, &substitution_pattern).to_string();
+                            Ok(Some(val))
+                        } else {
+                            Ok(None)
+                        }
                     }
-                    Err(e) => match e {
-                        rusqlite::Error::InvalidFunctionParameterType(_, _) => Ok(false),
-                        _ => Err(e),
-                    },
+                    _ => Ok(None),
                 }
             },
         )?;
-        // my_regex = Regex::new(r"hen").unwrap();
         let cached_no_capture_regex = Arc::new(Mutex::new(Regex::new("").unwrap()));
         database.connection.create_scalar_function(
             // this is used to derive a new column
@@ -174,17 +174,14 @@ pub(crate) mod custom_functions {
                         }
 
                         let result = cached_no_capture_regex.captures(&text);
+
                         // let result = my_regex.captures(&text);
                         let val = result
                             .and_then(|c| c.get(0))
                             .map(|v| v.as_str().to_string());
                         Ok(val)
                     }
-                    Err(e) => match e {
-                        // return null
-                        rusqlite::Error::InvalidFunctionParameterType(_, _) => Ok(None),
-                        _ => Err(e),
-                    },
+                    Err(e) => Ok(None),
                 }
             },
         )
@@ -206,3 +203,4 @@ pub(crate) mod custom_functions {
     //     Ok(val)
     // }
 }
+

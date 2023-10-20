@@ -272,21 +272,25 @@ impl Controller {
     /// If the user enter a capture group we will ask for a second input that shows how the capture group should be transformed.
     /// If the user doesn't enter a capture group we will just copy the regex match.
     pub fn regex_transform(&mut self) -> AppResult<()> {
-        let pattern =
-            TUI::get_editor_input(r"Enter regex, e.g. (?<last>[^,\s]+),\s+(?<first>\S+)")?;
+        let pattern = if cfg!(debug_assertions) {
+            TUI::get_editor_input(r"(u).*(.)")?
+        } else {
+            TUI::get_editor_input(r"Enter regex, e.g. (?<last>[^,\s]+),\s+(?<first>\S+)")?
+        };
         let regex = regex::Regex::new(&pattern)?;
         let contains_capture_pattern = regex.capture_names().len() > 1;
         let header = self.database.get_current_header()?;
         if contains_capture_pattern {
-            let transformation =
-                TUI::get_editor_input(r"Enter transformation, e.g. '$first $last'")?;
-
+            let transformation = if cfg!(debug_assertions) {
+                TUI::get_editor_input(r"${1}${2}")?
+            } else {
+                TUI::get_editor_input(r"Enter transformation, e.g. '${first} ${second}' or '${1} ${2}' if un-named")?
+            };
             log(format!(
                 "pattern: {pattern:?}, transformation: {transformation:?}"
             ));
 
-            self.database
-                .regex_capture_group_transform(&pattern, &header, transformation)?;
+            self.database.regex_capture_group_transform(&pattern, &header, &transformation)?;
         } else {
             log(format!("pattern: {pattern:?}"));
             self.database
@@ -322,7 +326,7 @@ impl Controller {
         let pattern = TUI::get_editor_input("Enter regex")?;
         log(format!("pattern: {:?}", pattern));
         let header = self.database.get_current_header()?;
-        match self.database.exact_search(&header, &pattern){
+        match self.database.exact_search(&header, &pattern) {
             Ok(_) => {
                 self.last_command = CommandWrapper::new(Command::ExactSearch, Some("Match found".to_string()));
             }
