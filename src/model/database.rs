@@ -18,7 +18,7 @@ use std::time;
 
 use crate::error::{log, AppError, AppResult};
 use crate::model::datarow::DataRow;
-use crate::model::regexping::build_regex_search_query_find_row_number;
+use crate::model::regexping::build_exact_search_query;
 use crate::tui::TUI;
 
 use super::current_view::CurrentView;
@@ -111,7 +111,7 @@ impl Database {
             };
             self.current_view.data_rows = data_rows.clone();
             self.current_view.headers = headers.clone();
-            self.current_view.has_changed();
+            self.current_view.is_unchanged = true;
             Ok((headers, data_rows))
         }
     }
@@ -251,22 +251,25 @@ impl Database {
     }
 
     // go to first match
-    pub(crate) fn regex_search(&mut self, header: &str, pattern: &str) -> AppResult<()> {
+    pub(crate) fn exact_search(&mut self, search_header: &str, pattern: &str) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
-        let query = build_regex_search_query_find_row_number(
+        let current_row = self.current_view.row_offset + self.current_view.table_state.selected().unwrap_or(0) as u32;
+        let query = build_exact_search_query(
             self.is_asc_order,
             &self.order_column,
-            header,
-            pattern,
+            search_header,
+            current_row,
             &table_name,
         )?;
-        log(format!("query: {}", query));
-        let row_number: u32 = self.connection.query_row(&query, [], |row| row.get(0))?;
-        log(format!("row_number: {}", row_number));
+        log(format!("exact search query: {}", query));
+
+        let row_number: u32 = self.connection.query_row(&query, [pattern], |row| row.get(0))?;
+        let row_number = row_number - 1;
         let height = TUI::get_table_height()?;
         let row_idx = row_number % height as u32;
         let row_offset = row_number - row_idx;
-        log(format!("row_idx: {}, row_offset: {}, rownum {}", row_idx, row_offset, row_number));
+        log(format!("height: {height}, row_number: {row_number}, row_idx: {row_idx}, row_offset: {row_offset}"));
+
         self.current_view.update(row_idx, row_offset);
         Ok(())
     }

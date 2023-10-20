@@ -52,7 +52,7 @@ pub enum Command {
     NextTable,
     PrevTable,
     // RegexTransform,
-    RegexSearch,
+    ExactSearch,
 }
 
 impl From<KeyEvent> for Command {
@@ -88,7 +88,7 @@ impl From<KeyEvent> for Command {
                     Command::Sort
                 }
             }
-            KeyCode::Char('/') => Command::RegexSearch,
+            KeyCode::Char('/') => Command::ExactSearch,
             _ => Command::None,
         }
     }
@@ -117,7 +117,7 @@ pub enum Direction {
 impl std::fmt::Display for CommandWrapper {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.message.clone() {
-            Some(msg) => write!(f, "{:?}{}", self.command, msg),
+            Some(msg) => write!(f, "{:?}: {}", self.command, msg),
             None => write!(f, "{:?}", self.command),
         }
     }
@@ -207,9 +207,8 @@ impl Controller {
                         self.last_command = CommandWrapper::new(Command::PrevTable, None);
                         self.database.prev_table()
                     }
-                    Command::RegexSearch => {
-                        self.last_command = CommandWrapper::new(Command::RegexSearch, None);
-                        self.regex_search()?;
+                    Command::ExactSearch => {
+                        self.exact_search()?;
                         Ok(())
                     }
                 };
@@ -222,12 +221,12 @@ impl Controller {
                     | Command::Sort
                     | Command::NextTable
                     | Command::PrevTable
+                    | Command::ExactSearch
                     | Command::RegexFilter => self.database.current_view.has_changed(),
                     Command::None
                     | Command::IllegalOperation
                     | Command::Save
                     | Command::Quit
-                    | Command::RegexSearch
                     | Command::Move(_) => (),
                 }
                 result
@@ -319,11 +318,18 @@ impl Controller {
     pub(crate) fn sort(&mut self) -> AppResult<()> {
         self.database.sort()
     }
-    fn regex_search(&mut self) -> AppResult<()> {
+    fn exact_search(&mut self) -> AppResult<()> {
         let pattern = TUI::get_editor_input("Enter regex")?;
         log(format!("pattern: {:?}", pattern));
         let header = self.database.get_current_header()?;
-        self.database.regex_search(&header, &pattern).unwrap();
+        match self.database.exact_search(&header, &pattern){
+            Ok(_) => {
+                self.last_command = CommandWrapper::new(Command::ExactSearch, Some("Match found".to_string()));
+            }
+            Err(_) => {
+                self.last_command = CommandWrapper::new(Command::ExactSearch, Some("No match found".to_string()));
+            }
+        }
         Ok(())
     }
 }

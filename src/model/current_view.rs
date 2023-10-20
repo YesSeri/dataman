@@ -1,4 +1,5 @@
 use ratatui::widgets::TableState;
+use crate::error::log;
 
 use super::datarow::DataRow;
 
@@ -28,12 +29,14 @@ impl CurrentView {
         }
     }
     pub(crate) fn update(&mut self, row_idx: u32, row_offset: u32) {
+        self.table_state.select(Some(row_idx as usize));
         self.row_offset = row_offset;
         self.is_unchanged = false;
     }
     pub(crate) fn is_unchanged(&self) -> bool {
         self.is_unchanged
     }
+
     pub(crate) fn has_changed(&mut self) {
         self.is_unchanged = false;
     }
