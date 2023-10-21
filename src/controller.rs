@@ -1,20 +1,20 @@
+use std::path::Path;
 use std::{
     io::{Read, Write},
     path::PathBuf,
 };
-use std::path::Path;
 
 use crossterm::{
     event::{KeyCode, KeyEvent, KeyModifiers},
     ExecutableCommand,
 };
 
+use crate::model::datarow::DataTable;
 use crate::{error::AppResult, model::database::Database};
 use crate::{
-    error::{AppError, log},
+    error::{log, AppError},
     tui::TUI,
 };
-use crate::model::datarow::DataTable;
 
 #[derive(Debug, Clone)]
 pub struct CommandWrapper {
@@ -28,7 +28,6 @@ impl CommandWrapper {
     }
 }
 
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command {
     None,
@@ -46,6 +45,15 @@ pub enum Command {
     PrevTable,
     // RegexTransform,
     ExactSearch,
+    ToggleTextInt,
+    // Query to turn Text to INT.
+    // This returns 0 when it would make more sense to return null. 
+    // Might need to write a custom function for sqlite to handle this.
+    //
+    // ALTER TABLE data 
+    // ADD COLUMN int_age INT;
+    // UPDATE data 
+    // SET int_age = CAST(age as INT)
 }
 
 impl From<KeyEvent> for Command {
@@ -82,6 +90,10 @@ impl From<KeyEvent> for Command {
                 }
             }
             KeyCode::Char('/') => Command::ExactSearch,
+            KeyCode::Char(c) => {
+                log(format!("clicked: {c}"));
+                Command::None
+            }
             _ => Command::None,
         }
     }
@@ -204,6 +216,11 @@ impl Controller {
                         self.exact_search()?;
                         Ok(())
                     }
+
+                    Command::ToggleTextInt => {
+                        self.exact_search()?;
+                        Ok(())
+                    }
                 };
 
                 match command {
@@ -214,6 +231,7 @@ impl Controller {
                     | Command::Sort
                     | Command::NextTable
                     | Command::PrevTable
+                    | Command::ToggleTextInt 
                     | Command::ExactSearch
                     | Command::RegexFilter => self.database.current_view.has_changed(),
                     Command::None
@@ -277,13 +295,16 @@ impl Controller {
             let transformation = if cfg!(debug_assertions) {
                 TUI::get_editor_input(r"${1}${2}")?
             } else {
-                TUI::get_editor_input(r"Enter transformation, e.g. '${first} ${second}' or '${1} ${2}' if un-named")?
+                TUI::get_editor_input(
+                    r"Enter transformation, e.g. '${first} ${second}' or '${1} ${2}' if un-named",
+                )?
             };
             log(format!(
                 "pattern: {pattern:?}, transformation: {transformation:?}"
             ));
 
-            self.database.regex_capture_group_transform(&pattern, &header, &transformation)?;
+            self.database
+                .regex_capture_group_transform(&pattern, &header, &transformation)?;
         } else {
             log(format!("pattern: {pattern:?}"));
             self.database
@@ -321,10 +342,12 @@ impl Controller {
         let header = self.database.get_current_header()?;
         match self.database.exact_search(&header, &pattern) {
             Ok(_) => {
-                self.last_command = CommandWrapper::new(Command::ExactSearch, Some("Match found".to_string()));
+                self.last_command =
+                    CommandWrapper::new(Command::ExactSearch, Some("Match found".to_string()));
             }
             Err(_) => {
-                self.last_command = CommandWrapper::new(Command::ExactSearch, Some("No match found".to_string()));
+                self.last_command =
+                    CommandWrapper::new(Command::ExactSearch, Some("No match found".to_string()));
             }
         }
         Ok(())
