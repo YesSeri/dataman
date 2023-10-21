@@ -73,7 +73,6 @@ impl Database {
             .get(self.header_idx as usize).cloned().ok_or(AppError::Other)
     }
     pub fn get(&mut self, limit: u32, offset: u32, table_name: String) -> AppResult<DataTable> {
-        // if false {
         if self.current_view.is_unchanged() {
             Ok((
                 self.current_view.headers.clone(),

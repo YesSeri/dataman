@@ -6,6 +6,9 @@
 - [ ] Regex is compiled to much. It should be compiled once and then used. The problem is that the custom functions we give to out sqlite3 database can't recieve a compiled regex, only a string and therefore needs to be compiled every time. In the regex documentation it says that this should be avoided. Maybe a closure can solve this together with `RefCell<Rc<Regex>`. The idea is that our `Database struct` has the compiled regex and the custom functions recieve a reference to this regex. Then we can mutate the regex when we get new user input and the custom functions will use the new regex.
 	- easier to just use closure inside of custom funciton adder, and not using `RefCell<Rc<Regex>>` at all, and `Database struct`. 
     - Since `rusqlite` is multithreaded I need to use `Arc<Mutex<Regex>>`.
+- [ ] undo/redo. 
+    - <https://www.sqlite.org/undoredo.html>
+    - <https://github.com/Ocead/sqlite-undo>
 
 from regex docs
 ```rust
