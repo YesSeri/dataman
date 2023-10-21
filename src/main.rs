@@ -3,7 +3,6 @@ use std::{error::Error, path::Path};
 use dataman::{controller::Controller, error::log, model::database::Database, tui::TUI};
 
 fn main() -> Result<(), Box<dyn Error>> {
-
     let args = std::env::args().collect::<Vec<_>>();
     if args.len() != 2 {
         eprintln!("Usage: dataman <path>");
@@ -13,7 +12,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let path = Path::new(path_arg);
     log(format!("path: {:?}", path));
 
-    let database = atabase::try_from(path).unwrap();
+    let database = Database::try_from(path).unwrap();
     let tui = TUI::new();
     let controller = Controller::new(tui, database);
 

@@ -1,4 +1,4 @@
-use crate::error::{AppResult, log};
+use crate::error::{log, AppResult};
 
 pub fn build_regex_filter_query(
     header: &str,
@@ -12,27 +12,6 @@ pub fn build_regex_filter_query(
     Ok(create_table_query)
 }
 
-// We need to find the correct query and then find the row it is at. Then we move the row_offset and row_limit to that row.
-// TODO this is not working yet.
-pub fn build_exact_search_query(
-    is_asc_order: bool,
-    order_column: &str,
-    search_column: &str,
-    current_row: u32,
-    table_name: &str,
-) -> AppResult<String> {
-    // SELECT * FROM (SELECT ROW_NUMBER() OVER (ORDER BY dm.age) as num, * FROM dataMid as dm ORDER BY age) as dm WHERE dm.lastname = 'zenkert';
-    //
-    // create new table with filter applied using create table as sqlite statement.
-    let order = if is_asc_order { "ASC" } else { "DESC" };
-
-    let query = format!("\
-    SELECT rownum FROM \
-        (SELECT ROW_NUMBER() OVER (ORDER BY `{order_column}` {order}) AS rownum, `{search_column}` \
-            FROM `{table_name}`) \
-        WHERE `{search_column}` = ? AND rownum > {current_row} LIMIT 1;");
-    Ok(query)
-}
 
 pub(crate) fn build_regex_with_capture_group_transform_query(
     header: &str,
@@ -79,9 +58,7 @@ pub(crate) fn build_regex_no_capture_group_transform_query(
 }
 
 pub(crate) mod custom_functions {
-    use std::{
-        sync::{Arc, Mutex},
-    };
+    use std::sync::{Arc, Mutex};
 
     use regex::Regex;
     use rusqlite::functions::FunctionFlags;
@@ -100,7 +77,6 @@ pub(crate) mod custom_functions {
             move |ctx| {
                 let regex_str = ctx.get::<String>(0)?;
                 let text = ctx.get::<String>(1);
-
 
                 match text {
                     Ok(text) => {
@@ -135,7 +111,8 @@ pub(crate) mod custom_functions {
                 match text {
                     Ok(text) => {
                         // Check if the regex has changed, and recompile if necessary
-                        let mut cached_with_capture_regex = cached_with_capture_regex.lock().unwrap();
+                        let mut cached_with_capture_regex =
+                            cached_with_capture_regex.lock().unwrap();
                         if cached_with_capture_regex.as_str() != regex_str {
                             *cached_with_capture_regex = Regex::new(&regex_str).unwrap();
                         }
@@ -144,7 +121,9 @@ pub(crate) mod custom_functions {
                         // assert_eq!(result, "deep_fried");
                         let is_match = cached_with_capture_regex.is_match(&text);
                         if is_match {
-                            let val = cached_with_capture_regex.replace(&text, &substitution_pattern).to_string();
+                            let val = cached_with_capture_regex
+                                .replace(&text, &substitution_pattern)
+                                .to_string();
                             Ok(Some(val))
                         } else {
                             Ok(None)
@@ -171,9 +150,7 @@ pub(crate) mod custom_functions {
                             *cached_no_capture_regex = Regex::new(&regex_str).unwrap();
                         }
 
-
                         let result = cached_no_capture_regex.captures(&text);
-
 
                         // let result = my_regex.captures(&text);
                         let val = result
@@ -186,21 +163,4 @@ pub(crate) mod custom_functions {
             },
         )
     }
-    // fn regex_replace(ctx: &Context) -> rusqlite::Result<String> {
-    //     let regex = Regex::new(&ctx.get::<String>(0)?).unwrap();
-    //     let text = ctx.get::<String>(1)?;
-    //     let transform = ctx.get::<String>(2)?;
-    //     let result = regex.replace("Springsteen, Bruce", transform);
-    //     Ok(result.to_string())
-    // }
-    // fn regex_transform(ctx: &Context) -> rusqlite::Result<Option<String>> {
-    //     let regex = ctx.get::<String>(0)?;
-    //     let text = ctx.get::<String>(1)?;
-    //     let result = regex::Regex::new(&regex).unwrap().captures(&text);
-    //     let val = result
-    //         .and_then(|c| c.get(0))
-    //         .map(|v| v.as_str().to_string());
-    //     Ok(val)
-    // }
 }
-

@@ -28,11 +28,21 @@ impl CommandWrapper {
     }
 }
 
+impl std::fmt::Display for CommandWrapper {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.message.clone() {
+            Some(msg) => write!(f, "{:?}: {}", self.command, msg),
+            None => write!(f, "{:?}", self.command),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command {
     None,
     Copy,
     RegexTransform,
+    RegexFilter,
     Edit,
     SqlQuery,
     IllegalOperation,
@@ -40,20 +50,13 @@ pub enum Command {
     Sort,
     Save,
     Move(Direction),
-    RegexFilter,
     NextTable,
     PrevTable,
-    // RegexTransform,
     ExactSearch,
-    ToggleTextInt,
-    // Query to turn Text to INT.
-    // This returns 0 when it would make more sense to return null. 
-    // Might need to write a custom function for sqlite to handle this.
-    //
-    // ALTER TABLE data 
-    // ADD COLUMN int_age INT;
-    // UPDATE data 
-    // SET int_age = CAST(age as INT)
+    TextToInt,
+    IntToText,
+    DeleteColumn,
+    RenameColumn,
 }
 
 impl From<KeyEvent> for Command {
@@ -90,6 +93,10 @@ impl From<KeyEvent> for Command {
                 }
             }
             KeyCode::Char('/') => Command::ExactSearch,
+            KeyCode::Char('#') => Command::TextToInt,
+            KeyCode::Char('$') => Command::IntToText,
+            KeyCode::Char('X') => Command::DeleteColumn,
+            KeyCode::Char('R') => Command::RenameColumn,
             KeyCode::Char(c) => {
                 log(format!("clicked: {c}"));
                 Command::None
@@ -117,15 +124,6 @@ pub enum Direction {
     Down,
     Left,
     Right,
-}
-
-impl std::fmt::Display for CommandWrapper {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.message.clone() {
-            Some(msg) => write!(f, "{:?}: {}", self.command, msg),
-            None => write!(f, "{:?}", self.command),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -175,11 +173,12 @@ impl Controller {
         self.ui.shutdown()
     }
 
-    pub fn run(&mut self) -> Result<(), AppError> {
+    pub fn run(&mut self) -> AppResult<()> {
         let command = TUI::start(self);
         let res = match command {
             Ok(command) => {
                 log(format!("\ncommand: {:?}", command));
+                log(format!("order: {:?}", self.database.order_column));
                 let result = match command {
                     Command::Quit => {
                         self.last_command = CommandWrapper::new(Command::Quit, None);
@@ -199,10 +198,7 @@ impl Controller {
                     }
                     Command::Sort => self.sort(),
                     Command::Save => self.save_to_sqlite_file(),
-                    Command::Move(direction) => {
-                        self.database.move_cursor(direction)?;
-                        Ok(())
-                    }
+                    Command::Move(direction) => self.database.move_cursor(direction),
                     Command::RegexFilter => self.regex_filter(),
                     Command::NextTable => {
                         self.last_command = CommandWrapper::new(Command::NextTable, None);
@@ -212,15 +208,12 @@ impl Controller {
                         self.last_command = CommandWrapper::new(Command::PrevTable, None);
                         self.database.prev_table()
                     }
-                    Command::ExactSearch => {
-                        self.exact_search()?;
-                        Ok(())
-                    }
+                    Command::ExactSearch => self.exact_search(),
 
-                    Command::ToggleTextInt => {
-                        self.exact_search()?;
-                        Ok(())
-                    }
+                    Command::TextToInt => self.text_to_int(),
+                    Command::IntToText => self.int_to_text(),
+                    Command::DeleteColumn => self.delete_column(),
+                    Command::RenameColumn => self.rename_column(),
                 };
 
                 match command {
@@ -231,7 +224,10 @@ impl Controller {
                     | Command::Sort
                     | Command::NextTable
                     | Command::PrevTable
-                    | Command::ToggleTextInt 
+                    | Command::TextToInt
+                    | Command::IntToText
+                    | Command::DeleteColumn
+                    | Command::RenameColumn
                     | Command::ExactSearch
                     | Command::RegexFilter => self.database.current_view.has_changed(),
                     Command::None
@@ -350,6 +346,29 @@ impl Controller {
                     CommandWrapper::new(Command::ExactSearch, Some("No match found".to_string()));
             }
         }
+        Ok(())
+    }
+
+    fn text_to_int(&mut self) -> AppResult<()> {
+        self.last_command = CommandWrapper::new(Command::TextToInt, None);
+        self.database.text_to_int()
+    }
+
+    fn int_to_text(&mut self) -> AppResult<()> {
+        self.last_command = CommandWrapper::new(Command::IntToText, None);
+        self.database.int_to_text()
+    }
+
+    fn delete_column(&mut self) -> Result<(), AppError> {
+        let text = self.database.delete_column()?;
+        self.last_command = CommandWrapper::new(Command::DeleteColumn, text);
+        Ok(())
+    }
+
+    fn rename_column(&mut self) -> Result<(), AppError> {
+        let new_column = TUI::get_editor_input("Enter new column name.")?;
+        self.database.rename_column(&new_column)?;
+        self.last_command = CommandWrapper::new(Command::RenameColumn, None);
         Ok(())
     }
 }

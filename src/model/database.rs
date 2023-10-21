@@ -5,19 +5,16 @@ use std::time;
 
 use crossterm::ExecutableCommand;
 use ratatui::widgets::TableState;
-use rusqlite::{backup, Connection, params, Statement};
+use rusqlite::{backup, params, Connection, Statement};
 
-use crate::error::{AppError, AppResult, log};
+use crate::error::{log, AppError, AppResult};
 use crate::model::datarow::DataRow;
-use crate::model::regexping::build_exact_search_query;
 use crate::tui::TUI;
 
 use super::current_view::CurrentView;
 use super::datarow::DataTable;
-use super::regexping::{
-    self, build_regex_filter_query, build_regex_no_capture_group_transform_query,
-    build_regex_with_capture_group_transform_query,
-};
+use super::query_builder;
+use super::regexping;
 
 type BoxError = Box<dyn Error + Send + Sync + 'static>;
 
@@ -25,12 +22,11 @@ type BoxError = Box<dyn Error + Send + Sync + 'static>;
 pub struct Database {
     pub(crate) connection: Connection,
     pub(crate) header_idx: u16,
-    pub(crate) order_column: String,
+    pub(crate) order_column: Option<String>,
     pub(crate) is_asc_order: bool,
     pub(super) current_table_idx: u16,
     pub(crate) current_view: CurrentView,
 }
-
 
 impl Database {
     pub fn new(connection: Connection) -> AppResult<Self> {
@@ -43,7 +39,7 @@ impl Database {
         let database = Database {
             connection,
             header_idx: 0,
-            order_column: "id".to_string(),
+            order_column: None,
             is_asc_order: true,
             current_table_idx: rowid,
             current_view,
@@ -68,9 +64,18 @@ impl Database {
     }
     pub fn get_current_header(&self) -> AppResult<String> {
         let table_name = self.get_current_table_name()?;
-        self
-            .get_headers(&table_name)?
-            .get(self.header_idx as usize).cloned().ok_or(AppError::Other)
+        self.get_headers(&table_name)?
+            .get(self.header_idx as usize)
+            .cloned()
+            .ok_or(AppError::Other)
+    }
+
+    fn get_ordering(&self) -> String {
+        let ordering = if self.is_asc_order { "ASC" } else { "DESC" };
+        match &self.order_column {
+            Some(order_column) => format!(" ORDER BY `{}` {} ", order_column, ordering),
+            None => "".to_string(),
+        }
     }
     pub fn get(&mut self, limit: u32, offset: u32, table_name: String) -> AppResult<DataTable> {
         if self.current_view.is_unchanged() {
@@ -79,10 +84,12 @@ impl Database {
                 self.current_view.data_rows.clone(),
             ))
         } else {
-            let ordering = if self.is_asc_order { "ASC" } else { "DESC" };
             let query = format!(
-                "SELECT * FROM `{}` ORDER BY `{}` {} LIMIT {} OFFSET {};",
-                table_name, self.order_column, ordering, limit, offset
+                "SELECT * FROM `{}` {} LIMIT {} OFFSET {};",
+                table_name,
+                self.get_ordering(),
+                limit,
+                offset
             );
             let (headers, data_rows) = {
                 let mut data_rows = vec![];
@@ -158,8 +165,8 @@ impl Database {
         }
     }
     pub fn derive_column<F>(&self, column_name: String, fun: F) -> AppResult<()>
-        where
-            F: Fn(String) -> Option<String>,
+    where
+        F: Fn(String) -> Option<String>,
     {
         // create a new column in the table. The new value for each row is the value string value of column name after running fun function on it.
         let table_name = self.get_current_table_name()?;
@@ -201,11 +208,13 @@ impl Database {
         // sort by current header
         let header = self.get_current_header()?;
         self.current_view.table_state.select(Some(0));
-        if self.order_column == header {
+        if self.order_column == Some(header.clone())
+        //|| (self.order_column.is_none() && (header == "id"))
+        {
             self.is_asc_order = !self.is_asc_order;
         } else {
             self.is_asc_order = true;
-            self.order_column = header;
+            self.order_column = Some(header);
         }
 
         Ok(())
@@ -233,7 +242,7 @@ impl Database {
     pub fn regex_filter(&mut self, header: &str, pattern: &str) -> AppResult<()> {
         // create new table with filter applied using create table as sqlite statement.
         let table_name = self.get_current_table_name()?;
-        let query = build_regex_filter_query(header, pattern, &table_name)?;
+        let query = regexping::build_regex_filter_query(header, pattern, &table_name)?;
 
         self.execute(&query, [])?;
         self.next_table()?;
@@ -243,22 +252,22 @@ impl Database {
     // go to first match
     pub(crate) fn exact_search(&mut self, search_header: &str, pattern: &str) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
-        let current_row = self.current_view.row_offset + self.current_view.table_state.selected().unwrap_or(0) as u32;
-        let query = build_exact_search_query(
-            self.is_asc_order,
-            &self.order_column,
-            search_header,
+        let current_row = self.current_view.row_offset
+            + self.current_view.table_state.selected().unwrap_or(0) as u32;
+        let query = query_builder::build_exact_search_query(
+            &self.get_ordering(),
+            &search_header,
             current_row,
             &table_name,
-        )?;
-        log(format!("exact search query: {}", query));
+        );
 
-        let row_number: u32 = self.connection.query_row(&query, [pattern], |row| row.get(0))?;
+        let row_number: u32 = self
+            .connection
+            .query_row(&query, [pattern], |row| row.get(0))?;
         let row_number = row_number - 1;
         let height = TUI::get_table_height()?;
         let row_idx = row_number % height as u32;
         let row_offset = row_number - row_idx;
-        log(format!("height: {height}, row_number: {row_number}, row_idx: {row_idx}, row_offset: {row_offset}"));
 
         self.current_view.update(row_idx, row_offset);
         Ok(())
@@ -275,7 +284,7 @@ impl Database {
     ) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
         // for each row in the table, run fun on the value of column name and insert the result into the new column
-        let queries = build_regex_with_capture_group_transform_query(
+        let queries = regexping::build_regex_with_capture_group_transform_query(
             header,
             pattern,
             transformation,
@@ -291,7 +300,8 @@ impl Database {
     ) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
         // for each row in the table, run fun on the value of column name and insert the result into the new column
-        let queries = build_regex_no_capture_group_transform_query(header, pattern, &table_name)?;
+        let queries =
+            regexping::build_regex_no_capture_group_transform_query(header, pattern, &table_name)?;
         self.execute_batch(&queries)?;
         Ok(())
     }
@@ -367,16 +377,15 @@ impl Database {
             Some(i) if i >= (height - 1) as usize => {
                 let max = self.count_rows().unwrap_or(u32::MAX);
                 if (self.current_view.row_offset + i as u32) < max {
-                    self.current_view.row_offset = self.current_view.row_offset.saturating_add(height as u32);
+                    self.current_view.row_offset =
+                        self.current_view.row_offset.saturating_add(height as u32);
                     self.current_view.has_changed();
                     0
                 } else {
                     i
                 }
             }
-            _ => {
-                0
-            }
+            _ => 0,
         };
 
         self.current_view.table_state.select(Some(i));
@@ -390,14 +399,13 @@ impl Database {
         let i = match self.current_view.table_state.selected() {
             Some(i) if i == 0 && self.current_view.row_offset != 0 => {
                 let height = TUI::get_table_height()?;
-                self.current_view.row_offset = self.current_view.row_offset.saturating_sub(height as u32);
+                self.current_view.row_offset =
+                    self.current_view.row_offset.saturating_sub(height as u32);
                 self.current_view.has_changed();
                 height as usize - 1
             }
 
-            Some(i) => {
-                i.saturating_sub(1)
-            }
+            Some(i) => i.saturating_sub(1),
             None => 0,
         };
         self.current_view.table_state.select(Some(i));
@@ -426,6 +434,44 @@ impl Database {
         );
         self.current_table_idx = self.connection.query_row(&query, [], |row| row.get(0))?;
         Ok(())
+    }
+
+    pub(crate) fn text_to_int(&self) -> AppResult<()> {
+        let table_name = self.get_current_table_name()?;
+        let column = self.get_current_header()?;
+        let queries = query_builder::build_text_to_int(&table_name, &column);
+        self.execute_batch(&queries)
+    }
+
+    pub(crate) fn int_to_text(&self) -> AppResult<()> {
+        let table_name = self.get_current_table_name()?;
+        let column = self.get_current_header()?;
+        let queries = query_builder::build_int_to_text_query(&table_name, &column);
+        self.execute_batch(&queries)
+    }
+
+    pub(crate) fn delete_column(&mut self) -> AppResult<Option<String>> {
+        let table_name = self.get_current_table_name()?;
+        let order_column = &self.order_column;
+        let column = self.get_current_header()?;
+        if Some(&column) == order_column.as_ref() {
+            self.order_column = None;
+        }
+        let queries = query_builder::build_delete_column_query(&table_name, &column);
+        self.execute_batch(&queries)?;
+        self.header_idx = self.header_idx.saturating_sub(1);
+        Ok(Some(format!("Deleted column {column} from {table_name}")))
+    }
+
+    pub(crate) fn rename_column(&mut self, new_column: &str) -> AppResult<()> {
+        let table_name = self.get_current_table_name()?;
+        let order_column = &self.order_column;
+        let column = self.get_current_header()?;
+        if Some(&column) == order_column.as_ref() {
+            self.order_column = Some(new_column.to_string());
+        }
+        let queries = query_builder::build_rename_column_query(&table_name, &column, new_column);
+        self.execute_batch(&queries)
     }
 }
 
@@ -503,7 +549,9 @@ mod tests {
         let fun = |s| Some(format!("{}-changed", s));
         database.derive_column(col.to_string(), fun).unwrap();
         let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
-            .get(4).unwrap().to_string();
+            .get(4)
+            .unwrap()
+            .to_string();
         assert_eq!(first, "henrik-changed");
         let n = database.count_headers().unwrap();
         assert_eq!(n, 5);
@@ -515,7 +563,8 @@ mod tests {
         database.update_cell("firstname", 1, "hank").unwrap();
         let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
             .get(1)
-            .unwrap().to_string();
+            .unwrap()
+            .to_string();
 
         let (_, rows) = database.get(1, 0, "data".to_string()).unwrap();
 
@@ -527,11 +576,13 @@ mod tests {
         let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
             .get(1)
-            .unwrap().to_string();
+            .unwrap()
+            .to_string();
         assert_eq!("henrik", first);
         let second: String = database.get(1, 1, "data".to_string()).unwrap().1[0]
             .get(1)
-            .unwrap().to_string();
+            .unwrap()
+            .to_string();
         assert_eq!("john", second);
     }
 
@@ -583,7 +634,8 @@ mod tests {
         let pattern = "n.*";
 
         let query =
-            build_regex_no_capture_group_transform_query(&header, pattern, &table_name).unwrap();
+            regexping::build_regex_no_capture_group_transform_query(&header, pattern, &table_name)
+                .unwrap();
 
         database.execute_batch(&query).unwrap();
 
@@ -626,8 +678,13 @@ mod tests {
         let pattern = "(e.).*(r)";
         let transformation = "${1}x${2}";
 
-        let query =
-            build_regex_with_capture_group_transform_query(&header, pattern, transformation, &table_name).unwrap();
+        let query = regexping::build_regex_with_capture_group_transform_query(
+            &header,
+            pattern,
+            transformation,
+            &table_name,
+        )
+        .unwrap();
 
         database.execute_batch(&query).unwrap();
 
@@ -650,7 +707,7 @@ mod tests {
         let header = database.get_headers(&table_name).unwrap()[2].clone();
         let pattern = "n.*";
 
-        let query = build_regex_filter_query(&header, pattern, &table_name).unwrap();
+        let query = regexping::build_regex_filter_query(&header, pattern, &table_name).unwrap();
 
         database.execute_batch(&query).unwrap();
 
@@ -678,7 +735,8 @@ mod tests {
         let pattern = "n.*";
 
         let query =
-            build_regex_no_capture_group_transform_query(&header, pattern, &table_name).unwrap();
+            regexping::build_regex_no_capture_group_transform_query(&header, pattern, &table_name)
+                .unwrap();
 
         // let sql =
         //     "UPDATE TABLE `cRegexFiltered` AS SELECT * FROM `c` WHERE regexp('n.*', `firstname`);";
