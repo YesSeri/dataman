@@ -1,5 +1,6 @@
 use crate::error::{log, AppResult};
 
+// TODO escape all single quotes ' to '' in all build stuff when changing values or inserting values.
 pub fn build_regex_filter_query(
     header: &str,
     pattern: &str,

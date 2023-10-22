@@ -25,7 +25,6 @@ pub(crate) fn database_from_csv(
     let records = csv.records();
     // let capacity = if len < limit { len + 3 } else { limit + 3 };
     let mut items = Vec::with_capacity(limit);
-    // TODO escape single quotes properly.
     for record in records {
         let record = record?;
         let result = build_value_query(&record);
@@ -71,7 +70,7 @@ pub(crate) fn database_from_csv(
 fn build_value_query(record: &StringRecord) -> String {
     let row = record
         .iter()
-        .map(|s| format!("'{}'", s.replace('\'', "XXXXXXXXXXX")))
+        .map(|s| format!("'{}'", s.replace('\'', "''")))
         .collect::<Vec<String>>()
         .join(",");
     format!("({})", row)

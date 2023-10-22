@@ -112,7 +112,6 @@ impl Database {
             Ok((headers, data_rows))
         }
     }
-    // TODO fix this
     pub(crate) fn count_rows(&self) -> Option<u32> {
         let table_name = self.get_current_table_name().ok()?;
         log(table_name.clone());
@@ -165,8 +164,8 @@ impl Database {
         }
     }
     pub fn derive_column<F>(&self, column_name: String, fun: F) -> AppResult<()>
-    where
-        F: Fn(String) -> Option<String>,
+        where
+            F: Fn(String) -> Option<String>,
     {
         // create a new column in the table. The new value for each row is the value string value of column name after running fun function on it.
         let table_name = self.get_current_table_name()?;
@@ -179,7 +178,6 @@ impl Database {
             format!("ALTER TABLE `{table_name}` ADD COLUMN `{derived_column_name}` TEXT;\n");
         let mut transaction = String::new();
         transaction.push_str(create_column_query.as_ref());
-        // TODO use a transaction
         while let Some(row) = rows.next()? {
             let id: i32 = row.get(0)?;
             let value: String = row.get(1)?;
@@ -275,7 +273,6 @@ impl Database {
 
     /// This is a regex capture without capture groups e.g. [g-k].*n.
     /// Get the first capture that matches the pattern, a letter between g and k, followed by any number of characters, followed by n.
-    // TODO GET THIS WORKING
     pub(crate) fn regex_capture_group_transform(
         &self,
         pattern: &str,
@@ -326,10 +323,6 @@ impl Database {
     pub(crate) fn sql_query(&self, query: String) -> AppResult<()> {
         self.execute_batch(&query)
     }
-
-    // TODO 1. add ability to take input.
-    // TODO 2. user sql query
-    // TODO 3. user regex fn
 
     pub(crate) fn get_table_name(file: &Path) -> Option<&str> {
         file.file_stem()?.to_str()
@@ -684,7 +677,7 @@ mod tests {
             transformation,
             &table_name,
         )
-        .unwrap();
+            .unwrap();
 
         database.execute_batch(&query).unwrap();
 
