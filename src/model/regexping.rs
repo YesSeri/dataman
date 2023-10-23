@@ -1,6 +1,5 @@
 use crate::error::{log, AppResult};
 
-// TODO escape all single quotes ' to '' in all build stuff when changing values or inserting values.
 pub fn build_regex_filter_query(
     header: &str,
     pattern: &str,
@@ -86,6 +85,7 @@ pub(crate) mod custom_functions {
                         if cached_filter_regex.as_str() != regex_str {
                             *cached_filter_regex = Regex::new(&regex_str).unwrap();
                         }
+
                         let result = cached_filter_regex.is_match(&text);
 
                         Ok(result)

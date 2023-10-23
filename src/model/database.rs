@@ -16,15 +16,13 @@ use super::datarow::DataTable;
 use super::query_builder;
 use super::regexping;
 
-type BoxError = Box<dyn Error + Send + Sync + 'static>;
-
 #[derive(Debug)]
 pub struct Database {
     pub(crate) connection: Connection,
     pub(crate) header_idx: u16,
     pub(crate) order_column: Option<String>,
     pub(crate) is_asc_order: bool,
-    pub(super) current_table_idx: u16,
+    pub(crate) current_table_idx: u16,
     pub(crate) current_view: CurrentView,
 }
 
@@ -164,8 +162,8 @@ impl Database {
         }
     }
     pub fn derive_column<F>(&self, column_name: String, fun: F) -> AppResult<()>
-        where
-            F: Fn(String) -> Option<String>,
+    where
+        F: Fn(String) -> Option<String>,
     {
         // create a new column in the table. The new value for each row is the value string value of column name after running fun function on it.
         let table_name = self.get_current_table_name()?;
@@ -466,6 +464,18 @@ impl Database {
         let queries = query_builder::build_rename_column_query(&table_name, &column, new_column);
         self.execute_batch(&queries)
     }
+    pub(crate) fn open_table_of_tables(&self) -> AppResult<String> {
+        let query = "SELECT name FROM sqlite_master WHERE type='table';".to_string();
+        let mut stmt = self.connection.prepare(&query)?;
+        let mut rows = stmt.query([])?;
+
+        let mut names: Vec<String> = Vec::new();
+        while let Some(row) = rows.next()? {
+            names.push(row.get(0)?);
+        }
+        dbg!(names);
+        Ok("aaa".to_string())
+    }
 }
 
 impl TryFrom<&Path> for Database {
@@ -620,6 +630,13 @@ mod tests {
     }
 
     #[test]
+    fn table_of_tables_test() {
+        let database = Database::try_from(Path::new("assets/db.sqlite")).unwrap();
+        let s = database.open_table_of_tables().unwrap();
+        assert_eq!(false, true);
+    }
+
+    #[test]
     fn custom_functions_regexp_transform_no_capture_test() {
         let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
         let table_name = database.get_current_table_name().unwrap();
@@ -677,7 +694,7 @@ mod tests {
             transformation,
             &table_name,
         )
-            .unwrap();
+        .unwrap();
 
         database.execute_batch(&query).unwrap();
 
