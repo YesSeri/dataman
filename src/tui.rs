@@ -10,20 +10,20 @@ use crossterm::{
     terminal::{self, enable_raw_mode},
 };
 use ratatui::{
-    Frame,
     prelude::{Backend, Constraint, CrosstermBackend, Layout},
     style::{Color, Modifier, Style, Stylize},
-    Terminal,
-    text::{Line, Span}, widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    text::{Line, Span},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    Frame, Terminal,
 };
 
+use crate::error::log;
+use crate::model::datarow::DataTable;
 use crate::{
     controller::{Command, CommandWrapper, Controller},
     error::{AppError, AppResult},
     model::database::Database,
 };
-use crate::error::log;
-use crate::model::datarow::DataTable;
 
 pub struct TUI {
     terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -119,7 +119,8 @@ impl TUI {
 
         let table_name = database.get_current_table_name()?;
 
-        let (headers, rows): DataTable = database.get(100, database.current_view.row_offset, table_name)?;
+        let (headers, rows): DataTable =
+            database.get(100, database.current_view.row_offset, table_name)?;
         let id_space: u16 = rows.iter().fold(0, |acc, row| {
             let id = row.get(0).unwrap().to_string().len() as u16;
             if id > acc {
@@ -153,10 +154,13 @@ impl TUI {
                 Cell::from(h.clone())
             }
         }))
-            .height(1);
+        .height(1);
 
         // // draw border under header
-        let tui_rows = rows.iter().map(|data_row| data_row.to_tui_row().height(1));
+        let tui_rows = rows.iter().map(|data_row| {
+            let data_row = data_row.iter().map(|item| Cell::from(item.clone())).collect::<Vec<_>>();
+            Row::new(data_row).height(1)
+        });
         let selected_style = Style::default().add_modifier(Modifier::UNDERLINED);
         let table_name = database.get_current_table_name()?;
         let t = Table::new(tui_rows)

@@ -1,11 +1,11 @@
 use ratatui::widgets::TableState;
+use crate::model::datarow::DataItem;
 
-use super::datarow::DataRow;
 
 #[derive(Debug)]
 pub(crate) struct CurrentView {
     pub(super) headers: Vec<String>,
-    pub(super) data_rows: Vec<DataRow>,
+    pub(super) data_rows: Vec<Vec<DataItem>>,
     pub(crate) table_state: TableState,
     pub(crate) row_offset: u32,
     pub(crate) is_unchanged: bool,
@@ -14,7 +14,7 @@ pub(crate) struct CurrentView {
 impl CurrentView {
     pub(crate) fn new(
         headers: Vec<String>,
-        data_rows: Vec<DataRow>,
+        data_rows: Vec<Vec<DataItem>>,
         table_state: TableState,
         row_idx: u32,
         row_offset: u32,

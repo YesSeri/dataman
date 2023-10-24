@@ -1,9 +1,13 @@
-use std::{error::Error, fs::File, path::Path};
+use std::{error::Error, fs::File, path, path::Path};
 
-use csv::{Reader, StringRecord};
-use rusqlite::Connection;
+use csv::{Reader, StringRecord, Writer};
+use rusqlite::{Connection, Rows};
+use serde::Serialize;
 
-use super::database::Database;
+use crate::error::AppResult;
+use crate::model::datarow::DataItem;
+
+use super::{database::Database};
 
 pub(crate) fn database_from_csv(
     path: &Path,
@@ -116,4 +120,57 @@ pub(crate) fn get_headers_for_query(
         .collect::<Vec<String>>()
         .join(", ");
     Ok(columns)
+}
+
+pub(crate) fn sqlite_to_out(connection: &Connection, path: path::PathBuf) -> AppResult<()> {
+    let mut stmt =
+        connection.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")?;
+
+    let tables: Vec<String> = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<_, _>>()?;
+    let mut wtr = csv::Writer::from_path(path)?;
+    for table in tables {
+        let query = &format!("SELECT * FROM `{}`;", table);
+        let mut stmt = connection.prepare(query)?;
+        let headers = stmt.column_names().iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        let mut rows = stmt.query_map([], |row| {
+            let mut items = Vec::new();
+
+            for i in 0..headers.len() {
+                let header = headers.get(i).unwrap();
+                if header == "id" { continue; }
+                let item = DataItem::from(row.get_ref(i).unwrap());
+                items.push(item);
+            }
+            Ok(items)
+        })?;
+        wtr.write_record(headers.clone())?;
+        for row in rows {
+            let row = row?;
+            wtr.serialize(row.clone()).unwrap();
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::{assert_eq, println};
+    use super::*;
+
+    #[test]
+    fn write_db_to_out_test() {
+        let mut database1 = Database::try_from(Path::new("assets/data.sqlite")).unwrap();
+        sqlite_to_out(&database1.connection, PathBuf::from("assets/out-data.csv"));
+        let mut database2 = Database::try_from(Path::new("assets/out-data.csv")).unwrap();
+        let first_row_db1 = database1.get(1, 0, "data".to_string()).unwrap().1;
+        let first_row_db2 = database2.get(1, 0, "data".to_string()).unwrap().1;
+
+        for (i, item) in first_row_db1.iter().enumerate() {
+            assert_eq!(item, first_row_db2.get(i).unwrap());
+        }
+    }
 }

@@ -12,7 +12,6 @@ pub fn build_regex_filter_query(
     Ok(create_table_query)
 }
 
-
 pub(crate) fn build_regex_with_capture_group_transform_query(
     header: &str,
     pattern: &str,

@@ -6,9 +6,10 @@ use std::time;
 use crossterm::ExecutableCommand;
 use ratatui::widgets::TableState;
 use rusqlite::{backup, params, Connection, Statement};
+use rusqlite::types::ValueRef;
 
 use crate::error::{log, AppError, AppResult};
-use crate::model::datarow::DataRow;
+use crate::model::datarow::DataItem;
 use crate::tui::TUI;
 
 use super::current_view::CurrentView;
@@ -99,8 +100,13 @@ impl Database {
                     .collect();
                 let mut rows = stmt.query([])?;
                 while let Some(row) = rows.next()? {
-                    let datarow: DataRow = DataRow::from(row);
-                    data_rows.push(datarow);
+                    let mut items = vec![];
+                    let mut i = 0;
+                    while let Ok(field) = row.get_ref(i) {
+                        items.push(DataItem::from(field));
+                        i += 1;
+                    }
+                    data_rows.push(items);
                 }
                 (headers, data_rows)
             };

@@ -1,7 +1,4 @@
-use std::{
-    error::Error,
-    fmt,
-};
+use std::{error::Error, fmt};
 
 pub type AppResult<T> = Result<T, AppError>;
 
@@ -25,7 +22,7 @@ pub fn log(msg: String) {
         //         &msg[msg.len() - limit / 2..]
         //     );
         // } else {
-            eprintln!("{}", msg);
+        eprintln!("{}", msg);
         // }
     }
 }

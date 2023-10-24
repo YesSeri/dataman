@@ -9,6 +9,10 @@
 - [ ] undo/redo. 
     - <https://www.sqlite.org/undoredo.html>
     - <https://github.com/Ocead/sqlite-undo>
+- [ ] writer for writing to csv when saving
+- [ ] joins
+- [ ] table of tables. 
+- [ ] histogram
 
 from regex docs
 ```rust
