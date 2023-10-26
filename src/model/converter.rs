@@ -7,13 +7,14 @@ use serde::Serialize;
 use crate::error::AppResult;
 use crate::model::datarow::DataItem;
 
-use super::{database::Database};
+use super::database::Database;
 
 pub(crate) fn database_from_csv(
     path: &Path,
     connection: Connection,
 ) -> crate::error::AppResult<Database> {
-    let mut csv = csv::Reader::from_path(path)?;
+    //let mut csv = csv::Reader::from_path(path)?;
+    let mut csv = csv::ReaderBuilder::new().from_path(path)?;
     let table_name = Database::get_table_name(path).unwrap();
     let table_names = vec![table_name.to_string()];
     let mut queries = String::new();
@@ -72,9 +73,22 @@ pub(crate) fn database_from_csv(
 }
 
 fn build_value_query(record: &StringRecord) -> String {
+    for field in record.iter() {
+        if field.is_empty() {
+            println!("Field is an empty string: \"\"");
+        } else {
+            println!("Field is not empty: {}", field);
+        }
+    }
     let row = record
         .iter()
-        .map(|s| format!("'{}'", s.replace('\'', "''")))
+        .map(|s| {
+            if s.is_empty() {
+                "NULL".to_string()
+            } else {
+                format!("'{}'", s.replace('\'', "''"))
+            }
+        })
         .collect::<Vec<String>>()
         .join(",");
     format!("({})", row)
@@ -133,21 +147,37 @@ pub(crate) fn sqlite_to_out(connection: &Connection, path: path::PathBuf) -> App
     for table in tables {
         let query = &format!("SELECT * FROM `{}`;", table);
         let mut stmt = connection.prepare(query)?;
-        let headers = stmt.column_names().iter().map(|s| s.to_string()).collect::<Vec<String>>();
-        let mut rows = stmt.query_map([], |row| {
+        let headers = stmt
+            .column_names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<String>>();
+        let rows = stmt.query_map([], |row| {
             let mut items = Vec::new();
 
             for i in 0..headers.len() {
                 let header = headers.get(i).unwrap();
-                if header == "id" { continue; }
+                if header == "id" {
+                    continue;
+                }
                 let item = DataItem::from(row.get_ref(i).unwrap());
+                dbg!(&header);
+                dbg!(&item);
                 items.push(item);
             }
             Ok(items)
         })?;
-        wtr.write_record(headers.clone())?;
+        wtr.write_record(headers.iter().filter(|&el| el != "id").clone())
+            .unwrap();
         for row in rows {
             let row = row?;
+            let row: Vec<Option<DataItem>> = row
+                .into_iter()
+                .map(|el| match el {
+                    DataItem::Null => None,
+                    o => Some(o),
+                })
+                .collect();
             wtr.serialize(row.clone()).unwrap();
         }
     }
@@ -157,17 +187,20 @@ pub(crate) fn sqlite_to_out(connection: &Connection, path: path::PathBuf) -> App
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::path::PathBuf;
     use std::{assert_eq, println};
-    use super::*;
 
     #[test]
     fn write_db_to_out_test() {
         let mut database1 = Database::try_from(Path::new("assets/data.sqlite")).unwrap();
-        sqlite_to_out(&database1.connection, PathBuf::from("assets/out-data.csv"));
+        sqlite_to_out(&database1.connection, PathBuf::from("assets/out-data.csv")).unwrap();
         let mut database2 = Database::try_from(Path::new("assets/out-data.csv")).unwrap();
         let first_row_db1 = database1.get(1, 0, "data".to_string()).unwrap().1;
-        let first_row_db2 = database2.get(1, 0, "data".to_string()).unwrap().1;
+        let first_row_db2 = database2.get(1, 0, "out-data".to_string()).unwrap().1;
+
+        dbg!(&first_row_db1);
+        dbg!(&first_row_db2);
 
         for (i, item) in first_row_db1.iter().enumerate() {
             assert_eq!(item, first_row_db2.get(i).unwrap());
