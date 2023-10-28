@@ -3,6 +3,10 @@ use std::{error::Error, path::Path};
 use dataman::{controller::Controller, error::log, model::database::Database, tui::TUI};
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let database = Database::try_from(Path::new("assets/data.sqlite")).unwrap();
+    dataman::model::converter::sqlite_to_out(database, std::path::PathBuf::from("data-out-db.csv")).unwrap();
+    std::process::exit(0);
+
     let args = std::env::args().collect::<Vec<_>>();
     if args.len() != 2 {
         eprintln!("Usage: dataman <path>");

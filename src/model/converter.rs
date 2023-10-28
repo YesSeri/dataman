@@ -7,7 +7,7 @@ use serde::Serialize;
 use crate::error::AppResult;
 use crate::model::datarow::DataItem;
 
-use super::{database::Database};
+use super::database::Database;
 
 pub(crate) fn database_from_csv(
     path: &Path,
@@ -27,7 +27,6 @@ pub(crate) fn database_from_csv(
     let mut i = 0;
 
     let records = csv.records();
-    // let capacity = if len < limit { len + 3 } else { limit + 3 };
     let mut items = Vec::with_capacity(limit);
     for record in records {
         let record = record?;
@@ -82,7 +81,6 @@ fn build_value_query(record: &StringRecord) -> String {
 
 pub(crate) fn database_from_sqlite(connection: Connection) -> crate::error::AppResult<Database> {
     let database = Database::new(connection)?;
-
     Ok(database)
 }
 
@@ -122,7 +120,8 @@ pub(crate) fn get_headers_for_query(
     Ok(columns)
 }
 
-pub(crate) fn sqlite_to_out(connection: &Connection, path: path::PathBuf) -> AppResult<()> {
+pub fn sqlite_to_out(database: Database, path: path::PathBuf) -> AppResult<()> {
+    let connection = database.connection;
     let mut stmt =
         connection.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")?;
 
@@ -133,13 +132,19 @@ pub(crate) fn sqlite_to_out(connection: &Connection, path: path::PathBuf) -> App
     for table in tables {
         let query = &format!("SELECT * FROM `{}`;", table);
         let mut stmt = connection.prepare(query)?;
-        let headers = stmt.column_names().iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        let headers = stmt
+            .column_names()
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<String>>();
         let mut rows = stmt.query_map([], |row| {
             let mut items = Vec::new();
 
             for i in 0..headers.len() {
                 let header = headers.get(i).unwrap();
-                if header == "id" { continue; }
+                if header == "id" {
+                    continue;
+                }
                 let item = DataItem::from(row.get_ref(i).unwrap());
                 items.push(item);
             }
@@ -157,9 +162,9 @@ pub(crate) fn sqlite_to_out(connection: &Connection, path: path::PathBuf) -> App
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use std::path::PathBuf;
     use std::{assert_eq, println};
-    use super::*;
 
     #[test]
     fn write_db_to_out_test() {

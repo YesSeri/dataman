@@ -492,9 +492,9 @@ impl TryFrom<&Path> for Database {
         match extension {
             "csv" => {
                 let connection = if cfg!(debug_assertions) {
-                    // Connection::open_in_memory().unwrap()
-                    let _ = std::fs::remove_file("db.sqlite");
-                    Connection::open("db.sqlite").unwrap()
+                    Connection::open_in_memory().unwrap()
+                    //let _ = std::fs::remove_file("db.sqlite");
+                    //Connection::open("db.sqlite").unwrap()
                 } else {
                     let xx = 12;
                     Connection::open_in_memory().unwrap()
