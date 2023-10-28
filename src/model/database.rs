@@ -90,6 +90,7 @@ impl Database {
                 limit,
                 offset
             );
+
             let (headers, data_rows) = {
                 let mut data_rows = vec![];
                 let mut stmt = self.prepare(&query).unwrap();
