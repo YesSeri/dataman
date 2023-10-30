@@ -5,8 +5,8 @@ use std::time;
 
 use crossterm::ExecutableCommand;
 use ratatui::widgets::TableState;
-use rusqlite::{backup, params, Connection, Statement};
 use rusqlite::types::ValueRef;
+use rusqlite::{backup, params, Connection, Statement};
 
 use crate::error::{log, AppError, AppResult};
 use crate::model::datarow::DataItem;
@@ -259,7 +259,7 @@ impl Database {
             + self.current_view.table_state.selected().unwrap_or(0) as u32;
         let query = query_builder::build_exact_search_query(
             &self.get_ordering(),
-            &search_header,
+            search_header,
             current_row,
             &table_name,
         );

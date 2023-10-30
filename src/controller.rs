@@ -4,6 +4,7 @@ use std::{
     path::PathBuf,
 };
 
+use crossterm::event::{self, Event};
 use crossterm::{
     event::{KeyCode, KeyEvent, KeyModifiers},
     ExecutableCommand,
@@ -79,6 +80,7 @@ impl From<KeyEvent> for Command {
             KeyCode::Char('q') => Command::SqlQuery,
             KeyCode::Char('f') => Command::RegexFilter,
             KeyCode::Char('c') => {
+                log(format!("key_event.modifiers: {:?}", key_event.modifiers));
                 if key_event.modifiers.contains(KeyModifiers::CONTROL) {
                     Command::Quit
                 } else {
@@ -156,109 +158,122 @@ impl Controller {
             last_command: CommandWrapper::new(Command::None, None),
         }
     }
-    pub fn start(mut self) -> Result<(), AppError> {
-        loop {
-            let r = self.run();
-            if self.last_command.command == Command::Quit {
-                break;
-            }
-            if let Err(e) = r {
-                match e {
-                    AppError::Io(_) | AppError::Parse(_) => break,
-                    _ => (),
-                }
-            }
-        }
+    // pub fn start(mut self) -> Result<(), AppError> {
+    //     loop {
+    //         let r = self.run();
+    //         if self.last_command.command == Command::Quit {
+    //             break;
+    //         }
+    //         if let Err(e) = r {
+    //             match e {
+    //                 AppError::Io(_) | AppError::Parse(_) => break,
+    //                 _ => (),
+    //             }
+    //         }
+    //     }
 
-        self.ui.shutdown()
-    }
+    //     self.ui.shutdown()
+    // }
 
     pub fn run(&mut self) -> AppResult<()> {
-        let command = TUI::start(self);
-        let res = match command {
-            Ok(command) => {
-                log(format!("\ncommand: {:?}", command));
-                log(format!("order: {:?}", self.database.order_column));
-                let result = match command {
-                    Command::Quit => {
-                        self.last_command = CommandWrapper::new(Command::Quit, None);
-                        Ok(())
-                    }
-                    Command::Copy => self.copy(),
-                    Command::RegexTransform => self.regex_transform(),
-                    Command::Edit => self.edit_cell(),
-                    Command::SqlQuery => self.sql_query(),
-                    Command::IllegalOperation => {
-                        self.last_command = CommandWrapper::new(Command::IllegalOperation, None);
-                        Ok(())
-                    }
-                    Command::None => {
-                        self.last_command = CommandWrapper::new(Command::None, None);
-                        Ok(())
-                    }
-                    Command::Sort => self.sort(),
-                    Command::Save => self.save_to_sqlite_file(),
-                    Command::Move(direction) => self.database.move_cursor(direction),
-                    Command::RegexFilter => self.regex_filter(),
-                    Command::NextTable => {
-                        self.last_command = CommandWrapper::new(Command::NextTable, None);
-                        self.database.next_table()
-                    }
-                    Command::PrevTable => {
-                        self.last_command = CommandWrapper::new(Command::PrevTable, None);
-                        self.database.prev_table()
-                    }
-                    Command::ExactSearch => self.exact_search(),
+        loop {
+            TUI::draw(self)?;
+            if crossterm::event::poll(std::time::Duration::from_millis(4250))? {
+                let res = match if let Event::Key(key) = event::read()? {
+                    Ok(Command::from(key))
+                } else {
+                    Err(AppError::Other)
+                } {
+                    Ok(command) => {
+                        log(format!("\ncommand: {:?}", command));
+                        log(format!("order: {:?}", self.database.order_column));
+                        let result = match command {
+                            Command::Quit => {
+                                self.last_command = CommandWrapper::new(Command::Quit, None);
+                                Ok(())
+                            }
+                            Command::Copy => self.copy(),
+                            Command::RegexTransform => self.regex_transform(),
+                            Command::Edit => self.edit_cell(),
+                            Command::SqlQuery => self.sql_query(),
+                            Command::IllegalOperation => {
+                                self.last_command =
+                                    CommandWrapper::new(Command::IllegalOperation, None);
+                                Ok(())
+                            }
+                            Command::None => {
+                                self.last_command = CommandWrapper::new(Command::None, None);
+                                Ok(())
+                            }
+                            Command::Sort => self.sort(),
+                            Command::Save => self.save_to_sqlite_file(),
+                            Command::Move(direction) => self.database.move_cursor(direction),
+                            Command::RegexFilter => self.regex_filter(),
+                            Command::NextTable => {
+                                self.last_command = CommandWrapper::new(Command::NextTable, None);
+                                self.database.next_table()
+                            }
+                            Command::PrevTable => {
+                                self.last_command = CommandWrapper::new(Command::PrevTable, None);
+                                self.database.prev_table()
+                            }
+                            Command::ExactSearch => self.exact_search(),
 
-                    Command::TextToInt => self.text_to_int(),
-                    Command::IntToText => self.int_to_text(),
-                    Command::DeleteColumn => self.delete_column(),
-                    Command::RenameColumn => self.rename_column(),
+                            Command::TextToInt => self.text_to_int(),
+                            Command::IntToText => self.int_to_text(),
+                            Command::DeleteColumn => self.delete_column(),
+                            Command::RenameColumn => self.rename_column(),
+                        };
+
+                        match command {
+                            Command::Copy
+                            | Command::RegexTransform
+                            | Command::Edit
+                            | Command::SqlQuery
+                            | Command::Sort
+                            | Command::NextTable
+                            | Command::PrevTable
+                            | Command::TextToInt
+                            | Command::IntToText
+                            | Command::DeleteColumn
+                            | Command::RenameColumn
+                            | Command::ExactSearch
+                            | Command::RegexFilter => self.database.current_view.has_changed(),
+                            Command::None
+                            | Command::IllegalOperation
+                            | Command::Save
+                            | Command::Quit
+                            | Command::Move(_) => (),
+                        }
+                        result
+                    }
+                    Err(result) => {
+                        log(format!("\nAPP ERROR: {:?}", result));
+                        self.database.current_view.has_changed();
+
+                        self.set_last_command(CommandWrapper::new(
+                            Command::IllegalOperation,
+                            Some(result.to_string()),
+                        ));
+                        Ok(())
+                    }
                 };
+                if let Err(e) = res {
+                    log(format!("\nAPP ERROR: {:?}", e));
 
-                match command {
-                    Command::Copy
-                    | Command::RegexTransform
-                    | Command::Edit
-                    | Command::SqlQuery
-                    | Command::Sort
-                    | Command::NextTable
-                    | Command::PrevTable
-                    | Command::TextToInt
-                    | Command::IntToText
-                    | Command::DeleteColumn
-                    | Command::RenameColumn
-                    | Command::ExactSearch
-                    | Command::RegexFilter => self.database.current_view.has_changed(),
-                    Command::None
-                    | Command::IllegalOperation
-                    | Command::Save
-                    | Command::Quit
-                    | Command::Move(_) => (),
+                    self.database.current_view.has_changed();
+                    self.set_last_command(CommandWrapper::new(
+                        Command::IllegalOperation,
+                        Some(format!(": {}", e)),
+                    ));
                 }
-                result
-            }
-            Err(result) => {
-                log(format!("\nAPP ERROR: {:?}", result));
-                self.database.current_view.has_changed();
 
-                self.set_last_command(CommandWrapper::new(
-                    Command::IllegalOperation,
-                    Some(result.to_string()),
-                ));
-                Ok(())
+                if self.last_command.command == Command::Quit {
+                    self.ui.shutdown()?;
+                    break Ok(());
+                }
             }
-        };
-        if let Err(e) = res {
-            log(format!("\nAPP ERROR: {:?}", e));
-
-            self.database.current_view.has_changed();
-            self.set_last_command(CommandWrapper::new(
-                Command::IllegalOperation,
-                Some(format!(": {}", e)),
-            ));
         }
-        Ok(())
     }
     pub fn get_headers_and_rows(&mut self, limit: u32) -> AppResult<DataTable> {
         let binding = "default table name".to_string();
