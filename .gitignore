@@ -3,3 +3,4 @@
 .vscode
 
 log.txt
+*.sqlite
