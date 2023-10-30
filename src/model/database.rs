@@ -38,7 +38,7 @@ impl Database {
         let database = Database {
             connection,
             header_idx: 0,
-            order_column: None,
+            order_column: Some("id".to_string()),
             is_asc_order: true,
             current_table_idx: rowid,
             current_view,
@@ -119,7 +119,6 @@ impl Database {
     }
     pub(crate) fn count_rows(&self) -> Option<u32> {
         let table_name = self.get_current_table_name().ok()?;
-        log(table_name.clone());
         self.connection
             .query_row(
                 &format!("SELECT COUNT(*) FROM {};", table_name),
@@ -140,9 +139,7 @@ impl Database {
         Ok(cell)
     }
     fn prepare(&self, sql: &str) -> rusqlite::Result<Statement> {
-        if cfg!(debug_assertions) {
-            log(sql.to_string());
-        }
+        log(sql.to_string());
         self.connection.prepare(sql)
     }
     fn execute<P: rusqlite::Params>(&self, sql: &str, params: P) -> AppResult<()> {

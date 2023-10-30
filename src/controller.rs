@@ -80,7 +80,6 @@ impl From<KeyEvent> for Command {
             KeyCode::Char('q') => Command::SqlQuery,
             KeyCode::Char('f') => Command::RegexFilter,
             KeyCode::Char('c') => {
-                log(format!("key_event.modifiers: {:?}", key_event.modifiers));
                 if key_event.modifiers.contains(KeyModifiers::CONTROL) {
                     Command::Quit
                 } else {
@@ -178,15 +177,15 @@ impl Controller {
     pub fn run(&mut self) -> AppResult<()> {
         loop {
             TUI::draw(self)?;
-            if crossterm::event::poll(std::time::Duration::from_millis(4250))? {
+            if crossterm::event::poll(std::time::Duration::from_millis(500))? {
                 let res = match if let Event::Key(key) = event::read()? {
                     Ok(Command::from(key))
                 } else {
                     Err(AppError::Other)
                 } {
                     Ok(command) => {
-                        log(format!("\ncommand: {:?}", command));
-                        log(format!("order: {:?}", self.database.order_column));
+                        // log(format!("\ncommand: {:?}", command));
+                        // log(format!("order: {:?}", self.database.order_column));
                         let result = match command {
                             Command::Quit => {
                                 self.last_command = CommandWrapper::new(Command::Quit, None);
