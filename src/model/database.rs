@@ -1,6 +1,6 @@
 use std::error::Error;
 use std::hash::Hash;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time;
 
 use crossterm::ExecutableCommand;
@@ -326,8 +326,8 @@ impl Database {
         self.execute_batch(&query)
     }
 
-    pub(crate) fn get_table_name(file: &Path) -> Option<&str> {
-        file.file_stem()?.to_str()
+    pub(crate) fn get_table_name(file: PathBuf) -> String {
+        file.file_stem().unwrap().to_str().unwrap().to_string()
     }
 
     pub fn get_headers(&self, table_name: &str) -> AppResult<Vec<String>> {
@@ -482,10 +482,10 @@ impl Database {
     }
 }
 
-impl TryFrom<&Path> for Database {
+impl TryFrom<PathBuf> for Database {
     type Error = Box<dyn Error>;
 
-    fn try_from(path: &Path) -> Result<Self, Box<dyn Error>> {
+    fn try_from(path: PathBuf) -> Result<Self, Box<dyn Error>> {
         let extension = path.extension().unwrap().to_str().unwrap();
         match extension {
             "csv" => {

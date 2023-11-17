@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::{error::Error, fs::File, path, path::Path};
 
 use csv::{Reader, StringRecord, Writer};
@@ -10,19 +11,19 @@ use crate::model::datarow::DataItem;
 use super::database::Database;
 
 pub(crate) fn database_from_csv(
-    path: &Path,
+    path: PathBuf,
     connection: Connection,
 ) -> crate::error::AppResult<Database> {
     //let mut csv = csv::Reader::from_path(path)?;
-    let mut csv = csv::ReaderBuilder::new().from_path(path)?;
-    let table_name = Database::get_table_name(path).unwrap();
+    let mut csv = csv::ReaderBuilder::new().from_path(&path)?;
+    let table_name = Database::get_table_name(path);
     let table_names = vec![table_name.to_string()];
     let mut queries = String::new();
-    let query = build_create_table_query(&mut csv, table_name).unwrap();
+    let query = build_create_table_query(&mut csv, &table_name).unwrap();
     queries.push_str(&query);
     connection.execute_batch(&queries)?;
     queries.clear();
-    let columns = get_headers_for_query(&mut csv, table_name).unwrap();
+    let columns = get_headers_for_query(&mut csv, &table_name).unwrap();
     let mut database = Database::new(connection)?;
     let limit = 10000;
     let mut i = 0;
@@ -73,13 +74,6 @@ pub(crate) fn database_from_csv(
 }
 
 fn build_value_query(record: &StringRecord) -> String {
-    for field in record.iter() {
-        if field.is_empty() {
-            println!("Field is an empty string: \"\"");
-        } else {
-            println!("Field is not empty: {}", field);
-        }
-    }
     let row = record
         .iter()
         .map(|s| {

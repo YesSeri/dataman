@@ -1,4 +1,3 @@
-use core::panic;
 use std::{
     fmt::{Debug, Display},
     io::{Read, Stdout, Write},
@@ -17,10 +16,10 @@ use ratatui::{
     Frame, Terminal,
 };
 
-use crate::error::log;
+use crate::{error::log, controller::{Command,CommandWrapper}};
 use crate::model::datarow::DataTable;
 use crate::{
-    controller::{Command, CommandWrapper, Controller},
+    controller::Controller,
     error::{AppError, AppResult},
     model::database::Database,
 };
@@ -71,7 +70,6 @@ impl TUI {
                 Ok(_) => (),
                 Err(err) => {
                     terminal::disable_raw_mode().unwrap();
-                    eprintln!("error: {}", err);
                     panic!("error in update");
                 }
             }

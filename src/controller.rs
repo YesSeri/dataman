@@ -18,13 +18,13 @@ use crate::{
 };
 
 #[derive(Debug, Clone)]
-pub struct CommandWrapper {
+pub(crate) struct CommandWrapper {
     command: Command,
     message: Option<String>,
 }
 
 impl CommandWrapper {
-    pub fn new(command: Command, message: Option<String>) -> Self {
+    pub(crate) fn new(command: Command, message: Option<String>) -> Self {
         Self { command, message }
     }
 }
@@ -38,7 +38,7 @@ impl std::fmt::Display for CommandWrapper {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     None,
     Copy,
@@ -58,6 +58,35 @@ pub enum Command {
     IntToText,
     DeleteColumn,
     RenameColumn,
+    Join(Join),
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct Join {
+    tables: (String, String),
+    conditions: Vec<(String, String)>, // Pairs of column names to join on
+    join_type: JoinType,
+}
+//
+//impl Clone for Join {
+    //fn clone(&self) -> Self {
+        //let conditions: Vec<(String, String)> =
+            //self.conditions.iter().map(|c| (c.0.clone(), c.1.clone()));
+        //Self {
+            //tables: (self.tables.0.clone(), self.tables.0.clone()),
+            //conditions,
+            //join_type: self.join_type,
+        //}
+    //}
+//}
+
+/// Outer Join is Left Outer Join
+/// Cross Join is cartesian product of the two tables.
+#[derive(Debug, PartialEq, Clone)]
+pub(crate) enum JoinType {
+    Inner,
+    Outer,
+    Cross,
 }
 
 impl From<KeyEvent> for Command {
@@ -129,9 +158,9 @@ pub enum Direction {
 
 #[derive(Debug)]
 pub struct Controller {
-    pub ui: TUI,
-    pub database: Database,
-    pub last_command: CommandWrapper,
+    pub(crate) ui: TUI,
+    pub(crate) database: Database,
+    pub(crate) last_command: CommandWrapper,
 }
 
 impl Controller {
@@ -146,7 +175,7 @@ impl Controller {
         self.database.sql_query(query)
     }
 
-    pub fn set_last_command(&mut self, last_command: CommandWrapper) {
+    pub(crate) fn set_last_command(&mut self, last_command: CommandWrapper) {
         self.last_command = last_command;
     }
 
@@ -157,22 +186,6 @@ impl Controller {
             last_command: CommandWrapper::new(Command::None, None),
         }
     }
-    // pub fn start(mut self) -> Result<(), AppError> {
-    //     loop {
-    //         let r = self.run();
-    //         if self.last_command.command == Command::Quit {
-    //             break;
-    //         }
-    //         if let Err(e) = r {
-    //             match e {
-    //                 AppError::Io(_) | AppError::Parse(_) => break,
-    //                 _ => (),
-    //             }
-    //         }
-    //     }
-
-    //     self.ui.shutdown()
-    // }
 
     pub fn run(&mut self) -> AppResult<()> {
         loop {
@@ -222,6 +235,7 @@ impl Controller {
                             Command::IntToText => self.int_to_text(),
                             Command::DeleteColumn => self.delete_column(),
                             Command::RenameColumn => self.rename_column(),
+                            Command::Join(_) => todo!(),
                         };
 
                         match command {
@@ -236,6 +250,7 @@ impl Controller {
                             | Command::IntToText
                             | Command::DeleteColumn
                             | Command::RenameColumn
+                            | Command::Join(_)
                             | Command::ExactSearch
                             | Command::RegexFilter => self.database.current_view.has_changed(),
                             Command::None
