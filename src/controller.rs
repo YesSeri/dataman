@@ -11,6 +11,7 @@ use crossterm::{
 };
 
 use crate::model::datarow::DataTable;
+use crate::Config;
 use crate::{error::AppResult, model::database::Database};
 use crate::{
     error::{log, AppError},
@@ -69,15 +70,15 @@ pub struct Join {
 }
 //
 //impl Clone for Join {
-    //fn clone(&self) -> Self {
-        //let conditions: Vec<(String, String)> =
-            //self.conditions.iter().map(|c| (c.0.clone(), c.1.clone()));
-        //Self {
-            //tables: (self.tables.0.clone(), self.tables.0.clone()),
-            //conditions,
-            //join_type: self.join_type,
-        //}
-    //}
+//fn clone(&self) -> Self {
+//let conditions: Vec<(String, String)> =
+//self.conditions.iter().map(|c| (c.0.clone(), c.1.clone()));
+//Self {
+//tables: (self.tables.0.clone(), self.tables.0.clone()),
+//conditions,
+//join_type: self.join_type,
+//}
+//}
 //}
 
 /// Outer Join is Left Outer Join
@@ -197,8 +198,6 @@ impl Controller {
                     Err(AppError::Other)
                 } {
                     Ok(command) => {
-                        // log(format!("\ncommand: {:?}", command));
-                        // log(format!("order: {:?}", self.database.order_column));
                         let result = match command {
                             Command::Quit => {
                                 self.last_command = CommandWrapper::new(Command::Quit, None);
@@ -410,7 +409,7 @@ mod test {
 
     #[test]
     fn copy_column_test() {
-        let p = Path::new("assets/data.csv");
+        let p = PathBuf::from("assets/data.csv");
         let mut database = Database::try_from(p).unwrap();
         let copy_fun = |s: String| Some(s.to_string());
 
@@ -427,7 +426,7 @@ mod test {
 
     #[test]
     fn copy_column_long_test() {
-        let p = Path::new("assets/data-long.csv");
+        let p = PathBuf::from("assets/data-long.csv");
         let mut database = Database::try_from(p).unwrap();
 
         let copy_fun = |s: String| Some(s.to_string());

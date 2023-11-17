@@ -235,7 +235,6 @@ impl Database {
             "SELECT name FROM sqlite_master WHERE type='table' AND rowid='{}';",
             self.current_table_idx
         );
-        // log(query.clone());
         let table_name = self.connection.query_row(&query, [], |row| row.get(0))?;
         Ok(table_name)
     }
@@ -519,13 +518,13 @@ mod tests {
 
     #[test]
     fn get_number_of_headers_test() {
-        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
         let number_of_headers = database.count_headers();
     }
 
     #[test]
     fn inc_header() {
-        let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let mut database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
         database.next_header().unwrap();
         assert_eq!(1, database.header_idx);
         database.next_header().unwrap();
@@ -538,7 +537,7 @@ mod tests {
 
     #[test]
     fn dec_header() {
-        let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let mut database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
         database.previous_header().unwrap();
         assert_eq!(3, database.header_idx);
         database.previous_header().unwrap();
@@ -551,7 +550,7 @@ mod tests {
 
     #[test]
     fn derive_column_test() {
-        let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let mut database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
         let col = "firstname";
         let fun = |s| Some(format!("{}-changed", s));
         database.derive_column(col.to_string(), fun).unwrap();
@@ -566,7 +565,7 @@ mod tests {
 
     #[test]
     fn update_cell() {
-        let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let mut database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
         database.update_cell("firstname", 1, "hank").unwrap();
         let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
             .get(1)
@@ -580,7 +579,7 @@ mod tests {
 
     #[test]
     fn test_offset() {
-        let mut database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let mut database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
         let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
             .get(1)
             .unwrap()
@@ -595,20 +594,20 @@ mod tests {
 
     #[test]
     fn get_table_names_test() {
-        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
         let table_names = database.get_table_names().unwrap();
     }
 
     #[test]
     fn get_current_table_name_test() {
-        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
         let table_name = database.get_current_table_name().unwrap();
         assert_eq!(table_name, "data".to_string());
     }
 
     #[test]
     fn get_headers_test() {
-        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
         let table_name = database.get_current_table_name().unwrap();
         let headers = database.get_headers(&table_name).unwrap();
         assert_eq!(headers, vec!["id", "firstname", "lastname", "age"]);
@@ -616,14 +615,14 @@ mod tests {
 
     #[test]
     fn count_rows_test() {
-        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
         let rows_len = database.count_rows().unwrap();
         assert_eq!(rows_len, 6)
     }
 
     #[test]
     fn custom_functions_regexp_test() {
-        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
         // let query = "SELECT firstname FROM `data` WHERE firstname REGEXP 'hen'";
         let query = "SELECT firstname FROM `data` WHERE regexp_filter('h.*k', firstname)";
         let result: String = database
@@ -635,14 +634,14 @@ mod tests {
 
     #[test]
     fn table_of_tables_test() {
-        let database = Database::try_from(Path::new("assets/db.sqlite")).unwrap();
+        let database = Database::try_from(PathBuf::from("assets/db.sqlite")).unwrap();
         let s = database.open_table_of_tables().unwrap();
         assert_eq!(false, true);
     }
 
     #[test]
     fn custom_functions_regexp_transform_no_capture_test() {
-        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
         let table_name = database.get_current_table_name().unwrap();
         let header = database.get_headers(&table_name).unwrap()[1].clone();
         let pattern = "n.*";
@@ -686,7 +685,7 @@ mod tests {
 
     #[test]
     fn custom_functions_regexp_transform_with_capture_test() {
-        let database = Database::try_from(Path::new("assets/data.csv")).unwrap();
+        let database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
         let table_name = database.get_current_table_name().unwrap();
         let header = database.get_headers(&table_name).unwrap()[1].clone();
         let pattern = "(e.).*(r)";
@@ -716,7 +715,7 @@ mod tests {
     #[test]
     fn my_benching_stuff() {
         let before = Instant::now();
-        let database = Database::try_from(Path::new("assets/customers-1000000.csv")).unwrap();
+        let database = Database::try_from(PathBuf::from("assets/customers-1000000.csv")).unwrap();
         let table_name = database.get_current_table_name().unwrap();
         let header = database.get_headers(&table_name).unwrap()[2].clone();
         let pattern = "n.*";
@@ -743,7 +742,7 @@ mod tests {
     #[test]
     fn my_benching_no_capture() {
         let before = Instant::now();
-        let database = Database::try_from(Path::new("assets/customers-1000000.csv")).unwrap();
+        let database = Database::try_from(PathBuf::from("assets/customers-1000000.csv")).unwrap();
         let table_name = database.get_current_table_name().unwrap();
         let header = database.get_headers(&table_name).unwrap()[2].clone();
         let pattern = "n.*";

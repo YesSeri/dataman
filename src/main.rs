@@ -1,8 +1,5 @@
-use dataman::{controller::Controller, model::database::Database, tui::TUI};
-use std::{error::Error, path::Path};
-
-mod cli;
-use cli::Cli;
+use dataman::{controller::Controller, model::database::Database, tui::TUI, Cli};
+use std::error::Error;
 
 fn main() -> Result<(), Box<dyn Error>> {
     let cli = <Cli as clap::Parser>::parse();

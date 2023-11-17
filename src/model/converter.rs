@@ -187,9 +187,9 @@ mod tests {
 
     #[test]
     fn write_db_to_out_test() {
-        let mut database1 = Database::try_from(Path::new("assets/data.sqlite")).unwrap();
+        let mut database1 = Database::try_from(PathBuf::from("assets/data.sqlite")).unwrap();
         sqlite_to_out(&database1.connection, PathBuf::from("assets/out-data.csv")).unwrap();
-        let mut database2 = Database::try_from(Path::new("assets/out-data.csv")).unwrap();
+        let mut database2 = Database::try_from(PathBuf::from("assets/out-data.csv")).unwrap();
         let first_row_db1 = database1.get(1, 0, "data".to_string()).unwrap().1;
         let first_row_db2 = database2.get(1, 0, "out-data".to_string()).unwrap().1;
 

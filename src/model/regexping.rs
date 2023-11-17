@@ -52,7 +52,6 @@ pub(crate) fn build_regex_no_capture_group_transform_query(
     );
 
     queries.push_str(&update_query);
-    log(format!("no capture group queries: {}", queries));
     Ok(queries)
 }
 
