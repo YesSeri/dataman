@@ -59,7 +59,7 @@ impl TUI {
         terminal::disable_raw_mode()?;
         Ok(())
     }
-    pub fn start(controller: &mut Controller) -> Result<Command, AppError> {
+    pub fn draw(controller: &mut Controller) -> AppResult<()> {
         let table_height = TUI::get_table_height().unwrap();
         controller.ui.terminal.draw(|f| {
             match TUI::update(
@@ -76,8 +76,11 @@ impl TUI {
                 }
             }
         })?;
+        Ok(())
+    }
+
+    pub fn get_input() -> AppResult<Command> {
         if let Event::Key(key) = event::read()? {
-            let term_height = controller.ui.terminal.backend().size()?.height;
             let command = Command::from(key);
             Ok(command)
         } else {
@@ -158,7 +161,10 @@ impl TUI {
 
         // // draw border under header
         let tui_rows = rows.iter().map(|data_row| {
-            let data_row = data_row.iter().map(|item| Cell::from(item.clone())).collect::<Vec<_>>();
+            let data_row = data_row
+                .iter()
+                .map(|item| Cell::from(item.clone()))
+                .collect::<Vec<_>>();
             Row::new(data_row).height(1)
         });
         let selected_style = Style::default().add_modifier(Modifier::UNDERLINED);
