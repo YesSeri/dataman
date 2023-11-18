@@ -4,7 +4,7 @@ use csv::{Reader, StringRecord, Writer};
 use rusqlite::{Connection, Rows};
 use serde::Serialize;
 
-use crate::error::AppResult;
+use crate::error::{log, AppResult};
 use crate::model::datarow::DataItem;
 
 use super::database::Database;
@@ -73,13 +73,6 @@ pub(crate) fn database_from_csv(
 }
 
 fn build_value_query(record: &StringRecord) -> String {
-    for field in record.iter() {
-        if field.is_empty() {
-            println!("Field is an empty string: \"\"");
-        } else {
-            println!("Field is not empty: {}", field);
-        }
-    }
     let row = record
         .iter()
         .map(|s| {

@@ -2,6 +2,7 @@ use core::panic;
 use std::{
     fmt::{Debug, Display},
     io::{Read, Stdout, Write},
+    iter::Sum,
 };
 
 use crossterm::{
@@ -123,7 +124,7 @@ impl TUI {
         let table_name = database.get_current_table_name()?;
 
         let (headers, rows): DataTable =
-            database.get(100, database.current_view.row_offset, table_name)?;
+            database.get(100, database.slices[0].row_offset, table_name)?;
         let id_space: u16 = rows.iter().fold(0, |acc, row| {
             let id = row.get(0).unwrap().to_string().len() as u16;
             if id > acc {
@@ -133,16 +134,21 @@ impl TUI {
             }
         }) + 1;
 
-        let per_header = (100 / headers.len()) as u16 - id_space;
-        let widths = headers
+        let per_header = (100 - id_space) / headers.len() as u16;
+        log(format!("headers_len: {:?}", headers.len()));
+        log(format!("id_space: {}", id_space));
+        log(format!("per_header: {}", per_header));
+        // total
+        log(format!(
+            "total: {}",
+            per_header * headers.len() as u16 + id_space
+        ));
+        let widths = database.slices[0].column_widths();
+        let sum: u16 = widths.iter().sum();
+        log(format!("sizes: {:?} sum: {:?}", widths, sum));
+        let widths = widths
             .iter()
-            .map(|header| {
-                if header == "id" {
-                    Constraint::Length(id_space)
-                } else {
-                    Constraint::Percentage(per_header)
-                }
-            })
+            .map(|w| Constraint::Percentage(*w))
             .collect::<Vec<_>>();
         let current_header = database.header_idx;
         // mark current header
@@ -176,17 +182,17 @@ impl TUI {
             // .highlight_symbol(">> ")
             .widths(widths.as_slice())
             .bg(Color::Black);
-        f.render_stateful_widget(t, rects[0], &mut database.current_view.table_state);
+        f.render_stateful_widget(t, rects[0], &mut database.slices[0].table_state);
 
         let a = database.header_idx;
-        let row = database.current_view.table_state.selected().unwrap_or(0);
+        let row = database.slices[0].table_state.selected().unwrap_or(0);
         let total_rows = database.count_rows().unwrap_or(0);
         // let rowid = rows.get(b).unwrap().data.get(0);
         let rowid = rows
             .get(row)
             .map(|el| el.get(0).unwrap().to_string())
             .unwrap_or("xxx".to_owned());
-        let offset = database.current_view.table_state.offset();
+        let offset = database.slices[0].table_state.offset();
         let text = vec![Line::from(vec![Span::raw(format!(
             // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
             "row: {row}, total rows: {total_rows},  last command: {last_command}, height: {table_height}",

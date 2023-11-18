@@ -12,8 +12,8 @@ use crate::error::{log, AppError, AppResult};
 use crate::model::datarow::DataItem;
 use crate::tui::TUI;
 
-use super::current_view::CurrentView;
 use super::datarow::DataTable;
+use super::db_slice::DatabaseSlice;
 use super::query_builder;
 use super::regexping;
 
@@ -24,7 +24,7 @@ pub struct Database {
     pub(crate) order_column: Option<String>,
     pub(crate) is_asc_order: bool,
     pub(crate) current_table_idx: u16,
-    pub(crate) current_view: CurrentView,
+    pub(crate) slices: Vec<DatabaseSlice>,
 }
 
 impl Database {
@@ -33,7 +33,7 @@ impl Database {
             .to_string();
         let rowid: u16 = connection.query_row(&query, [], |row| row.get(0))?;
 
-        let current_view = CurrentView::new(vec![], vec![], TableState::default(), 0, 0);
+        let slices = vec![DatabaseSlice::new(vec![], vec![], TableState::default(), 0, 0)];
 
         let database = Database {
             connection,
@@ -41,7 +41,7 @@ impl Database {
             order_column: Some("id".to_string()),
             is_asc_order: true,
             current_table_idx: rowid,
-            current_view,
+            slices,
         };
         if let Err(err) = regexping::custom_functions::add_custom_functions(&database) {
             log(format!(
@@ -77,10 +77,10 @@ impl Database {
         }
     }
     pub fn get(&mut self, limit: u32, offset: u32, table_name: String) -> AppResult<DataTable> {
-        if self.current_view.is_unchanged() {
+        if self.slices[0].is_unchanged() {
             Ok((
-                self.current_view.headers.clone(),
-                self.current_view.data_rows.clone(),
+                self.slices[0].headers.clone(),
+                self.slices[0].data_rows.clone(),
             ))
         } else {
             let query = format!(
@@ -111,9 +111,9 @@ impl Database {
                 }
                 (headers, data_rows)
             };
-            self.current_view.data_rows = data_rows.clone();
-            self.current_view.headers = headers.clone();
-            self.current_view.is_unchanged = true;
+            self.slices[0].data_rows = data_rows.clone();
+            self.slices[0].headers = headers.clone();
+            self.slices[0].is_unchanged = true;
             Ok((headers, data_rows))
         }
     }
@@ -194,7 +194,7 @@ impl Database {
     }
 
     pub(crate) fn get_current_id(&self) -> AppResult<i32> {
-        let i = self.current_view.table_state.selected().unwrap_or(0);
+        let i = self.slices[0].table_state.selected().unwrap_or(0);
         let query = format!(
             "SELECT rowid FROM `{}` LIMIT 1 OFFSET {};",
             self.get_current_table_name()?,
@@ -207,7 +207,7 @@ impl Database {
     pub(crate) fn sort(&mut self) -> AppResult<()> {
         // sort by current header
         let header = self.get_current_header()?;
-        self.current_view.table_state.select(Some(0));
+        self.slices[0].table_state.select(Some(0));
         if self.order_column == Some(header.clone())
         //|| (self.order_column.is_none() && (header == "id"))
         {
@@ -252,8 +252,8 @@ impl Database {
     // go to first match
     pub(crate) fn exact_search(&mut self, search_header: &str, pattern: &str) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
-        let current_row = self.current_view.row_offset
-            + self.current_view.table_state.selected().unwrap_or(0) as u32;
+        let current_row = self.slices[0].row_offset
+            + self.slices[0].table_state.selected().unwrap_or(0) as u32;
         let query = query_builder::build_exact_search_query(
             &self.get_ordering(),
             search_header,
@@ -269,7 +269,7 @@ impl Database {
         let row_idx = row_number % height as u32;
         let row_offset = row_number - row_idx;
 
-        self.current_view.update(row_idx, row_offset);
+        self.slices[0].update(row_idx, row_offset);
         Ok(())
     }
 
@@ -367,14 +367,14 @@ impl Database {
 
     fn next_row(&mut self) -> AppResult<()> {
         let height = TUI::get_table_height()?;
-        let i = match self.current_view.table_state.selected() {
+        let i = match self.slices[0].table_state.selected() {
             Some(i) if i < (height - 1) as usize => i + 1,
             Some(i) if i >= (height - 1) as usize => {
                 let max = self.count_rows().unwrap_or(u32::MAX);
-                if (self.current_view.row_offset + i as u32) < max {
-                    self.current_view.row_offset =
-                        self.current_view.row_offset.saturating_add(height as u32);
-                    self.current_view.has_changed();
+                if (self.slices[0].row_offset + i as u32) < max {
+                    self.slices[0].row_offset =
+                        self.slices[0].row_offset.saturating_add(height as u32);
+                    self.slices[0].has_changed();
                     0
                 } else {
                     i
@@ -383,27 +383,27 @@ impl Database {
             _ => 0,
         };
 
-        self.current_view.table_state.select(Some(i));
+        self.slices[0].table_state.select(Some(i));
         Ok(())
     }
 
     fn set_current_row(&mut self, value: usize) {
-        self.current_view.table_state.select(Some(value));
+        self.slices[0].table_state.select(Some(value));
     }
     fn previous_row(&mut self) -> AppResult<()> {
-        let i = match self.current_view.table_state.selected() {
-            Some(i) if i == 0 && self.current_view.row_offset != 0 => {
+        let i = match self.slices[0].table_state.selected() {
+            Some(i) if i == 0 && self.slices[0].row_offset != 0 => {
                 let height = TUI::get_table_height()?;
-                self.current_view.row_offset =
-                    self.current_view.row_offset.saturating_sub(height as u32);
-                self.current_view.has_changed();
+                self.slices[0].row_offset =
+                    self.slices[0].row_offset.saturating_sub(height as u32);
+                self.slices[0].has_changed();
                 height as usize - 1
             }
 
             Some(i) => i.saturating_sub(1),
             None => 0,
         };
-        self.current_view.table_state.select(Some(i));
+        self.slices[0].table_state.select(Some(i));
         Ok(())
     }
     pub fn update_cell(&self, header: &str, id: i32, content: &str) -> AppResult<()> {

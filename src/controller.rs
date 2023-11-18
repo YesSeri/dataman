@@ -59,6 +59,30 @@ pub enum Command {
     DeleteColumn,
     RenameColumn,
 }
+impl Command {
+    fn requires_updating_view(&self) -> bool {
+        match self {
+            Command::Copy
+            | Command::RegexTransform
+            | Command::Edit
+            | Command::SqlQuery
+            | Command::Sort
+            | Command::NextTable
+            | Command::PrevTable
+            | Command::TextToInt
+            | Command::IntToText
+            | Command::DeleteColumn
+            | Command::RenameColumn
+            | Command::ExactSearch
+            | Command::RegexFilter => true,
+            Command::None
+            | Command::IllegalOperation
+            | Command::Save
+            | Command::Quit
+            | Command::Move(_) => false,
+        }
+    }
+}
 
 impl From<KeyEvent> for Command {
     fn from(key_event: KeyEvent) -> Self {
@@ -177,7 +201,7 @@ impl Controller {
     pub fn run(&mut self) -> AppResult<()> {
         loop {
             TUI::draw(self)?;
-            if crossterm::event::poll(std::time::Duration::from_millis(500))? {
+            if crossterm::event::poll(std::time::Duration::from_millis(3000))? {
                 let res = match if let Event::Key(key) = event::read()? {
                     Ok(Command::from(key))
                 } else {
@@ -224,31 +248,14 @@ impl Controller {
                             Command::RenameColumn => self.rename_column(),
                         };
 
-                        match command {
-                            Command::Copy
-                            | Command::RegexTransform
-                            | Command::Edit
-                            | Command::SqlQuery
-                            | Command::Sort
-                            | Command::NextTable
-                            | Command::PrevTable
-                            | Command::TextToInt
-                            | Command::IntToText
-                            | Command::DeleteColumn
-                            | Command::RenameColumn
-                            | Command::ExactSearch
-                            | Command::RegexFilter => self.database.current_view.has_changed(),
-                            Command::None
-                            | Command::IllegalOperation
-                            | Command::Save
-                            | Command::Quit
-                            | Command::Move(_) => (),
+                        if command.requires_updating_view() {
+                            self.database.slices[0].has_changed();
                         }
                         result
                     }
                     Err(result) => {
                         log(format!("\nAPP ERROR: {:?}", result));
-                        self.database.current_view.has_changed();
+                        self.database.slices[0].has_changed();
 
                         self.set_last_command(CommandWrapper::new(
                             Command::IllegalOperation,
@@ -260,7 +267,7 @@ impl Controller {
                 if let Err(e) = res {
                     log(format!("\nAPP ERROR: {:?}", e));
 
-                    self.database.current_view.has_changed();
+                    self.database.slices[0].has_changed();
                     self.set_last_command(CommandWrapper::new(
                         Command::IllegalOperation,
                         Some(format!(": {}", e)),

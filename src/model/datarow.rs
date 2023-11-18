@@ -1,6 +1,6 @@
+use ratatui::widgets::Cell;
 use std::collections::VecDeque;
 use std::fmt::Display;
-use ratatui::widgets::Cell;
 
 use rusqlite::types::ValueRef;
 use rusqlite::Row;
@@ -22,7 +22,6 @@ impl Display for DataItem {
     }
 }
 
-
 // impl Iterator for DataRow {
 //     type Item = DataItem;
 //
@@ -37,6 +36,20 @@ pub enum DataItem {
     Text(String),
     Integer(i64),
     Null,
+}
+impl DataItem {
+    pub fn len(&self) -> usize {
+        match self {
+            DataItem::Text(s) => s.len(),
+            DataItem::Integer(x) => x.to_string().len(),
+            DataItem::Null => 4,
+        }
+    }
+
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 impl<'a> From<DataItem> for Cell<'a> {

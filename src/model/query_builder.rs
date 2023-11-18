@@ -45,3 +45,8 @@ pub(crate) fn build_rename_column_query(
 ) -> String {
     format!("ALTER TABLE `{table_name}` RENAME COLUMN \"{column}\" TO \"{new_column}\";\n")
 }
+
+pub fn build_histogram_query(column: &str, table_name: &str) -> String {
+    let query = format!("");
+    query
+}
