@@ -1,5 +1,7 @@
 use std::{error::Error, fmt};
 
+use crate::CONFIG;
+
 pub type AppResult<T> = Result<T, AppError>;
 
 #[derive(Debug)]
@@ -13,17 +15,18 @@ pub enum AppError {
 }
 
 pub fn log(msg: String) {
-    if cfg!(debug_assertions) {
-        let limit = 300;
-        if msg.len() > limit {
-            eprintln!(
-                "{}\n...\n{}",
-                &msg[..limit / 2],
-                &msg[msg.len() - limit / 2..]
-            );
-        } else {
-            eprintln!("{}", msg);
-        }
+    if !CONFIG.verbose {
+        return;
+    }
+    let limit = 300;
+    if msg.len() > limit {
+        eprintln!(
+            "{}\n...\n{}",
+            &msg[..limit / 2],
+            &msg[msg.len() - limit / 2..]
+        );
+    } else {
+        eprintln!("{}", msg);
     }
 }
 

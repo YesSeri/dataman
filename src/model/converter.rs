@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::{error::Error, fs::File, path, path::Path};
 
 use csv::{Reader, StringRecord, Writer};
@@ -10,19 +11,19 @@ use crate::model::datarow::DataItem;
 use super::database::Database;
 
 pub(crate) fn database_from_csv(
-    path: &Path,
+    path: PathBuf,
     connection: Connection,
 ) -> crate::error::AppResult<Database> {
     //let mut csv = csv::Reader::from_path(path)?;
-    let mut csv = csv::ReaderBuilder::new().from_path(path)?;
-    let table_name = Database::get_table_name(path).unwrap();
+    let mut csv = csv::ReaderBuilder::new().from_path(&path)?;
+    let table_name = Database::get_table_name(path);
     let table_names = vec![table_name.to_string()];
     let mut queries = String::new();
-    let query = build_create_table_query(&mut csv, table_name).unwrap();
+    let query = build_create_table_query(&mut csv, &table_name).unwrap();
     queries.push_str(&query);
     connection.execute_batch(&queries)?;
     queries.clear();
-    let columns = get_headers_for_query(&mut csv, table_name).unwrap();
+    let columns = get_headers_for_query(&mut csv, &table_name).unwrap();
     let mut database = Database::new(connection)?;
     let limit = 10000;
     let mut i = 0;
@@ -186,9 +187,9 @@ mod tests {
 
     #[test]
     fn write_db_to_out_test() {
-        let mut database1 = Database::try_from(Path::new("assets/data.sqlite")).unwrap();
+        let mut database1 = Database::try_from(PathBuf::from("assets/data.sqlite")).unwrap();
         sqlite_to_out(&database1.connection, PathBuf::from("assets/out-data.csv")).unwrap();
-        let mut database2 = Database::try_from(Path::new("assets/out-data.csv")).unwrap();
+        let mut database2 = Database::try_from(PathBuf::from("assets/out-data.csv")).unwrap();
         let first_row_db1 = database1.get(1, 0, "data".to_string()).unwrap().1;
         let first_row_db2 = database2.get(1, 0, "out-data".to_string()).unwrap().1;
 
