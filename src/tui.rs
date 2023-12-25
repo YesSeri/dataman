@@ -17,12 +17,15 @@ use ratatui::{
     Frame, Terminal,
 };
 
-use crate::{error::log, controller::{Command,CommandWrapper}};
 use crate::model::datarow::DataTable;
 use crate::{
     controller::Controller,
     error::{AppError, AppResult},
     model::database::Database,
+};
+use crate::{
+    controller::{Command, CommandWrapper},
+    error::log,
 };
 
 pub struct TUI {
@@ -130,23 +133,14 @@ impl TUI {
             } else {
                 acc
             }
-        }) + 1;
+        });
 
-        let per_header = (100 - id_space) / headers.len() as u16;
-        log(format!("headers_len: {:?}", headers.len()));
-        log(format!("id_space: {}", id_space));
-        log(format!("per_header: {}", per_header));
-        // total
-        log(format!(
-            "total: {}",
-            per_header * headers.len() as u16 + id_space
-        ));
-        let widths = database.slices[0].column_widths();
+        let per_header = (100 - id_space) / (headers.len() - 1) as u16;
+        let widths: Vec<u16> = database.slices[0].column_widths();
         let sum: u16 = widths.iter().sum();
-        log(format!("sizes: {:?} sum: {:?}", widths, sum));
-        let widths = widths
+        let constraints = widths
             .iter()
-            .map(|w| Constraint::Percentage(*w))
+            .map(|w| Constraint::Min(*w))
             .collect::<Vec<_>>();
         let current_header = database.header_idx;
         // mark current header
@@ -178,7 +172,7 @@ impl TUI {
             .block(Block::default().borders(Borders::ALL).title(table_name))
             .highlight_style(selected_style)
             // .highlight_symbol(">> ")
-            .widths(widths.as_slice())
+            .widths(constraints.as_slice())
             .bg(Color::Black);
         f.render_stateful_widget(t, rects[0], &mut database.slices[0].table_state);
 
