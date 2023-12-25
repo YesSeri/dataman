@@ -33,7 +33,9 @@ impl Database {
             .to_string();
         let rowid: u16 = connection.query_row(&query, [], |row| row.get(0))?;
 
-        let slices = vec![DatabaseSlice::new(vec![], vec![], TableState::default(), 0, 0)];
+        let mut table_state = TableState::new();
+        table_state.select(Some(0));
+        let slices = vec![DatabaseSlice::new(vec![], vec![], table_state, 0, 0)];
 
         let database = Database {
             connection,
@@ -251,8 +253,8 @@ impl Database {
     // go to first match
     pub(crate) fn exact_search(&mut self, search_header: &str, pattern: &str) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
-        let current_row = self.slices[0].row_offset
-            + self.slices[0].table_state.selected().unwrap_or(0) as u32;
+        let current_row =
+            self.slices[0].row_offset + self.slices[0].table_state.selected().unwrap_or(0) as u32;
         let query = query_builder::build_exact_search_query(
             &self.get_ordering(),
             search_header,
@@ -393,8 +395,7 @@ impl Database {
         let i = match self.slices[0].table_state.selected() {
             Some(i) if i == 0 && self.slices[0].row_offset != 0 => {
                 let height = TUI::get_table_height()?;
-                self.slices[0].row_offset =
-                    self.slices[0].row_offset.saturating_sub(height as u32);
+                self.slices[0].row_offset = self.slices[0].row_offset.saturating_sub(height as u32);
                 self.slices[0].has_changed();
                 height as usize - 1
             }

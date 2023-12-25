@@ -64,6 +64,10 @@ impl TUI {
     }
     pub fn draw(controller: &mut Controller) -> AppResult<()> {
         let table_height = TUI::get_table_height().unwrap();
+        log(format!(
+            "idx {:?}",
+            controller.database.slices[0].table_state
+        ));
         controller.ui.terminal.draw(|f| {
             match TUI::update(
                 f,
@@ -111,8 +115,8 @@ impl TUI {
         log(format!("editable: {:?} | trimmed: {:?}", editable, trimmed));
         Ok(trimmed)
     }
-    fn update<B: Backend>(
-        f: &mut Frame<B>,
+    fn update(
+        f: &mut Frame,
         database: &mut Database,
         last_command: &CommandWrapper,
         table_height: u16,
@@ -167,12 +171,11 @@ impl TUI {
         });
         let selected_style = Style::default().add_modifier(Modifier::UNDERLINED);
         let table_name = database.get_current_table_name()?;
-        let t = Table::new(tui_rows)
+        let t = Table::new(tui_rows, constraints)
             .header(header)
             .block(Block::default().borders(Borders::ALL).title(table_name))
             .highlight_style(selected_style)
             // .highlight_symbol(">> ")
-            .widths(constraints.as_slice())
             .bg(Color::Black);
         f.render_stateful_widget(t, rects[0], &mut database.slices[0].table_state);
 
