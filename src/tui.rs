@@ -187,10 +187,11 @@ impl TUI {
             .get(row)
             .map(|el| el.get(0).unwrap().to_string())
             .unwrap_or("xxx".to_owned());
-        let offset = database.slices[0].table_state.offset();
+        let offset = database.slices[0].row_offset;
+        log(format!("cur: {}", (offset as usize) + row));
         let text = vec![Line::from(vec![Span::raw(format!(
             // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
-            "row: {row}, total rows: {total_rows},  last command: {last_command}, height: {table_height}",
+            "row: {row}, offset: {offset}, total rows: {total_rows},  last command: {last_command}",
         ))])];
         let paragraph = Paragraph::new(text);
 

@@ -123,7 +123,7 @@ impl Database {
         let table_name = self.get_current_table_name().ok()?;
         self.connection
             .query_row(
-                &format!("SELECT COUNT(*) FROM {};", table_name),
+                &format!("SELECT COUNT(*) FROM `{}`;", table_name),
                 [],
                 |row| row.get(0),
             )
@@ -270,7 +270,7 @@ impl Database {
         let row_idx = row_number % height as u32;
         let row_offset = row_number - row_idx;
 
-        self.slices[0].update(row_idx, row_offset);
+        self.slices[self.current_table_idx as usize].update(row_idx, row_offset);
         Ok(())
     }
 
