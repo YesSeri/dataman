@@ -32,6 +32,8 @@ fn main() {
 - [ ] table of tables. 
 	- is this a good idea?
 - [ ] histogram
+- [ ] inline editing
+- [ ] rwlock for regex?
 
 from regex docs
 this is better I think than arc mutex stuff I am doing onw.

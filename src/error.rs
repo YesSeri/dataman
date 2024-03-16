@@ -10,24 +10,7 @@ pub enum AppError {
     Parse(csv::Error),
     Regex(regex::Error),
     Sqlite(rusqlite::Error),
-    // IllegalOperation(String),
     Other,
-}
-
-pub fn log(msg: String) {
-    if !CONFIG.verbose {
-        return;
-    }
-    let limit = 300;
-    if msg.len() > limit {
-        eprintln!(
-            "{}\n...\n{}",
-            &msg[..limit / 2],
-            &msg[msg.len() - limit / 2..]
-        );
-    } else {
-        eprintln!("{}", msg);
-    }
 }
 
 impl fmt::Display for AppError {
@@ -37,7 +20,6 @@ impl fmt::Display for AppError {
             AppError::Parse(err) => write!(f, "Csv parsing error: {}", err),
             AppError::Regex(err) => write!(f, "Regex parsing error: {}", err),
             AppError::Sqlite(err) => write!(f, "Sqlite error: {}", err),
-            // AppError::IllegalOperation(err) => write!(f, "Illegal operation error: {}", err),
             AppError::Other => {
                 write!(f, "Other error")
             }
@@ -52,7 +34,6 @@ impl Error for AppError {
             AppError::Parse(err) => Some(err),
             AppError::Regex(err) => Some(err),
             AppError::Sqlite(err) => Some(err),
-            // AppError::IllegalOperation(s) => Some(&AppError::IllegalOperation(s.clone())),
             AppError::Other => Some(self),
         }
     }

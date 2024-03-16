@@ -5,7 +5,7 @@ use csv::{Reader, StringRecord, Writer};
 use rusqlite::{Connection, Rows};
 use serde::Serialize;
 
-use crate::error::{log, AppResult};
+use crate::error::AppResult;
 use crate::model::datarow::DataItem;
 
 use super::database::Database;

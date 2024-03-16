@@ -1,6 +1,6 @@
 use std::vec;
 
-use crate::{error::log, model::datarow::DataItem};
+use crate::model::datarow::DataItem;
 use ratatui::widgets::TableState;
 
 #[derive(Debug)]

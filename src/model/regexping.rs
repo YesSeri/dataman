@@ -1,4 +1,4 @@
-use crate::error::{log, AppResult};
+use crate::error::AppResult;
 
 pub fn build_regex_filter_query(
     header: &str,

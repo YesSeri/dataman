@@ -1,14 +1,14 @@
-use std::error::Error;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::time;
 
 use crossterm::ExecutableCommand;
+use log::info;
 use ratatui::widgets::TableState;
 use rusqlite::types::ValueRef;
 use rusqlite::{backup, params, Connection, Statement};
 
-use crate::error::{log, AppError, AppResult};
+use crate::error::{AppError, AppResult};
 use crate::model::datarow::DataItem;
 use crate::tui::TUI;
 
@@ -46,10 +46,7 @@ impl Database {
             slices,
         };
         if let Err(err) = regexping::custom_functions::add_custom_functions(&database) {
-            log(format!(
-                "Error adding custom functions, e.g. REGEXP: {}",
-                err
-            ));
+            info!( "Error adding custom functions, e.g. REGEXP: {}", err);
             Err(AppError::Sqlite(err))
         } else {
             Ok(database)
@@ -133,7 +130,7 @@ impl Database {
         let table_name = self.get_current_table_name()?;
         let query = format!("SELECT `{}` FROM `{}` WHERE id = ?;", header, table_name);
         let mut stmt = self.prepare(&query)?;
-        log(format!("id: {}", id));
+        info!("id: {}", id);
         let mut rows = stmt.query(params![id])?;
         let row = rows.next()?.unwrap();
         let cell = row.get(0)?;
@@ -141,12 +138,12 @@ impl Database {
         Ok(cell)
     }
     fn prepare(&self, sql: &str) -> rusqlite::Result<Statement> {
-        log(sql.to_string());
+        info!("{sql}");
         self.connection.prepare(sql)
     }
     fn execute<P: rusqlite::Params>(&self, sql: &str, params: P) -> AppResult<()> {
         if cfg!(debug_assertions) {
-            log(sql.to_string());
+            info!("{sql}");
         }
         self.connection.execute(sql, params)?;
         Ok(())
@@ -155,14 +152,14 @@ impl Database {
     pub(super) fn execute_batch(&self, sql: &str) -> AppResult<()> {
         let query = &format!("BEGIN TRANSACTION;\n{}\nCOMMIT;", sql);
         if cfg!(debug_assertions) {
-            log(query.to_string());
+            info!("{query}");
         }
 
         match self.connection.execute_batch(query) {
             Ok(_) => Ok(()),
             Err(err) => {
                 self.execute("ROLLBACK;", [])?;
-                log(format!("Error executing batch query: {}", err));
+                info!("Error executing batch query: {}", err);
                 Err(AppError::Sqlite(err))
             }
         }
@@ -483,9 +480,9 @@ impl Database {
 }
 
 impl TryFrom<PathBuf> for Database {
-    type Error = Box<dyn Error>;
+    type Error = Box<AppError>;
 
-    fn try_from(path: PathBuf) -> Result<Self, Box<dyn Error>> {
+    fn try_from(path: PathBuf) -> Result<Self, Box<AppError>> {
         let extension = path.extension().unwrap().to_str().unwrap();
         match extension {
             "csv" => {

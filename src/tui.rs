@@ -9,6 +9,7 @@ use crossterm::{
     execute,
     terminal::{self, enable_raw_mode},
 };
+use log::info;
 use ratatui::{
     prelude::{Backend, Constraint, CrosstermBackend, Layout},
     style::{Color, Modifier, Style, Stylize},
@@ -23,10 +24,7 @@ use crate::{
     error::{AppError, AppResult},
     model::database::Database,
 };
-use crate::{
-    controller::{Command, CommandWrapper},
-    error::log,
-};
+use crate::controller::{Command, CommandWrapper};
 
 pub struct TUI {
     terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -64,10 +62,7 @@ impl TUI {
     }
     pub fn draw(controller: &mut Controller) -> AppResult<()> {
         let table_height = TUI::get_table_height().unwrap();
-        log(format!(
-            "idx {:?}",
-            controller.database.slices[0].table_state
-        ));
+        info!( "idx {:?}", controller.database.slices[0].table_state);
         controller.ui.terminal.draw(|f| {
             match TUI::update(
                 f,
@@ -106,13 +101,13 @@ impl TUI {
         let mut file = std::fs::File::create(&file_path)?;
         file.write_all(data.as_bytes())?;
 
-        log(format!("editor: {:?} args: {:?}", editor, args));
+        info!("editor: {:?} args: {:?}", editor, args);
         std::process::Command::new(editor).args(args).status()?;
 
         let mut editable = String::new();
         std::fs::File::open(file_path)?.read_to_string(&mut editable)?;
         let trimmed = editable.trim_end_matches('\n').to_string();
-        log(format!("editable: {:?} | trimmed: {:?}", editable, trimmed));
+        info!("editable: {:?} | trimmed: {:?}", editable, trimmed);
         Ok(trimmed)
     }
     fn update(

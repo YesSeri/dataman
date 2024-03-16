@@ -9,14 +9,13 @@ use crossterm::{
     event::{KeyCode, KeyEvent, KeyModifiers},
     ExecutableCommand,
 };
+use log::info;
 
+use crate::error::AppError;
 use crate::model::datarow::DataTable;
 use crate::Config;
 use crate::{error::AppResult, model::database::Database};
-use crate::{
-    error::{log, AppError},
-    tui::TUI,
-};
+use crate::tui::TUI;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CommandWrapper {
@@ -154,7 +153,7 @@ impl From<KeyEvent> for Command {
             KeyCode::Char('X') => Command::DeleteColumn,
             KeyCode::Char('R') => Command::RenameColumn,
             KeyCode::Char(c) => {
-                log(format!("clicked: {c}"));
+                info!("clicked: {c}");
                 Command::None
             }
             _ => Command::None,
@@ -268,7 +267,7 @@ impl Controller {
                         result
                     }
                     Err(result) => {
-                        log(format!("\nAPP ERROR: {:?}", result));
+                        info!("\nAPP ERROR: {:?}", result);
                         self.database.slices[0].has_changed();
 
                         self.set_last_command(CommandWrapper::new(
@@ -279,7 +278,7 @@ impl Controller {
                     }
                 };
                 if let Err(e) = res {
-                    log(format!("\nAPP ERROR: {:?}", e));
+                    info!("\nAPP ERROR: {:?}", e);
 
                     self.database.slices[0].has_changed();
                     self.set_last_command(CommandWrapper::new(
@@ -303,7 +302,7 @@ impl Controller {
 
     pub fn regex_filter(&mut self) -> AppResult<()> {
         let pattern = TUI::get_editor_input("Enter regex")?;
-        log(format!("pattern: {:?}", pattern));
+        info!("pattern: {:?}", pattern);
         let header = self.database.get_current_header()?;
         self.database.regex_filter(&header, &pattern)?;
 
@@ -330,14 +329,12 @@ impl Controller {
                     r"Enter transformation, e.g. '${first} ${second}' or '${1} ${2}' if un-named",
                 )?
             };
-            log(format!(
-                "pattern: {pattern:?}, transformation: {transformation:?}"
-            ));
+            info!( "pattern: {pattern:?}, transformation: {transformation:?}");
 
             self.database
                 .regex_capture_group_transform(&pattern, &header, &transformation)?;
         } else {
-            log(format!("pattern: {pattern:?}"));
+            info!("pattern: {pattern:?}");
             self.database
                 .regex_no_capture_group_transform(&pattern, &header)?;
         }
@@ -353,11 +350,11 @@ impl Controller {
 
     pub(crate) fn edit_cell(&mut self) -> AppResult<()> {
         let header = self.database.get_current_header()?;
-        log(format!("header: {:?}", header));
+        info!("header: {:?}", header);
         let id = self.database.get_current_id()?;
-        log(format!("id: {:?}", id));
+        info!("id: {:?}", id);
         let data = self.database.get_cell(id, &header)?;
-        log(format!("data: {:?}", data));
+        info!("data: {:?}", data);
 
         let result = TUI::get_editor_input(&data)?;
         self.database.update_cell(header.as_str(), id, &result)?;
@@ -369,7 +366,7 @@ impl Controller {
     }
     fn exact_search(&mut self) -> AppResult<()> {
         let pattern = TUI::get_editor_input("Enter regex")?;
-        log(format!("pattern: {:?}", pattern));
+        info!("pattern: {:?}", pattern);
         let header = self.database.get_current_header()?;
         match self.database.exact_search(&header, &pattern) {
             Ok(_) => {
