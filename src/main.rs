@@ -22,15 +22,27 @@ fn main() -> Result<(), AppError> {
 }
 
 fn setup_logging(){
-    // if RUST_LOG is not set, set it to debug if in debug mode
-    let env_rust_log = std::env::var("RUST_LOG");
-    if env_rust_log.is_err() {
-        if cfg!(debug_assertions) {
-            std::env::set_var("RUST_LOG", "debug");
-        } else {
-            std::env::set_var("RUST_LOG", "error");
-        }
-    }
-    env_logger::init();
-    debug!("Running in debug mode");
+    use env_logger::{Builder, Env};
+    use std::io::Write;
+    let env = Env::default();
+
+    Builder::from_env(env)
+        .format(|buf, record| {
+            // We are reusing `anstyle` but there are `anstyle-*` crates to adapt it to your
+            // preferred styling crate.
+            let timestamp = buf.timestamp();
+
+            writeln!(
+                buf,
+                "[{timestamp} {} {}]: {}",
+                record.line().unwrap_or(0),
+                record.level(),
+                record.args()
+                )
+        })
+    .init();
+
+    //env_logger::init();
+    log::info!("a log from `MyLogger`");
 }
+
