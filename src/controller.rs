@@ -9,7 +9,7 @@ use crossterm::{
     event::{KeyCode, KeyEvent, KeyModifiers},
     ExecutableCommand,
 };
-use log::info;
+use log::{error, info};
 
 use crate::error::AppError;
 use crate::model::datarow::DataTable;
@@ -267,7 +267,7 @@ impl Controller {
                         result
                     }
                     Err(result) => {
-                        info!("\nAPP ERROR: {:?}", result);
+                        error!("\nAPP ERROR: {:?}", result);
                         self.database.slices[0].has_changed();
 
                         self.set_last_command(CommandWrapper::new(
@@ -278,7 +278,7 @@ impl Controller {
                     }
                 };
                 if let Err(e) = res {
-                    info!("\nAPP ERROR: {:?}", e);
+                    error!("\nAPP ERROR: {:?}", e);
 
                     self.database.slices[0].has_changed();
                     self.set_last_command(CommandWrapper::new(

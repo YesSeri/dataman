@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time;
 
 use crossterm::ExecutableCommand;
-use log::info;
+use log::{error, info};
 use ratatui::widgets::TableState;
 use rusqlite::types::ValueRef;
 use rusqlite::{backup, params, Connection, Statement};
@@ -159,7 +159,7 @@ impl Database {
             Ok(_) => Ok(()),
             Err(err) => {
                 self.execute("ROLLBACK;", [])?;
-                info!("Error executing batch query: {}", err);
+                error!("Error executing batch query: {}", err);
                 Err(AppError::Sqlite(err))
             }
         }
