@@ -4,16 +4,18 @@
 #![allow(unused_mut)]
 #![allow(unused_assignments)]
 use dataman::{controller::Controller, error::AppError, model::database::Database, tui::TUI, Cli};
-use log::debug;
+use log::{debug, error, info, trace, warn};
 
 fn main() -> Result<(), AppError> {
     // if not release mode, print logs
     // if release mode, logs are not printed
     setup_logging();
     let cli = <Cli as clap::Parser>::parse();
-    let database = Database::try_from(cli.path).unwrap();
+    let path = cli.path;
+    let database = Database::try_from(path).unwrap();
     let tui = TUI::new();
     let mut controller = Controller::new(tui, database);
+    error!("This is an error");
 
     if let Err(err) = controller.run() {
         eprintln!("Program has quit due to error: {err}")
@@ -27,17 +29,20 @@ fn setup_logging(){
     let env = Env::default();
 
     Builder::from_env(env)
-        .format(|buf, record| {
+        .write_style(env_logger::WriteStyle::Always).format(|buf, record| {
             // We are reusing `anstyle` but there are `anstyle-*` crates to adapt it to your
             // preferred styling crate.
             let timestamp = buf.timestamp();
+            let write_style = buf.default_level_style(record.level());
 
             writeln!(
                 buf,
-                "[{timestamp} {} {}]: {}",
-                record.line().unwrap_or(0),
+                "[{} {write_style}{: >5}{write_style:#} {: >3}:{:<22}]: {}",
+                timestamp,
                 record.level(),
-                record.args()
+                record.line().unwrap_or(0),
+                record.file().unwrap_or("file/???"),
+                record.args(),
                 )
         })
     .init();
