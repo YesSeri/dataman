@@ -3,8 +3,13 @@
 #![allow(unused_variables)]
 #![allow(unused_mut)]
 #![allow(unused_assignments)]
+
+use std::io::Write;
+
+use env_logger::{Builder, Env};
+use log::error;
+
 use dataman::{controller::Controller, error::AppError, model::database::Database, tui::TUI, Cli};
-use log::{debug, error, info, trace, warn};
 
 fn main() -> Result<(), AppError> {
     // if not release mode, print logs
@@ -23,15 +28,12 @@ fn main() -> Result<(), AppError> {
     Ok(())
 }
 
-fn setup_logging(){
-    use env_logger::{Builder, Env};
-    use std::io::Write;
+fn setup_logging() {
     let env = Env::default();
 
     Builder::from_env(env)
-        .write_style(env_logger::WriteStyle::Always).format(|buf, record| {
-            // We are reusing `anstyle` but there are `anstyle-*` crates to adapt it to your
-            // preferred styling crate.
+        .write_style(env_logger::WriteStyle::Always)
+        .format(|buf, record| {
             let timestamp = buf.timestamp();
             let write_style = buf.default_level_style(record.level());
 
@@ -43,11 +45,9 @@ fn setup_logging(){
                 record.line().unwrap_or(0),
                 record.file().unwrap_or("file/???"),
                 record.args(),
-                )
+            )
         })
-    .init();
+        .init();
 
-    //env_logger::init();
     log::info!("a log from `MyLogger`");
 }
-

@@ -46,7 +46,7 @@ impl Database {
             slices,
         };
         if let Err(err) = regexping::custom_functions::add_custom_functions(&database) {
-            info!( "Error adding custom functions, e.g. REGEXP: {}", err);
+            info!("Error adding custom functions, e.g. REGEXP: {}", err);
             Err(AppError::Sqlite(err))
         } else {
             Ok(database)

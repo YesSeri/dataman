@@ -13,9 +13,9 @@ use log::{error, info};
 
 use crate::error::AppError;
 use crate::model::datarow::DataTable;
+use crate::tui::TUI;
 use crate::Config;
 use crate::{error::AppResult, model::database::Database};
-use crate::tui::TUI;
 
 #[derive(Debug, Clone)]
 pub(crate) struct CommandWrapper {
@@ -215,7 +215,7 @@ impl Controller {
     pub fn run(&mut self) -> AppResult<()> {
         loop {
             TUI::draw(self)?;
-            if crossterm::event::poll(std::time::Duration::from_millis(3000))? {
+            if event::poll(std::time::Duration::from_millis(3000))? {
                 let res = match if let Event::Key(key) = event::read()? {
                     Ok(Command::from(key))
                 } else {
@@ -329,7 +329,7 @@ impl Controller {
                     r"Enter transformation, e.g. '${first} ${second}' or '${1} ${2}' if un-named",
                 )?
             };
-            info!( "pattern: {pattern:?}, transformation: {transformation:?}");
+            info!("pattern: {pattern:?}, transformation: {transformation:?}");
 
             self.database
                 .regex_capture_group_transform(&pattern, &header, &transformation)?;
@@ -407,8 +407,6 @@ impl Controller {
 
 #[cfg(test)]
 mod test {
-    use std::path::Path;
-
     use super::*;
 
     #[test]

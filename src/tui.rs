@@ -18,13 +18,13 @@ use ratatui::{
     Frame, Terminal,
 };
 
+use crate::controller::{Command, CommandWrapper};
 use crate::model::datarow::DataTable;
 use crate::{
     controller::Controller,
     error::{AppError, AppResult},
     model::database::Database,
 };
-use crate::controller::{Command, CommandWrapper};
 
 pub struct TUI {
     terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -62,7 +62,6 @@ impl TUI {
     }
     pub fn draw(controller: &mut Controller) -> AppResult<()> {
         let table_height = TUI::get_table_height().unwrap();
-        info!( "idx {:?}", controller.database.slices[0].table_state);
         controller.ui.terminal.draw(|f| {
             match TUI::update(
                 f,
