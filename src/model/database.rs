@@ -519,7 +519,8 @@ impl TryFrom<Vec<PathBuf>> for Database {
         {
             let _ = std::fs::remove_file("db.sqlite");
             let connection = Connection::open("db.sqlite").unwrap();
-            let database = converter::database_from_csv(paths.first().unwrap().clone(), connection)?;
+            let database =
+                converter::database_from_csv(paths.first().unwrap().clone(), connection)?;
             for path in paths.iter().skip(1) {
                 insert_csv_data_database(path.clone(), &database.connection)?;
             }
