@@ -15,6 +15,7 @@ pub fn build_exact_search_query(
     );
     query
 }
+
 pub(crate) fn build_text_to_int(table_name: &str, column: &str) -> String {
     build_convert_into(table_name, column, "INT")
 }
@@ -34,6 +35,7 @@ fn build_convert_into(table_name: &str, column: &str, kind: &str) -> String {
     queries.push_str(&update_query);
     queries
 }
+
 pub(crate) fn build_delete_column_query(table_name: &str, column: &str) -> String {
     format!("ALTER TABLE `{table_name}` DROP COLUMN \"{column}\";\n")
 }
@@ -47,6 +49,5 @@ pub(crate) fn build_rename_column_query(
 }
 
 pub fn build_histogram_query(column: &str, table_name: &str) -> String {
-    let query = format!("");
-    query
+    String::new()
 }

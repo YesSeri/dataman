@@ -411,7 +411,7 @@ mod test {
 
     #[test]
     fn copy_column_test() {
-        let p = PathBuf::from("assets/data.csv");
+        let p = vec![PathBuf::from("assets/data.csv")];
         let mut database = Database::try_from(p).unwrap();
         let copy_fun = |s: String| Some(s.to_string());
 
@@ -428,7 +428,7 @@ mod test {
 
     #[test]
     fn copy_column_long_test() {
-        let p = PathBuf::from("assets/data-long.csv");
+        let p = vec![PathBuf::from("assets/data-long.csv")];
         let mut database = Database::try_from(p).unwrap();
 
         let copy_fun = |s: String| Some(s.to_string());

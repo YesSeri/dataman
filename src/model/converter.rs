@@ -5,60 +5,57 @@ use csv::{Reader, StringRecord, Writer};
 use rusqlite::{Connection, Rows};
 use serde::Serialize;
 
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::model::datarow::DataItem;
 
 use super::database::Database;
 
-pub(crate) fn database_from_csv(
-    path: PathBuf,
-    connection: Connection,
-) -> crate::error::AppResult<Database> {
-    //let mut csv = csv::Reader::from_path(path)?;
-    let mut csv = csv::ReaderBuilder::new().from_path(&path)?;
-    let table_name = Database::get_table_name(path);
-    let table_names = vec![table_name.to_string()];
-    let mut queries = String::new();
-    let query = build_create_table_query(&mut csv, &table_name).unwrap();
-    queries.push_str(&query);
-    connection.execute_batch(&queries)?;
-    queries.clear();
-    let columns = get_headers_for_query(&mut csv, &table_name).unwrap();
+pub(crate) fn database_from_csv(path: PathBuf, connection: Connection) -> AppResult<Database> {
+    // let mut csv = csv::ReaderBuilder::new().from_path(&path)?;
+    // let table_name = Database::get_table_name(path);
+    // let table_names = vec![table_name.to_string()];
+    // let mut queries = String::new();
+    // let query = build_create_table_query(&mut csv, &table_name).unwrap();
+    // queries.push_str(&query);
+    // connection.execute_batch(&queries)?;
+    // queries.clear();
+    // let columns = get_headers_for_query(&mut csv, &table_name).unwrap();
+    insert_csv_data_database(path, &connection)?;
     let mut database = Database::new(connection)?;
-    let limit = 10000;
-    let mut i = 0;
-
-    let records = csv.records();
-    // let capacity = if len < limit { len + 3 } else { limit + 3 };
-    let mut items = Vec::with_capacity(limit);
-    for record in records {
-        let record = record?;
-        let result = build_value_query(&record);
-        items.push(result);
-        i += 1;
-        if i == limit {
-            i = 0;
-            queries.clear();
-            queries = format!(
-                "INSERT INTO '{}' ({}) VALUES \n{};",
-                table_name,
-                columns,
-                items.join(",\n")
-            );
-            database.connection.execute_batch(&queries)?;
-            items.clear();
-        }
-    }
-    if !items.is_empty() {
-        queries.clear();
-        queries = format!(
-            "INSERT INTO '{}' ({}) VALUES {};",
-            table_name,
-            columns,
-            items.join(",")
-        );
-        database.connection.execute_batch(&queries)?;
-    }
+    // let limit = 10000;
+    // let mut i = 0;
+    //
+    // let records = csv.records();
+    // // let capacity = if len < limit { len + 3 } else { limit + 3 };
+    // let mut items = Vec::with_capacity(limit);
+    // for record in records {
+    //     let record = record?;
+    //     let result = build_value_query(&record);
+    //     items.push(result);
+    //     i += 1;
+    //     if i == limit {
+    //         i = 0;
+    //         queries.clear();
+    //         queries = format!(
+    //             "INSERT INTO '{}' ({}) VALUES \n{};",
+    //             table_name,
+    //             columns,
+    //             items.join(",\n")
+    //         );
+    //         database.connection.execute_batch(&queries)?;
+    //         items.clear();
+    //     }
+    // }
+    // if !items.is_empty() {
+    //     queries.clear();
+    //     queries = format!(
+    //         "INSERT INTO '{}' ({}) VALUES {};",
+    //         table_name,
+    //         columns,
+    //         items.join(",")
+    //     );
+    //     database.connection.execute_batch(&queries)?;
+    // }
     let query =
         "SELECT rowid FROM sqlite_master WHERE type='table' ORDER BY rowid LIMIT 1;".to_string();
     let table_idx: u16 = database
@@ -66,10 +63,6 @@ pub(crate) fn database_from_csv(
         .query_row(&query, [], |row| row.get(0))?;
     database.current_table_idx = table_idx;
 
-    let query = format!(
-        "SELECT * FROM `{}` ORDER BY rowid ASC LIMIT 50 OFFSET 0;",
-        table_name,
-    );
     Ok(database)
 }
 
@@ -88,7 +81,7 @@ fn build_value_query(record: &StringRecord) -> String {
     format!("({})", row)
 }
 
-pub(crate) fn database_from_sqlite(connection: Connection) -> crate::error::AppResult<Database> {
+pub(crate) fn database_from_sqlite(connection: Connection) -> AppResult<Database> {
     let database = Database::new(connection)?;
 
     Ok(database)
@@ -130,7 +123,7 @@ pub(crate) fn get_headers_for_query(
     Ok(columns)
 }
 
-pub(crate) fn sqlite_to_out(connection: &Connection, path: path::PathBuf) -> AppResult<()> {
+pub(crate) fn sqlite_to_out(connection: &Connection, path: PathBuf) -> AppResult<()> {
     let mut stmt =
         connection.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")?;
 
@@ -187,9 +180,9 @@ mod tests {
 
     #[test]
     fn write_db_to_out_test() {
-        let mut database1 = Database::try_from(PathBuf::from("assets/data.sqlite")).unwrap();
+        let mut database1 = Database::try_from(vec![PathBuf::from("assets/data.sqlite")]).unwrap();
         sqlite_to_out(&database1.connection, PathBuf::from("assets/out-data.csv")).unwrap();
-        let mut database2 = Database::try_from(PathBuf::from("assets/out-data.csv")).unwrap();
+        let mut database2 = Database::try_from(vec![PathBuf::from("assets/out-data.csv")]).unwrap();
         let first_row_db1 = database1.get(1, 0, "data".to_string()).unwrap().1;
         let first_row_db2 = database2.get(1, 0, "out-data".to_string()).unwrap().1;
 
@@ -200,4 +193,55 @@ mod tests {
             assert_eq!(item, first_row_db2.get(i).unwrap());
         }
     }
+}
+
+pub(crate) fn insert_csv_data_database(
+    path: PathBuf,
+    connection: &Connection,
+) -> Result<(), AppError> {
+    let mut csv = csv::ReaderBuilder::new().from_path(&path)?;
+    let table_name = Database::get_table_name(path);
+    let table_names = vec![table_name.to_string()];
+    let mut queries = String::new();
+    let query = build_create_table_query(&mut csv, &table_name).unwrap();
+    queries.push_str(&query);
+    connection.execute_batch(&queries)?;
+    queries.clear();
+    let columns = get_headers_for_query(&mut csv, &table_name).unwrap();
+    let limit = 10000;
+    let mut i = 0;
+
+    let records = csv.records();
+    // let capacity = if len < limit { len + 3 } else { limit + 3 };
+    let mut items = Vec::with_capacity(limit);
+    for record in records {
+        let record = record?;
+        let result = build_value_query(&record);
+        items.push(result);
+        i += 1;
+        if i == limit {
+            i = 0;
+            queries.clear();
+            queries = format!(
+                "INSERT INTO '{}' ({}) VALUES \n{};",
+                table_name,
+                columns,
+                items.join(",\n")
+            );
+            connection.execute_batch(&queries)?;
+            items.clear();
+        }
+    }
+    if !items.is_empty() {
+        queries.clear();
+        queries = format!(
+            "INSERT INTO '{}' ({}) VALUES {};",
+            table_name,
+            columns,
+            items.join(",")
+        );
+        connection.execute_batch(&queries)?;
+    }
+
+    Ok(())
 }

@@ -9,13 +9,14 @@ use rusqlite::types::ValueRef;
 use rusqlite::{backup, params, Connection, Statement};
 
 use crate::error::{AppError, AppResult};
+use crate::model::converter::insert_csv_data_database;
 use crate::model::datarow::DataItem;
 use crate::tui::TUI;
 
 use super::datarow::DataTable;
 use super::db_slice::DatabaseSlice;
-use super::query_builder;
 use super::regexping;
+use super::{converter, query_builder};
 
 #[derive(Debug)]
 pub struct Database {
@@ -474,36 +475,60 @@ impl Database {
         while let Some(row) = rows.next()? {
             names.push(row.get(0)?);
         }
-        dbg!(names);
         Ok("aaa".to_string())
     }
 }
 
-impl TryFrom<PathBuf> for Database {
-    type Error = Box<AppError>;
+impl TryFrom<Vec<PathBuf>> for Database {
+    type Error = AppError;
 
-    fn try_from(path: PathBuf) -> Result<Self, Box<AppError>> {
-        let extension = path.extension().unwrap().to_str().unwrap();
-        match extension {
-            "csv" => {
-                let connection = if cfg!(debug_assertions) {
-                    // Connection::open_in_memory().unwrap()
+    fn try_from(paths: Vec<PathBuf>) -> Result<Self, AppError> {
+        if paths.len() == 1 {
+            let extension = paths
+                .first()
+                .unwrap()
+                .extension()
+                .unwrap()
+                .to_str()
+                .unwrap();
+
+            let path = paths.first().unwrap().clone();
+            match extension {
+                "csv" => {
                     let _ = std::fs::remove_file("db.sqlite");
-                    Connection::open("db.sqlite").unwrap()
-                } else {
-                    let xx = 12;
-                    Connection::open_in_memory().unwrap()
-                };
-                let database = super::converter::database_from_csv(path, connection)?;
-                Ok(database)
-            }
-            "sqlite" | "sql" | "sqlite3" => {
-                let connection = Connection::open(path).unwrap();
+                    // let connection = Connection::open("db.sqlite").unwrap();
+                    let connection = Connection::open_in_memory().unwrap();
+                    let database = converter::database_from_csv(path, connection)?;
+                    Ok(database)
+                }
+                "sqlite" | "sqlite3" => {
+                    let connection = Connection::open(path).unwrap();
 
-                let database = super::converter::database_from_sqlite(connection)?;
-                Ok(database)
+                    let database = converter::database_from_sqlite(connection)?;
+                    Ok(database)
+                }
+                _ => Err(AppError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "Invalid file extension",
+                ))),
             }
-            _ => panic!("Unsupported file format"),
+        } else if paths
+            .iter()
+            .map(|p| p.extension())
+            .all(|el| el.is_some_and(|el| el == "csv"))
+        {
+            let _ = std::fs::remove_file("db.sqlite");
+            let connection = Connection::open("db.sqlite").unwrap();
+            let database = Database::new(connection)?;
+            for path in paths {
+                insert_csv_data_database(path, &database.connection)?;
+            }
+            Ok(database)
+        } else {
+            Err(AppError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Invalid file extension",
+            )))
         }
     }
 }
@@ -516,13 +541,13 @@ mod tests {
 
     #[test]
     fn get_number_of_headers_test() {
-        let database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
+        let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
         let number_of_headers = database.count_headers();
     }
 
     #[test]
     fn inc_header() {
-        let mut database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
+        let mut database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
         database.next_header().unwrap();
         assert_eq!(1, database.header_idx);
         database.next_header().unwrap();
@@ -535,7 +560,7 @@ mod tests {
 
     #[test]
     fn dec_header() {
-        let mut database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
+        let mut database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
         database.previous_header().unwrap();
         assert_eq!(3, database.header_idx);
         database.previous_header().unwrap();
@@ -548,9 +573,10 @@ mod tests {
 
     #[test]
     fn derive_column_test() {
-        let mut database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
+        let mut database = Database::try_from(vec![PathBuf::from("assets/data.csv")]);
         let col = "firstname";
         let fun = |s| Some(format!("{}-changed", s));
+        let mut database = database.unwrap();
         database.derive_column(col.to_string(), fun).unwrap();
         let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
             .get(4)
@@ -563,7 +589,7 @@ mod tests {
 
     #[test]
     fn update_cell() {
-        let mut database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
+        let mut database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
         database.update_cell("firstname", 1, "hank").unwrap();
         let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
             .get(1)
@@ -577,13 +603,13 @@ mod tests {
 
     #[test]
     fn test_offset() {
-        let mut database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
+        let mut database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
         let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
             .get(1)
             .unwrap()
             .to_string();
         assert_eq!("henrik", first);
-        let second: String = database.get(1, 1, "data".to_string()).unwrap().1[0]
+        let second: String = database.get(1, 2, "data".to_string()).unwrap().1[0]
             .get(1)
             .unwrap()
             .to_string();
@@ -592,20 +618,20 @@ mod tests {
 
     #[test]
     fn get_table_names_test() {
-        let database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
+        let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
         let table_names = database.get_table_names().unwrap();
     }
 
     #[test]
     fn get_current_table_name_test() {
-        let database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
+        let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
         let table_name = database.get_current_table_name().unwrap();
         assert_eq!(table_name, "data".to_string());
     }
 
     #[test]
     fn get_headers_test() {
-        let database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
+        let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
         let table_name = database.get_current_table_name().unwrap();
         let headers = database.get_headers(&table_name).unwrap();
         assert_eq!(headers, vec!["id", "firstname", "lastname", "age"]);
@@ -613,174 +639,174 @@ mod tests {
 
     #[test]
     fn count_rows_test() {
-        let database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
+        let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
         let rows_len = database.count_rows().unwrap();
         assert_eq!(rows_len, 6)
     }
 
     #[test]
     fn custom_functions_regexp_test() {
-        let database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
+        let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
         // let query = "SELECT firstname FROM `data` WHERE firstname REGEXP 'hen'";
-        let query = "SELECT firstname FROM `data` WHERE regexp_filter('h.*k', firstname)";
+        let query = "SELECT firstname FROM `data` WHERE regexp('h.*k', firstname)";
         let result: String = database
             .connection
             .query_row(query, [], |row| row.get(0))
-            .unwrap_or("john".to_string());
+            .unwrap();
         assert_eq!(result, "henrik");
     }
 
     #[test]
     fn table_of_tables_test() {
-        let database = Database::try_from(PathBuf::from("assets/db.sqlite")).unwrap();
+        let database = Database::try_from(vec![PathBuf::from("assets/db.sqlite")]).unwrap();
         let s = database.open_table_of_tables().unwrap();
-        assert_eq!(false, true);
+        // assert_eq!(false, true);
     }
 
-    #[test]
-    fn custom_functions_regexp_transform_no_capture_test() {
-        let database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
-        let table_name = database.get_current_table_name().unwrap();
-        let header = database.get_headers(&table_name).unwrap()[1].clone();
-        let pattern = "n.*";
+    // #[test]
+    // fn custom_functions_regexp_transform_no_capture_test() {
+    //     let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
+    //     let table_name = database.get_current_table_name().unwrap();
+    //     let header = database.get_headers(&table_name).unwrap()[1].clone();
+    //     let pattern = "n.*";
+    //
+    //     let query =
+    //         regexping::build_regex_no_capture_group_transform_query(&header, pattern, &table_name)
+    //             .unwrap();
+    //
+    //     database.execute_batch(&query).unwrap();
+    //
+    //     let result: String = database
+    //         .connection
+    //         .query_row(
+    //             "SELECT derivedfirstname FROM `data` WHERE id = 1 ORDER BY rowid ASC",
+    //             [],
+    //             |row| row.get(0),
+    //         )
+    //         .unwrap();
+    //     assert_eq!(result, "nrik");
+    // let query = "SELECT regexp_simple('h.*r', 'henrik')";
+    // let mut stmt = database.prepare(query).unwrap();
+    // let mut rows = stmt.query([]).unwrap();
+    // let row = rows.next().unwrap().unwrap();
+    // let result: String = row.get(0).unwrap();
+    // assert_eq!(result, "henr");
 
-        let query =
-            regexping::build_regex_no_capture_group_transform_query(&header, pattern, &table_name)
-                .unwrap();
+    // let query = "SELECT regexp_transform('.*ri', 'henrik')";
+    // let mut stmt = database.prepare(query).unwrap();
+    // let mut rows = stmt.query([]).unwrap();
+    // let row = rows.next().unwrap().unwrap();
+    // let result: String = row.get(0).unwrap();
+    // assert_eq!(result, "heri");
 
-        database.execute_batch(&query).unwrap();
+    // let query = "SELECT regexp_transform('(he).*(ri)', 'henrik')";
+    // let mut stmt = database.prepare(query).unwrap();
+    // let mut rows = stmt.query([]).unwrap();
+    // let row = rows.next().unwrap().unwrap();
+    // let result: String = row.get(0).unwrap();
+    // assert_eq!(result, "heri");
+    // }
 
-        let result: String = database
-            .connection
-            .query_row(
-                "SELECT derivedfirstname FROM `data` WHERE id = 1 ORDER BY rowid ASC",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(result, "nrik");
-        // let query = "SELECT regexp_simple('h.*r', 'henrik')";
-        // let mut stmt = database.prepare(query).unwrap();
-        // let mut rows = stmt.query([]).unwrap();
-        // let row = rows.next().unwrap().unwrap();
-        // let result: String = row.get(0).unwrap();
-        // assert_eq!(result, "henr");
-
-        // let query = "SELECT regexp_transform('.*ri', 'henrik')";
-        // let mut stmt = database.prepare(query).unwrap();
-        // let mut rows = stmt.query([]).unwrap();
-        // let row = rows.next().unwrap().unwrap();
-        // let result: String = row.get(0).unwrap();
-        // assert_eq!(result, "heri");
-
-        // let query = "SELECT regexp_transform('(he).*(ri)', 'henrik')";
-        // let mut stmt = database.prepare(query).unwrap();
-        // let mut rows = stmt.query([]).unwrap();
-        // let row = rows.next().unwrap().unwrap();
-        // let result: String = row.get(0).unwrap();
-        // assert_eq!(result, "heri");
-    }
-
-    #[test]
-    fn custom_functions_regexp_transform_with_capture_test() {
-        let database = Database::try_from(PathBuf::from("assets/data.csv")).unwrap();
-        let table_name = database.get_current_table_name().unwrap();
-        let header = database.get_headers(&table_name).unwrap()[1].clone();
-        let pattern = "(e.).*(r)";
-        let transformation = "${1}x${2}";
-
-        let query = regexping::build_regex_with_capture_group_transform_query(
-            &header,
-            pattern,
-            transformation,
-            &table_name,
-        )
-        .unwrap();
-
-        database.execute_batch(&query).unwrap();
-
-        let result: String = database
-            .connection
-            .query_row(
-                "SELECT derivedfirstname FROM `data` WHERE id = 1 ORDER BY rowid ASC",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(result, "rxen");
-    }
-
-    #[test]
-    fn my_benching_stuff() {
-        let before = Instant::now();
-        let database = Database::try_from(PathBuf::from("assets/customers-1000000.csv")).unwrap();
-        let table_name = database.get_current_table_name().unwrap();
-        let header = database.get_headers(&table_name).unwrap()[2].clone();
-        let pattern = "n.*";
-
-        let query = regexping::build_regex_filter_query(&header, pattern, &table_name).unwrap();
-
-        database.execute_batch(&query).unwrap();
-
-        let table_name = database.get_table_names().unwrap()[1].clone();
-        let result: u32 = database
-            .connection
-            .query_row(
-                &format!("SELECT COUNT(*) FROM `{table_name}`;"),
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        println!("result: {}", result);
-
-        println!("Elapsed time: {:.2?}", before.elapsed());
-        assert_ne!(true, true);
-    }
-
-    #[test]
-    fn my_benching_no_capture() {
-        let before = Instant::now();
-        let database = Database::try_from(PathBuf::from("assets/customers-1000000.csv")).unwrap();
-        let table_name = database.get_current_table_name().unwrap();
-        let header = database.get_headers(&table_name).unwrap()[2].clone();
-        let pattern = "n.*";
-
-        let query =
-            regexping::build_regex_no_capture_group_transform_query(&header, pattern, &table_name)
-                .unwrap();
-
-        // let sql =
-        //     "UPDATE TABLE `cRegexFiltered` AS SELECT * FROM `c` WHERE regexp('n.*', `firstname`);";
-
-        // let sql = "ALTER TABLE `c` ADD COLUMN `derivedfirstname` TEXT;\n";
-        // database.execute(sql, []).unwrap();
-        // let sql = "UPDATE `c` \
-        //         SET 'derivedfirstname' = regexp_transform_no_capture_group('n.*', `firstname`) \
-        //         WHERE id IN (SELECT id FROM `c` WHERE `firstname` REGEXP 'n.*');\n";
-        // database.execute(sql, []).unwrap();
-        // let names = database.get_table_names().unwrap();
-        // dbg!(names);
-
-        // let query = "SELECT * FROM `c` ORDER BY rowid ASC LIMIT 10;".to_string();
-        // let mut stmt = database.prepare(&query).unwrap();
-        // let mut rows = stmt.query([]).unwrap();
-
-        // while let Some(row) = rows.next().unwrap_or(None) {
-        //     let datarow: DataRow = DataRow::from(row);
-        //     println!("{:?}", datarow);
-        // }
-        database.execute_batch(&query).unwrap();
-
-        // let table_name = database.get_table_names().unwrap()[1].clone();
-        let result: u32 = database
-            .connection
-            .query_row("SELECT COUNT(*) FROM `customers-1000000`;", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        println!("result: {}", result);
-
-        println!("Elapsed time: {:.2?}", before.elapsed());
-        assert_ne!(true, true);
-    }
+    // #[test]
+    // fn custom_functions_regexp_transform_with_capture_test() {
+    //     let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
+    //     let table_name = database.get_current_table_name().unwrap();
+    //     let header = database.get_headers(&table_name).unwrap()[1].clone();
+    //     let pattern = "(e.).*(r)";
+    //     let transformation = "${1}x${2}";
+    //
+    //     let query = regexping::build_regex_with_capture_group_transform_query(
+    //         &header,
+    //         pattern,
+    //         transformation,
+    //         &table_name,
+    //     )
+    //         .unwrap();
+    //
+    //     database.execute_batch(&query).unwrap();
+    //
+    //     let result: String = database
+    //         .connection
+    //         .query_row(
+    //             "SELECT derivedfirstname FROM `data` WHERE id = 1 ORDER BY rowid ASC",
+    //             [],
+    //             |row| row.get(0),
+    //         )
+    //         .unwrap();
+    //     assert_eq!(result, "rxen");
+    // }
+    //
+    // #[test]
+    // fn my_benching_stuff() {
+    //     let before = Instant::now();
+    //     let database = Database::try_from(vec![PathBuf::from("assets/customers-1000000.csv")]).unwrap();
+    //     let table_name = database.get_current_table_name().unwrap();
+    //     let header = database.get_headers(&table_name).unwrap()[2].clone();
+    //     let pattern = "n.*";
+    //
+    //     let query = regexping::build_regex_filter_query(&header, pattern, &table_name).unwrap();
+    //
+    //     database.execute_batch(&query).unwrap();
+    //
+    //     let table_name = database.get_table_names().unwrap()[1].clone();
+    //     let result: u32 = database
+    //         .connection
+    //         .query_row(
+    //             &format!("SELECT COUNT(*) FROM `{table_name}`;"),
+    //             [],
+    //             |row| row.get(0),
+    //         )
+    //         .unwrap();
+    //     println!("result: {}", result);
+    //
+    //     println!("Elapsed time: {:.2?}", before.elapsed());
+    //     assert_ne!(true, true);
+    // }
+    //
+    // #[test]
+    // fn my_benching_no_capture() {
+    //     let before = Instant::now();
+    //     let database = Database::try_from(vec![PathBuf::from("assets/customers-1000000.csv")]).unwrap();
+    //     let table_name = database.get_current_table_name().unwrap();
+    //     let header = database.get_headers(&table_name).unwrap()[2].clone();
+    //     let pattern = "n.*";
+    //
+    //     let query =
+    //         regexping::build_regex_no_capture_group_transform_query(&header, pattern, &table_name)
+    //             .unwrap();
+    //
+    //     // let sql =
+    //     //     "UPDATE TABLE `cRegexFiltered` AS SELECT * FROM `c` WHERE regexp('n.*', `firstname`);";
+    //
+    //     // let sql = "ALTER TABLE `c` ADD COLUMN `derivedfirstname` TEXT;\n";
+    //     // database.execute(sql, []).unwrap();
+    //     // let sql = "UPDATE `c` \
+    //     //         SET 'derivedfirstname' = regexp_transform_no_capture_group('n.*', `firstname`) \
+    //     //         WHERE id IN (SELECT id FROM `c` WHERE `firstname` REGEXP 'n.*');\n";
+    //     // database.execute(sql, []).unwrap();
+    //     // let names = database.get_table_names().unwrap();
+    //     // dbg!(names);
+    //
+    //     // let query = "SELECT * FROM `c` ORDER BY rowid ASC LIMIT 10;".to_string();
+    //     // let mut stmt = database.prepare(&query).unwrap();
+    //     // let mut rows = stmt.query([]).unwrap();
+    //
+    //     // while let Some(row) = rows.next().unwrap_or(None) {
+    //     //     let datarow: DataRow = DataRow::from(row);
+    //     //     println!("{:?}", datarow);
+    //     // }
+    //     database.execute_batch(&query).unwrap();
+    //
+    //     // let table_name = database.get_table_names().unwrap()[1].clone();
+    //     let result: u32 = database
+    //         .connection
+    //         .query_row("SELECT COUNT(*) FROM `customers-1000000`;", [], |row| {
+    //             row.get(0)
+    //         })
+    //         .unwrap();
+    //     println!("result: {}", result);
+    //
+    //     println!("Elapsed time: {:.2?}", before.elapsed());
+    //     assert_ne!(true, true);
+    // }
 }

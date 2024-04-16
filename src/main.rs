@@ -5,27 +5,39 @@
 #![allow(unused_assignments)]
 
 use std::io::Write;
+use std::path::PathBuf;
+use std::process::exit;
 
 use env_logger::{Builder, Env};
 use log::error;
 
 use dataman::{controller::Controller, error::AppError, model::database::Database, tui::TUI, Cli};
 
-fn main() -> Result<(), AppError> {
+fn main() {
     // if not release mode, print logs
     // if release mode, logs are not printed
     setup_logging();
-    let cli = <Cli as clap::Parser>::parse();
-    let path = cli.path;
-    let database = Database::try_from(path).unwrap();
-    let tui = TUI::new();
-    let mut controller = Controller::new(tui, database);
-    error!("This is an error");
+    let mut controller = setup_application().unwrap_or_else(|err| {
+        eprintln!("Could not start due to: {err}");
+        exit(1);
+        // '1' indicates an error setting up the application,
+        // dunno if this is a good way to do it,
+        // should probably be more fine-grained.
+    });
 
     if let Err(err) = controller.run() {
-        eprintln!("Program has quit due to error: {err}")
+        eprintln!("Program has quit due to error: {err}");
+        exit(2);
+        // '2' indicates an error running the application
     }
-    Ok(())
+}
+
+fn setup_application() -> Result<Controller, AppError> {
+    let cli = <Cli as clap::Parser>::parse();
+    let paths = cli.paths;
+    let database = Database::try_from(paths)?;
+    let tui = TUI::new();
+    Ok(Controller::new(tui, database))
 }
 
 fn setup_logging() {

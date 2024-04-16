@@ -14,6 +14,7 @@ pub mod tui;
 pub struct Config {
     verbose: bool,
 }
+
 impl Config {
     pub fn new(verbose: bool) -> Self {
         Self { verbose }
@@ -33,8 +34,8 @@ static CONFIG: Lazy<Config> = Lazy::new(|| {
     long_about = "Parse csv files and explore them in a friendly TUI"
 )]
 pub struct Cli {
-    /// CSV file to use
-    pub path: std::path::PathBuf,
+    pub paths: Vec<std::path::PathBuf>,
+
     #[arg(short, long)]
     pub verbose: bool,
 }

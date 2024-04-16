@@ -125,7 +125,7 @@ impl TUI {
         let (headers, rows): DataTable =
             database.get(100, database.slices[0].row_offset, table_name)?;
         let id_space: u16 = rows.iter().fold(0, |acc, row| {
-            let id = row.get(0).unwrap().to_string().len() as u16;
+            let id = row.first().unwrap().to_string().len() as u16;
             if id > acc {
                 id
             } else {
@@ -179,7 +179,7 @@ impl TUI {
         // let rowid = rows.get(b).unwrap().data.get(0);
         let rowid = rows
             .get(row)
-            .map(|el| el.get(0).unwrap().to_string())
+            .map(|el| el.first().unwrap().to_string())
             .unwrap_or("xxx".to_owned());
         let offset = database.slices[0].table_state.offset();
         let text = vec![Line::from(vec![Span::raw(format!(
