@@ -1,5 +1,6 @@
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
+use std::process::id;
 use std::time;
 
 use crossterm::ExecutableCommand;
@@ -160,7 +161,7 @@ impl Database {
             Ok(_) => Ok(()),
             Err(err) => {
                 self.execute("ROLLBACK;", [])?;
-                error!("Error executing batch query: {}", err);
+                info!("Error executing batch query: {}", err);
                 Err(AppError::Sqlite(err))
             }
         }
@@ -483,6 +484,12 @@ impl TryFrom<Vec<PathBuf>> for Database {
     type Error = AppError;
 
     fn try_from(paths: Vec<PathBuf>) -> Result<Self, AppError> {
+        if paths.is_empty() {
+            return Err(AppError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "No file paths provided",
+            )));
+        }
         if paths.len() == 1 {
             let extension = paths
                 .first()
@@ -528,8 +535,7 @@ impl TryFrom<Vec<PathBuf>> for Database {
         } else {
             Err(AppError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "Invalid file extension",
-            )))
+                "Invalid file extension. One or several csv files or a single sqlite3 database can be provided.")))
         }
     }
 }

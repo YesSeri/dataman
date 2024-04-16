@@ -267,7 +267,6 @@ impl Controller {
                         result
                     }
                     Err(result) => {
-                        error!("\nAPP ERROR: {:?}", result);
                         self.database.slices[0].has_changed();
 
                         self.set_last_command(CommandWrapper::new(
@@ -278,8 +277,6 @@ impl Controller {
                     }
                 };
                 if let Err(e) = res {
-                    error!("\nAPP ERROR: {:?}", e);
-
                     self.database.slices[0].has_changed();
                     self.set_last_command(CommandWrapper::new(
                         Command::IllegalOperation,

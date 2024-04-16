@@ -18,7 +18,7 @@ fn main() {
     // if release mode, logs are not printed
     setup_logging();
     let mut controller = setup_application().unwrap_or_else(|err| {
-        eprintln!("Could not start due to: {err}");
+        eprintln!("Could not start due to {err}");
         exit(1);
         // '1' indicates an error setting up the application,
         // dunno if this is a good way to do it,
