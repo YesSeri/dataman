@@ -35,7 +35,6 @@ static CONFIG: Lazy<Config> = Lazy::new(|| {
 )]
 pub struct Cli {
     pub paths: Vec<std::path::PathBuf>,
-
     #[arg(short, long)]
     pub verbose: bool,
 }

@@ -71,8 +71,7 @@ impl TUI {
             ) {
                 Ok(_) => (),
                 Err(err) => {
-                    terminal::disable_raw_mode().unwrap();
-                    panic!("error in update");
+                    log::error!("Error updating TUI: {:?}", err);
                 }
             }
         })?;
@@ -133,7 +132,6 @@ impl TUI {
             }
         });
 
-        let per_header = (100 - id_space) / (headers.len() - 1) as u16;
         let widths: Vec<u16> = database.slices[0].column_widths();
         let sum: u16 = widths.iter().sum();
         let constraints = widths
@@ -155,7 +153,7 @@ impl TUI {
         }))
         .height(1);
 
-        // // draw border under header
+        // draw border under header
         let tui_rows = rows.iter().map(|data_row| {
             let data_row = data_row
                 .iter()
