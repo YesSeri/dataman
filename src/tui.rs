@@ -18,8 +18,11 @@ use ratatui::{
     Frame, Terminal,
 };
 
-use crate::controller::{Command, CommandWrapper};
 use crate::model::datarow::DataTable;
+use crate::{
+    app_error_other,
+    controller::{Command, CommandWrapper},
+};
 use crate::{
     controller::Controller,
     error::{AppError, AppResult},
@@ -83,7 +86,7 @@ impl TUI {
             let command = Command::from(key);
             Ok(command)
         } else {
-            Err(AppError::Other)
+            Err(app_error_other!("Could not get input."))
         }
     }
 

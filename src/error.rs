@@ -1,6 +1,5 @@
-use std::{error::Error, fmt};
-
 use crate::CONFIG;
+use std::{error::Error, fmt};
 
 pub type AppResult<T> = Result<T, AppError>;
 
@@ -10,7 +9,7 @@ pub enum AppError {
     Parse(csv::Error),
     Regex(regex::Error),
     Sqlite(rusqlite::Error),
-    Other,
+    Other(Option<String>),
 }
 
 impl fmt::Display for AppError {
@@ -20,9 +19,8 @@ impl fmt::Display for AppError {
             AppError::Parse(err) => write!(f, "Csv parsing error: {}", err),
             AppError::Regex(err) => write!(f, "Regex parsing error: {}", err),
             AppError::Sqlite(err) => write!(f, "Sqlite error: {}", err),
-            AppError::Other => {
-                write!(f, "Other error")
-            }
+            AppError::Other(Some(msg)) => write!(f, "Other error: {}", msg),
+            AppError::Other(None) => write!(f, "Other error: no msg"),
         }
     }
 }
@@ -34,7 +32,7 @@ impl Error for AppError {
             AppError::Parse(err) => Some(err),
             AppError::Regex(err) => Some(err),
             AppError::Sqlite(err) => Some(err),
-            AppError::Other => Some(self),
+            AppError::Other(_) => Some(self),
         }
     }
 }
@@ -60,4 +58,15 @@ impl From<rusqlite::Error> for AppError {
     fn from(err: rusqlite::Error) -> AppError {
         AppError::Sqlite(err)
     }
+}
+
+#[macro_export]
+macro_rules! app_error_other {
+    ($expression:expr) => {
+        if ($expression.is_empty()) {
+            AppError::Other(None)
+        } else {
+            AppError::Other(Some($expression.to_owned()))
+        }
+    };
 }

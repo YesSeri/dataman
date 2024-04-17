@@ -5,6 +5,7 @@ use csv::{Reader, StringRecord, Writer};
 use rusqlite::{Connection, Rows};
 use serde::Serialize;
 
+use crate::app_error_other;
 use crate::error::{AppError, AppResult};
 use crate::model::datarow::DataItem;
 
@@ -22,18 +23,18 @@ pub(crate) fn database_from_csv(path: PathBuf, connection: Connection) -> AppRes
     // let columns = get_headers_for_query(&mut csv, &table_name).unwrap();
     insert_csv_data_database(path, &connection)?;
     let mut database = Database::new(connection)?;
-    // let limit = 10000;
+    // let LIMIT = 10000;
     // let mut i = 0;
     //
     // let records = csv.records();
-    // // let capacity = if len < limit { len + 3 } else { limit + 3 };
-    // let mut items = Vec::with_capacity(limit);
+    // // let capacity = if len < LIMIT { len + 3 } else { LIMIT + 3 };
+    // let mut items = Vec::with_capacity(LIMIT);
     // for record in records {
     //     let record = record?;
     //     let result = build_value_query(&record);
     //     items.push(result);
     //     i += 1;
-    //     if i == limit {
+    //     if i == LIMIT {
     //         i = 0;
     //         queries.clear();
     //         queries = format!(
@@ -172,6 +173,67 @@ pub(crate) fn sqlite_to_out(connection: &Connection, path: PathBuf) -> AppResult
     Ok(())
 }
 
+const LIMIT: usize = 10000;
+
+pub(crate) fn insert_csv_data_database(
+    path: PathBuf,
+    connection: &Connection,
+) -> Result<(), AppError> {
+    let mut csv = csv::ReaderBuilder::new().from_path(&path)?;
+    let table_name =
+        Database::get_table_name(path).ok_or(app_error_other!("could not get table name."))?;
+    let table_names = vec![table_name.to_string()];
+    let mut queries = String::new();
+    let query = build_create_table_query(&mut csv, &table_name).unwrap();
+    queries.push_str(&query);
+    connection.execute_batch(&queries)?;
+    queries.clear();
+    let columns = get_headers_for_query(&mut csv, &table_name).unwrap();
+    let mut i = 0;
+
+    let records = csv.records();
+    let mut items: Vec<String> = Vec::with_capacity(LIMIT);
+    for record in records {
+        i += 1;
+        create_insert_stmt_record(record?, &mut items);
+        if should_batch_execute(i) {
+            i = 0;
+            batch_exec_and_clear(&mut queries, &table_name, &columns, &mut items, connection)?;
+        }
+    }
+    if !items.is_empty() {
+        batch_exec_and_clear(&mut queries, &table_name, &columns, &mut items, connection)?;
+    }
+
+    Ok(())
+}
+fn should_batch_execute(i: usize) -> bool {
+    i == LIMIT
+}
+fn batch_exec_and_clear(
+    queries: &mut String,
+    table_name: &str,
+    columns: &str,
+    items: &mut Vec<String>,
+    connection: &Connection,
+) -> AppResult<()> {
+    queries.clear();
+    *queries = format!(
+        "INSERT INTO '{}' ({}) VALUES \n{};",
+        table_name,
+        columns,
+        items.join(",\n")
+    );
+    connection.execute_batch(queries)?;
+    items.clear();
+    Ok(())
+}
+
+fn create_insert_stmt_record(record: StringRecord, items: &mut Vec<String>) {
+    let result = build_value_query(&record);
+    items.push(result);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,55 +255,4 @@ mod tests {
             assert_eq!(item, first_row_db2.get(i).unwrap());
         }
     }
-}
-
-pub(crate) fn insert_csv_data_database(
-    path: PathBuf,
-    connection: &Connection,
-) -> Result<(), AppError> {
-    let mut csv = csv::ReaderBuilder::new().from_path(&path)?;
-    let table_name = Database::get_table_name(path);
-    let table_names = vec![table_name.to_string()];
-    let mut queries = String::new();
-    let query = build_create_table_query(&mut csv, &table_name).unwrap();
-    queries.push_str(&query);
-    connection.execute_batch(&queries)?;
-    queries.clear();
-    let columns = get_headers_for_query(&mut csv, &table_name).unwrap();
-    let limit = 10000;
-    let mut i = 0;
-
-    let records = csv.records();
-    // let capacity = if len < limit { len + 3 } else { limit + 3 };
-    let mut items = Vec::with_capacity(limit);
-    for record in records {
-        let record = record?;
-        let result = build_value_query(&record);
-        items.push(result);
-        i += 1;
-        if i == limit {
-            i = 0;
-            queries.clear();
-            queries = format!(
-                "INSERT INTO '{}' ({}) VALUES \n{};",
-                table_name,
-                columns,
-                items.join(",\n")
-            );
-            connection.execute_batch(&queries)?;
-            items.clear();
-        }
-    }
-    if !items.is_empty() {
-        queries.clear();
-        queries = format!(
-            "INSERT INTO '{}' ({}) VALUES {};",
-            table_name,
-            columns,
-            items.join(",")
-        );
-        connection.execute_batch(&queries)?;
-    }
-
-    Ok(())
 }

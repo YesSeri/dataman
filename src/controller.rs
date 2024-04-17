@@ -14,7 +14,7 @@ use log::{error, info};
 use crate::error::AppError;
 use crate::model::datarow::DataTable;
 use crate::tui::TUI;
-use crate::Config;
+use crate::{app_error_other, Config};
 use crate::{error::AppResult, model::database::Database};
 
 #[derive(Debug, Clone)]
@@ -219,7 +219,7 @@ impl Controller {
                 let res = match if let Event::Key(key) = event::read()? {
                     Ok(Command::from(key))
                 } else {
-                    Err(AppError::Other)
+                    Err(app_error_other!("Could not poll"))
                 } {
                     Ok(command) => {
                         let result = match command {
