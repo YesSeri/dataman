@@ -75,7 +75,7 @@ impl Database {
     fn get_ordering(&self) -> String {
         let ordering = if self.is_asc_order { "ASC" } else { "DESC" };
         match &self.order_column {
-            Some(order_column) => format!(" ORDER BY `{}` {} ", order_column, ordering),
+            Some(order_column) => format!(r#" ORDER BY "{}" {} "#, order_column, ordering),
             None => "".to_string(),
         }
     }
@@ -87,7 +87,7 @@ impl Database {
             ))
         } else {
             let query = format!(
-                "SELECT * FROM `{}` {} LIMIT {} OFFSET {};",
+                r#"SELECT * FROM "{}" {} LIMIT {} OFFSET {};"#,
                 table_name,
                 self.get_ordering(),
                 limit,
@@ -132,7 +132,7 @@ impl Database {
     }
     pub fn get_cell(&self, id: i32, header: &str) -> AppResult<String> {
         let table_name = self.get_current_table_name()?;
-        let query = format!("SELECT `{}` FROM `{}` WHERE id = ?;", header, table_name);
+        let query = format!(r#"SELECT "{}" FROM "{}" WHERE id = ?;"#, header, table_name);
         let mut stmt = self.prepare(&query)?;
         info!("id: {}", id);
         let mut rows = stmt.query(params![id])?;
@@ -175,12 +175,12 @@ impl Database {
         // create a new column in the table. The new value for each row is the value string value of column name after running fun function on it.
         let table_name = self.get_current_table_name()?;
         // for each row in the table, run fun on the value of column name and insert the result into the new column
-        let query = format!("SELECT `id`, `{column_name}` FROM `{table_name}`");
+        let query = format!(r#"SELECT "id", "{column_name}" FROM "{table_name}""#);
         let mut binding = self.prepare(&query)?;
         let mut rows = binding.query([])?;
         let derived_column_name = format!("derived{}", column_name);
         let create_column_query =
-            format!("ALTER TABLE `{table_name}` ADD COLUMN `{derived_column_name}` TEXT;\n");
+            format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{derived_column_name}" TEXT;"#);
         let mut transaction = String::new();
         transaction.push_str(create_column_query.as_ref());
         while let Some(row) = rows.next()? {
@@ -188,7 +188,7 @@ impl Database {
             let value: String = row.get(1)?;
             let derived_value = fun(value).unwrap_or("NULL".to_string());
             let update_query = format!(
-                "UPDATE `{table_name}` SET '{derived_column_name}' = '{derived_value}' WHERE id = '{id}';\n",
+                r#"UPDATE "{table_name}" SET "{derived_column_name}" = '{derived_value}' WHERE id = '{id}';"#,
             );
             transaction.push_str(&update_query);
         }
@@ -199,7 +199,7 @@ impl Database {
     pub(crate) fn get_current_id(&self) -> AppResult<i32> {
         let i = self.slices[0].table_state.selected().unwrap_or(0);
         let query = format!(
-            "SELECT rowid FROM `{}` LIMIT 1 OFFSET {};",
+            r#"SELECT rowid FROM "{}" LIMIT 1 OFFSET {};"#,
             self.get_current_table_name()?,
             i
         );
@@ -502,8 +502,14 @@ impl TryFrom<Vec<PathBuf>> for Database {
                 .clone();
             match path.extension().and_then(|s| s.to_str()) {
                 Some("csv") => {
-                    let _ = std::fs::remove_file("db.sqlite");
-                    let connection = Connection::open("db.sqlite")?;
+                    let connection = if cfg!(debug_assertions) {
+                        log::info!("Debug mode, opening in memory db.");
+                        Connection::open_in_memory()?
+                    } else {
+                        log::info!("Release mode, saving to file 'db.sqlite'.");
+                        let _ = std::fs::remove_file("db.sqlite");
+                        Connection::open("db.sqlite")?
+                    };
                     let database = converter::database_from_csv(path, connection)?;
                     Ok(database)
                 }
@@ -552,7 +558,8 @@ mod tests {
     #[test]
     fn get_number_of_headers_test() {
         let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
-        let number_of_headers = database.count_headers();
+        let number_of_headers = database.count_headers().unwrap();
+        assert_eq!(number_of_headers, 4)
     }
 
     #[test]
@@ -583,10 +590,9 @@ mod tests {
 
     #[test]
     fn derive_column_test() {
-        let mut database = Database::try_from(vec![PathBuf::from("assets/data.csv")]);
+        let mut database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
         let col = "firstname";
         let fun = |s| Some(format!("{}-changed", s));
-        let mut database = database.unwrap();
         database.derive_column(col.to_string(), fun).unwrap();
         let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
             .get(4)
@@ -658,7 +664,7 @@ mod tests {
     fn custom_functions_regexp_test() {
         let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
         // let query = "SELECT firstname FROM `data` WHERE firstname REGEXP 'hen'";
-        let query = "SELECT firstname FROM `data` WHERE regexp('h.*k', firstname)";
+        let query = r#"SELECT firstname FROM "data" WHERE regexp('h.*k', firstname)"#;
         let result: String = database
             .connection
             .query_row(query, [], |row| row.get(0))
@@ -668,8 +674,8 @@ mod tests {
 
     #[test]
     fn table_of_tables_test() {
-        let database = Database::try_from(vec![PathBuf::from("assets/db.sqlite")]).unwrap();
+        let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
         let s = database.open_table_of_tables().unwrap();
-        // assert_eq!(false, true);
+        assert_eq!(false, true);
     }
 }

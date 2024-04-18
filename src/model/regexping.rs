@@ -7,7 +7,8 @@ pub fn build_regex_filter_query(
 ) -> AppResult<String> {
     // create new table with filter applied using create table as sqlite statement.
     regex::Regex::new(pattern)?;
-    let select_query = format!("SELECT * FROM `{table_name}` WHERE `{header}` REGEXP '{pattern}'");
+    let select_query =
+        format!(r#"SELECT * FROM `{table_name}` WHERE `{header}` REGEXP '{pattern}'"#);
     let create_table_query = format!("CREATE TABLE `{table_name}RegexFiltered` AS {select_query};");
     Ok(create_table_query)
 }
@@ -21,12 +22,12 @@ pub(crate) fn build_regex_with_capture_group_transform_query(
     regex::Regex::new(pattern)?;
     let derived_header_name = format!("derived{}", header);
     let create_header_query =
-        format!("ALTER TABLE `{table_name}` ADD COLUMN `{derived_header_name}` TEXT;\n");
+        format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{derived_header_name}" TEXT;\n"#);
 
     let mut queries = String::new();
     queries.push_str(&create_header_query);
     let update_query = format!(
-        "UPDATE `{table_name}` SET `{derived_header_name}` = regexp_transform_with_capture_group('{pattern}', `{header}`, \"{transformation}\");\n"
+        r#"UPDATE "{table_name}" SET "{derived_header_name}" = regexp_transform_with_capture_group('{pattern}', "{header}", '{transformation}');\n"#
     );
 
     queries.push_str(&update_query);

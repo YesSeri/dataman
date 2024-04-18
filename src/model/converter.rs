@@ -149,8 +149,6 @@ pub(crate) fn sqlite_to_out(connection: &Connection, path: PathBuf) -> AppResult
                     continue;
                 }
                 let item = DataItem::from(row.get_ref(i).unwrap());
-                dbg!(&header);
-                dbg!(&item);
                 items.push(item);
             }
             Ok(items)
@@ -247,9 +245,6 @@ mod tests {
         let mut database2 = Database::try_from(vec![PathBuf::from("assets/out-data.csv")]).unwrap();
         let first_row_db1 = database1.get(1, 0, "data".to_string()).unwrap().1;
         let first_row_db2 = database2.get(1, 0, "out-data".to_string()).unwrap().1;
-
-        dbg!(&first_row_db1);
-        dbg!(&first_row_db2);
 
         for (i, item) in first_row_db1.iter().enumerate() {
             assert_eq!(item, first_row_db2.get(i).unwrap());
