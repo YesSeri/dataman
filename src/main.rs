@@ -16,9 +16,9 @@ use dataman::{controller::Controller, error::AppError, model::database::Database
 fn main() {
     // if not release mode, print logs
     // if release mode, logs are not printed
-    let a = "xxx";
-    println!(r#"abc"{a}"abc"#);
-    return;
+    // let a = "xxx";
+    // println!(r#"abc"{a}"abc"#);
+    // return;
     setup_logging();
     let mut controller = setup_application().unwrap_or_else(|err| {
         eprintln!("Could not start due to {err}");

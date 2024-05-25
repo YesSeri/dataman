@@ -4,3 +4,5 @@
 
 log.txt
 *.sqlite
+
+dataman.error.log*
