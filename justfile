@@ -1,12 +1,11 @@
-# Define a run task with a dynamic argument for the log file
-run log_file='dataman.error.log':
-    mv dataman.error.log dataman.error.log.bak 2> /dev/null || true
-    RUST_LOG='debug' cargo run -- assets/data.csv 2> {{log_file}}
+# just run
+# just run 'dataman.error.log' 'assets/data.csv' 'debug'
+run log_file='dataman.error.log' asset='assets/data.csv' debug_lvl='debug':
+    RUST_LOG={{debug_lvl}} cargo run -- {{asset}} 2> {{log_file}}
   
 tail log_file='dataman.error.log':
-    tail -f dataman.error.log
+    tail -f {{log_file}}
 
-# Define a build task to compile the Rust project
 build:
     cargo build
 
@@ -16,6 +15,5 @@ release:
 install: release
     cp target/release/dataman ~/.local/bin/dataman
 
-# Define a clean task to clean the Rust project
 clean:
     cargo clean
