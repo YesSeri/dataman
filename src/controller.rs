@@ -4,7 +4,7 @@ use std::{
     path::PathBuf,
 };
 
-use crossterm::event::{self, Event};
+use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::{
     event::{KeyCode, KeyEvent, KeyModifiers},
     ExecutableCommand,
@@ -38,6 +38,11 @@ impl std::fmt::Display for CommandWrapper {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum InputMode {
+    Normal,
+    Editing,
+}
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     None,
@@ -186,17 +191,19 @@ pub struct Controller {
     pub(crate) ui: TUI,
     pub(crate) database: Database,
     pub(crate) last_command: CommandWrapper,
+    character_index: usize,
+    pub(crate) input_mode: InputMode,
 }
 
 impl Controller {
     pub(crate) fn save_to_sqlite_file(&self) -> AppResult<()> {
-        let filename = TUI::get_editor_input("Enter file name")?;
+        let filename = TUI::get_user_input("Enter file name")?;
         let path = PathBuf::from(filename);
         Ok(self.database.backup_db(path)?)
     }
 
     pub(crate) fn sql_query(&self) -> Result<(), AppError> {
-        let query = TUI::get_editor_input("Enter sqlite query")?;
+        let query = TUI::get_user_input("Enter sqlite query")?;
         self.database.sql_query(query)
     }
 
@@ -209,84 +216,172 @@ impl Controller {
             ui,
             database,
             last_command: CommandWrapper::new(Command::None, None),
+            character_index: 0,
+            input_mode: InputMode::Normal,
         }
     }
 
+    fn enter_char(&mut self, new_char: char) {
+        let index = self.byte_index();
+        self.database.input.insert(index, new_char);
+        self.move_cursor_right();
+    }
+    fn move_cursor_right(&mut self) {
+        let cursor_moved_right = self.character_index.saturating_add(1);
+        self.character_index = self.clamp_cursor(cursor_moved_right);
+    }
+    fn clamp_cursor(&self, new_cursor_pos: usize) -> usize {
+        new_cursor_pos.clamp(0, self.database.input.chars().count())
+    }
+
+    fn byte_index(&self) -> usize {
+        self.database
+            .input
+            .char_indices()
+            .map(|(i, _)| i)
+            .nth(self.character_index)
+            .unwrap_or(self.database.input.len())
+    }
+
+    fn submit_message(&mut self) {
+        // self.messages.push(self.database.input.clone());
+        log::info!("{}", self.database.input.clone());
+        self.database.input.clear();
+        self.reset_cursor();
+        self.input_mode = InputMode::Normal
+    }
+
+    fn reset_cursor(&mut self) {
+        self.character_index = 0;
+    }
+    fn user_input_mode(&mut self) -> AppResult<()> {
+        if let Event::Key(key) = event::read()? {
+            match self.input_mode {
+                InputMode::Normal => match key.code {
+                    KeyCode::Char('e') => {
+                        self.input_mode = InputMode::Editing;
+                    }
+                    KeyCode::Char('q') => {
+                        return Ok(());
+                    }
+                    _ => {}
+                },
+                InputMode::Editing if key.kind == KeyEventKind::Press => match key.code {
+                    KeyCode::Enter => self.submit_message(),
+                    KeyCode::Char(to_insert) => {
+                        self.enter_char(to_insert);
+                    }
+                    // KeyCode::Backspace => {
+                    //     self.delete_char();
+                    // }
+                    // KeyCode::Left => {
+                    //     self.move_cursor_left();
+                    // }
+                    // KeyCode::Right => {
+                    //     self.move_cursor_right();
+                    // }
+                    // KeyCode::Esc => {
+                    //     self.input_mode = InputMode::Normal;
+                    // }
+                    _ => {}
+                },
+                InputMode::Editing => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn normal_mode(&mut self) -> AppResult<()> {
+        if event::poll(std::time::Duration::from_millis(3000))? {
+            let res = match if let Event::Key(key) = event::read()? {
+                Ok(Command::from(key))
+            } else {
+                Err(app_error_other!("Could not poll"))
+            } {
+                Ok(command) => {
+                    let result = match command {
+                        Command::Quit => {
+                            self.last_command = CommandWrapper::new(Command::Quit, None);
+                            Ok(())
+                        }
+                        Command::Copy => self.copy(),
+                        Command::RegexTransform => {
+                            // self.regex_transform()
+                            self.input_mode = InputMode::Editing;
+                            self.last_command = CommandWrapper::new(Command::RegexTransform, None);
+                            Ok(())
+                        }
+                        Command::Edit => self.edit_cell(),
+                        Command::SqlQuery => self.sql_query(),
+                        Command::IllegalOperation => {
+                            self.last_command =
+                                CommandWrapper::new(Command::IllegalOperation, None);
+                            Ok(())
+                        }
+                        Command::None => {
+                            self.last_command = CommandWrapper::new(Command::None, None);
+                            Ok(())
+                        }
+                        Command::Sort => self.sort(),
+                        Command::Save => self.save_to_sqlite_file(),
+                        Command::Move(direction) => self.database.move_cursor(direction),
+                        Command::RegexFilter => self.regex_filter(),
+                        Command::NextTable => {
+                            self.last_command = CommandWrapper::new(Command::NextTable, None);
+                            self.database.next_table()
+                        }
+                        Command::PrevTable => {
+                            self.last_command = CommandWrapper::new(Command::PrevTable, None);
+                            self.database.prev_table()
+                        }
+                        Command::ExactSearch => self.exact_search(),
+
+                        Command::TextToInt => self.text_to_int(),
+                        Command::IntToText => self.int_to_text(),
+                        Command::DeleteColumn => self.delete_column(),
+                        Command::RenameColumn => self.rename_column(),
+                        Command::Join(_) => todo!(),
+                    };
+
+                    if command.requires_updating_view() {
+                        self.database.slices[0].has_changed();
+                    }
+                    result
+                }
+                Err(result) => {
+                    self.database.slices[0].has_changed();
+
+                    self.set_last_command(CommandWrapper::new(
+                        Command::IllegalOperation,
+                        Some(result.to_string()),
+                    ));
+                    Ok(())
+                }
+            };
+            if let Err(e) = res {
+                self.database.slices[0].has_changed();
+                self.set_last_command(CommandWrapper::new(
+                    Command::IllegalOperation,
+                    Some(format!(": {}", e)),
+                ));
+            }
+        }
+        Ok(())
+    }
     pub fn run(&mut self) -> AppResult<()> {
         loop {
             TUI::draw(self)?;
-            if event::poll(std::time::Duration::from_millis(3000))? {
-                let res = match if let Event::Key(key) = event::read()? {
-                    Ok(Command::from(key))
-                } else {
-                    Err(app_error_other!("Could not poll"))
-                } {
-                    Ok(command) => {
-                        let result = match command {
-                            Command::Quit => {
-                                self.last_command = CommandWrapper::new(Command::Quit, None);
-                                Ok(())
-                            }
-                            Command::Copy => self.copy(),
-                            Command::RegexTransform => self.regex_transform(),
-                            Command::Edit => self.edit_cell(),
-                            Command::SqlQuery => self.sql_query(),
-                            Command::IllegalOperation => {
-                                self.last_command =
-                                    CommandWrapper::new(Command::IllegalOperation, None);
-                                Ok(())
-                            }
-                            Command::None => {
-                                self.last_command = CommandWrapper::new(Command::None, None);
-                                Ok(())
-                            }
-                            Command::Sort => self.sort(),
-                            Command::Save => self.save_to_sqlite_file(),
-                            Command::Move(direction) => self.database.move_cursor(direction),
-                            Command::RegexFilter => self.regex_filter(),
-                            Command::NextTable => {
-                                self.last_command = CommandWrapper::new(Command::NextTable, None);
-                                self.database.next_table()
-                            }
-                            Command::PrevTable => {
-                                self.last_command = CommandWrapper::new(Command::PrevTable, None);
-                                self.database.prev_table()
-                            }
-                            Command::ExactSearch => self.exact_search(),
-
-                            Command::TextToInt => self.text_to_int(),
-                            Command::IntToText => self.int_to_text(),
-                            Command::DeleteColumn => self.delete_column(),
-                            Command::RenameColumn => self.rename_column(),
-                            Command::Join(_) => todo!(),
-                        };
-
-                        if command.requires_updating_view() {
-                            self.database.slices[0].has_changed();
-                        }
-                        result
+            match self.input_mode {
+                InputMode::Normal => {
+                    let res = self.normal_mode();
+                    if self.last_command.command == Command::Quit {
+                        self.ui.shutdown()?;
+                        break Ok(());
                     }
-                    Err(result) => {
-                        self.database.slices[0].has_changed();
-
-                        self.set_last_command(CommandWrapper::new(
-                            Command::IllegalOperation,
-                            Some(result.to_string()),
-                        ));
-                        Ok(())
-                    }
-                };
-                if let Err(e) = res {
-                    self.database.slices[0].has_changed();
-                    self.set_last_command(CommandWrapper::new(
-                        Command::IllegalOperation,
-                        Some(format!(": {}", e)),
-                    ));
                 }
-
-                if self.last_command.command == Command::Quit {
-                    self.ui.shutdown()?;
-                    break Ok(());
+                InputMode::Editing => {
+                    let res = self.user_input_mode();
+                    log::info!("editing stuff");
                 }
             }
         }
@@ -298,7 +393,7 @@ impl Controller {
     }
 
     pub fn regex_filter(&mut self) -> AppResult<()> {
-        let pattern = TUI::get_editor_input("Enter regex")?;
+        let pattern = TUI::get_user_input("Enter regex")?;
         info!("pattern: {:?}", pattern);
         let header = self.database.get_current_header()?;
         self.database.regex_filter(&header, &pattern)?;
@@ -310,19 +405,20 @@ impl Controller {
     /// If the user enter a capture group we will ask for a second input that shows how the capture group should be transformed.
     /// If the user doesn't enter a capture group we will just copy the regex match.
     pub fn regex_transform(&mut self) -> AppResult<()> {
+        self.input_mode = InputMode::Editing;
         let pattern = if cfg!(debug_assertions) {
-            TUI::get_editor_input(r"(u).*(.)")?
+            TUI::get_user_input(r"(u).*(.)")?
         } else {
-            TUI::get_editor_input(r"Enter regex, e.g. (?<last>[^,\s]+),\s+(?<first>\S+)")?
+            TUI::get_user_input(r"Enter regex, e.g. (?<last>[^,\s]+),\s+(?<first>\S+)")?
         };
         let regex = regex::Regex::new(&pattern)?;
         let contains_capture_pattern = regex.capture_names().len() > 1;
         let header = self.database.get_current_header()?;
         if contains_capture_pattern {
             let transformation = if cfg!(debug_assertions) {
-                TUI::get_editor_input(r"${1}${2}")?
+                TUI::get_user_input(r"${1}${2}")?
             } else {
-                TUI::get_editor_input(
+                TUI::get_user_input(
                     r"Enter transformation, e.g. '${first} ${second}' or '${1} ${2}' if un-named",
                 )?
             };
@@ -353,7 +449,7 @@ impl Controller {
         let data = self.database.get_cell(id, &header)?;
         info!("data: {:?}", data);
 
-        let result = TUI::get_editor_input(&data)?;
+        let result = TUI::get_user_input(&data)?;
         self.database.update_cell(header.as_str(), id, &result)?;
         Ok(())
     }
@@ -362,7 +458,7 @@ impl Controller {
         self.database.sort()
     }
     fn exact_search(&mut self) -> AppResult<()> {
-        let pattern = TUI::get_editor_input("Enter regex")?;
+        let pattern = TUI::get_user_input("Enter regex")?;
         info!("pattern: {:?}", pattern);
         let header = self.database.get_current_header()?;
         match self.database.exact_search(&header, &pattern) {
@@ -395,7 +491,7 @@ impl Controller {
     }
 
     fn rename_column(&mut self) -> Result<(), AppError> {
-        let new_column = TUI::get_editor_input("Enter new column name.")?;
+        let new_column = TUI::get_user_input("Enter new column name.")?;
         self.database.rename_column(&new_column)?;
         self.last_command = CommandWrapper::new(Command::RenameColumn, None);
         Ok(())

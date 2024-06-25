@@ -29,6 +29,7 @@ pub struct Database {
     pub(crate) is_asc_order: bool,
     pub(crate) current_table_idx: u16,
     pub(crate) slices: Vec<DatabaseSlice>,
+    pub(crate) input: String,
 }
 
 impl Database {
@@ -48,6 +49,7 @@ impl Database {
             is_asc_order: true,
             current_table_idx: rowid,
             slices,
+            input: String::new(),
         };
         if let Err(err) = regexping::custom_functions::add_custom_functions(&database) {
             info!("Error adding custom functions, e.g. REGEXP: {}", err);

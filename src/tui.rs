@@ -18,7 +18,6 @@ use ratatui::{
     Frame, Terminal,
 };
 
-use crate::model::datarow::DataTable;
 use crate::{
     app_error_other,
     controller::{Command, CommandWrapper},
@@ -28,9 +27,11 @@ use crate::{
     error::{AppError, AppResult},
     model::database::Database,
 };
+use crate::{controller::InputMode, model::datarow::DataTable};
 
 pub struct TUI {
     terminal: Terminal<CrosstermBackend<Stdout>>,
+    is_user_input_active: bool,
 }
 
 impl std::fmt::Debug for TUI {
@@ -47,7 +48,10 @@ impl TUI {
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend).unwrap();
         enable_raw_mode().unwrap();
-        Self { terminal }
+        Self {
+            terminal,
+            is_user_input_active: false,
+        }
     }
     pub fn get_table_height() -> AppResult<u16> {
         let height = crossterm::terminal::size()?.1 - 4;
@@ -71,6 +75,7 @@ impl TUI {
                 &mut controller.database,
                 &controller.last_command,
                 table_height,
+                controller.input_mode,
             ) {
                 Ok(_) => (),
                 Err(err) => {
@@ -90,36 +95,48 @@ impl TUI {
         }
     }
 
-    pub fn get_editor_input(data: &str) -> AppResult<String> {
-        let editor_var = std::env::var("EDITOR").unwrap();
-        let editor_and_args = editor_var.split_whitespace().collect::<Vec<_>>();
-        let (editor, args) = editor_and_args.split_first().unwrap_or((&"nano", &[]));
-        let mut args = args.to_vec();
-        let mut file_path = std::env::temp_dir();
-        file_path.push("dataman_input.txt");
-        args.push(file_path.to_str().unwrap());
+    pub fn get_user_input(data: &str) -> AppResult<String> {
+        // let editor_var = std::env::var("EDITOR").unwrap();
+        // let editor_and_args = editor_var.split_whitespace().collect::<Vec<_>>();
+        // let (editor, args) = editor_and_args.split_first().unwrap_or((&"nano", &[]));
+        // let mut args = args.to_vec();
+        // let mut file_path = std::env::temp_dir();
+        // file_path.push("dataman_input.txt");
+        // args.push(file_path.to_str().unwrap());
 
-        let mut file = std::fs::File::create(&file_path)?;
-        file.write_all(data.as_bytes())?;
+        // let mut file = std::fs::File::create(&file_path)?;
+        // file.write_all(data.as_bytes())?;
 
-        info!("editor: {:?} args: {:?}", editor, args);
-        std::process::Command::new(editor).args(args).status()?;
+        // info!("editor: {:?} args: {:?}", editor, args);
+        // std::process::Command::new(editor).args(args).status()?;
 
-        let mut editable = String::new();
-        std::fs::File::open(file_path)?.read_to_string(&mut editable)?;
-        let trimmed = editable.trim_end_matches('\n').to_string();
-        info!("editable: {:?} | trimmed: {:?}", editable, trimmed);
-        Ok(trimmed)
+        // let mut editable = String::new();
+        // std::fs::File::open(file_path)?.read_to_string(&mut editable)?;
+        // let trimmed = editable.trim_end_matches('\n').to_string();
+        // info!("editable: {:?} | trimmed: {:?}", editable, trimmed);
+        // Ok(trimmed)
+        todo!()
     }
     fn update(
         f: &mut Frame,
         database: &mut Database,
         last_command: &CommandWrapper,
         table_height: u16,
+        input_mode: InputMode,
     ) -> AppResult<()> {
+        let constraints: Vec<Constraint> = match input_mode {
+            InputMode::Editing => {
+                vec![
+                    Constraint::Max(1000),
+                    Constraint::Length(1),
+                    Constraint::Length(5),
+                ]
+            }
+            InputMode::Normal => vec![Constraint::Max(1000), Constraint::Length(1)],
+        };
         let rects = Layout::default()
             .direction(ratatui::prelude::Direction::Vertical)
-            .constraints([Constraint::Max(1000), Constraint::Length(1)].as_ref())
+            .constraints(constraints.as_slice())
             .split(f.size());
 
         let table_name = database.get_current_table_name()?;
@@ -190,6 +207,31 @@ impl TUI {
         let paragraph = Paragraph::new(text);
 
         f.render_widget(paragraph, rects[1]);
+
+        if input_mode == InputMode::Editing {
+            let input = Paragraph::new(database.input.as_str())
+                .style(Style::default().fg(Color::Yellow))
+                .block(Block::bordered().title("Input"));
+            f.render_widget(input, rects[2]);
+            // match app.input_mode {
+            //     InputMode::Normal =>
+            //         // Hide the cursor. `Frame` does this by default, so we don't need to do anything here
+            //         {}
+
+            //     InputMode::Editing => {
+            //         // Make the cursor visible and ask ratatui to put it at the specified coordinates after
+            //         // rendering
+            //         #[allow(clippy::cast_possible_truncation)]
+            //         f.set_cursor(
+            //             // Draw the cursor at the current position in the input field.
+            //             // This position is can be controlled via the left and right arrow key
+            //             input_area.x + app.character_index as u16 + 1,
+            //             // Move one line down, from the border to the input line
+            //             input_area.y + 1,
+            //         );
+            //     }
+            // }
+        }
         Ok(())
     }
 }
