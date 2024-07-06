@@ -180,7 +180,7 @@ pub(crate) fn insert_csv_data_database(
     let mut csv = csv::ReaderBuilder::new().from_path(&path)?;
     let table_name =
         Database::get_table_name(path).ok_or(app_error_other!("could not get table name."))?;
-    let table_names = vec![table_name.to_string()];
+    let table_names = [table_name.to_string()];
     let mut queries = String::new();
     let query = build_create_table_query(&mut csv, &table_name).unwrap();
     queries.push_str(&query);

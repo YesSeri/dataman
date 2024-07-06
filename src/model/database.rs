@@ -30,6 +30,7 @@ pub struct Database {
     pub(crate) current_table_idx: u16,
     pub(crate) slices: Vec<DatabaseSlice>,
     pub(crate) input: String,
+    pub(crate) character_index: usize,
 }
 
 impl Database {
@@ -50,6 +51,7 @@ impl Database {
             current_table_idx: rowid,
             slices,
             input: String::new(),
+            character_index: 0,
         };
         if let Err(err) = regexping::custom_functions::add_custom_functions(&database) {
             info!("Error adding custom functions, e.g. REGEXP: {}", err);
@@ -116,8 +118,8 @@ impl Database {
                 }
                 (headers, data_rows)
             };
-            self.slices[0].data_rows = data_rows.clone();
-            self.slices[0].headers = headers.clone();
+            self.slices[0].data_rows.clone_from(&data_rows);
+            self.slices[0].headers.clone_from(&headers);
             self.slices[0].is_unchanged = true;
             Ok((headers, data_rows))
         }

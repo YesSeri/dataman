@@ -18,6 +18,8 @@ use ratatui::{
     Frame, Terminal,
 };
 
+use crate::input::InputMode;
+use crate::model::datarow::DataTable;
 use crate::{
     app_error_other,
     controller::{Command, CommandWrapper},
@@ -27,7 +29,6 @@ use crate::{
     error::{AppError, AppResult},
     model::database::Database,
 };
-use crate::{controller::InputMode, model::datarow::DataTable};
 
 pub struct TUI {
     terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -75,7 +76,7 @@ impl TUI {
                 &mut controller.database,
                 &controller.last_command,
                 table_height,
-                controller.input_mode,
+                controller.input_mode_state_machine.get_state(),
             ) {
                 Ok(_) => (),
                 Err(err) => {
@@ -132,7 +133,12 @@ impl TUI {
                     Constraint::Length(5),
                 ]
             }
-            InputMode::Normal => vec![Constraint::Max(1000), Constraint::Length(1)],
+            InputMode::Normal | InputMode::Abort | InputMode::Finish => {
+                vec![Constraint::Max(1000), Constraint::Length(1)]
+            }
+            InputMode::Abort => todo!(),
+            InputMode::Finish => todo!(),
+            InputMode::ExternalEditor => todo!(),
         };
         let rects = Layout::default()
             .direction(ratatui::prelude::Direction::Vertical)
@@ -210,8 +216,16 @@ impl TUI {
 
         if input_mode == InputMode::Editing {
             let input = Paragraph::new(database.input.as_str())
+                // show cursor
                 .style(Style::default().fg(Color::Yellow))
                 .block(Block::bordered().title("Input"));
+            f.set_cursor(
+                // Draw the cursor at the current position in the input field.
+                // This position is can be controlled via the left and right arrow key
+                rects[2].x + database.character_index as u16 + 1,
+                // Move one line down, from the border to the input line
+                rects[2].y + 1,
+            );
             f.render_widget(input, rects[2]);
             // match app.input_mode {
             //     InputMode::Normal =>

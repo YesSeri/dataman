@@ -1,17 +1,21 @@
 use std::path::Path;
+use std::process::exit;
 use std::{
     io::{Read, Write},
     path::PathBuf,
 };
 
+use crate::input::Event::*;
 use crossterm::event::{self, Event, KeyEventKind};
 use crossterm::{
     event::{KeyCode, KeyEvent, KeyModifiers},
     ExecutableCommand,
 };
 use log::{error, info};
+use rusqlite::Statement;
 
 use crate::error::AppError;
+use crate::input::{InputMode, StateMachine};
 use crate::model::datarow::DataTable;
 use crate::tui::TUI;
 use crate::{app_error_other, Config};
@@ -38,11 +42,12 @@ impl std::fmt::Display for CommandWrapper {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum InputMode {
-    Normal,
-    Editing,
-}
+// #[derive(Debug, Clone, Copy, PartialEq)]
+// pub(crate) enum InputMode {
+//     Normal,
+//     Editing,
+//     FinishedEditing,
+// }
 #[derive(Debug, Clone, PartialEq)]
 pub enum Command {
     None,
@@ -108,13 +113,13 @@ impl Command {
             | Command::DeleteColumn
             | Command::RenameColumn
             | Command::ExactSearch
+            | Command::Join(_)
             | Command::RegexFilter => true,
             Command::None
             | Command::IllegalOperation
             | Command::Save
             | Command::Quit
             | Command::Move(_) => false,
-            Command::Join(_) => todo!(),
         }
     }
 }
@@ -191,8 +196,8 @@ pub struct Controller {
     pub(crate) ui: TUI,
     pub(crate) database: Database,
     pub(crate) last_command: CommandWrapper,
-    character_index: usize,
-    pub(crate) input_mode: InputMode,
+    queued_command: CommandWrapper,
+    pub(crate) input_mode_state_machine: StateMachine,
 }
 
 impl Controller {
@@ -207,17 +212,13 @@ impl Controller {
         self.database.sql_query(query)
     }
 
-    pub(crate) fn set_last_command(&mut self, last_command: CommandWrapper) {
-        self.last_command = last_command;
-    }
-
     pub fn new(ui: TUI, database: Database) -> Self {
         Self {
             ui,
             database,
             last_command: CommandWrapper::new(Command::None, None),
-            character_index: 0,
-            input_mode: InputMode::Normal,
+            queued_command: CommandWrapper::new(Command::None, None),
+            input_mode_state_machine: StateMachine::new(),
         }
     }
 
@@ -227,8 +228,8 @@ impl Controller {
         self.move_cursor_right();
     }
     fn move_cursor_right(&mut self) {
-        let cursor_moved_right = self.character_index.saturating_add(1);
-        self.character_index = self.clamp_cursor(cursor_moved_right);
+        let cursor_moved_right = self.database.character_index.saturating_add(1);
+        self.database.character_index = self.clamp_cursor(cursor_moved_right);
     }
     fn clamp_cursor(&self, new_cursor_pos: usize) -> usize {
         new_cursor_pos.clamp(0, self.database.input.chars().count())
@@ -239,53 +240,65 @@ impl Controller {
             .input
             .char_indices()
             .map(|(i, _)| i)
-            .nth(self.character_index)
+            .nth(self.database.character_index)
             .unwrap_or(self.database.input.len())
     }
 
     fn submit_message(&mut self) {
-        // self.messages.push(self.database.input.clone());
         log::info!("{}", self.database.input.clone());
+        self.input_mode_state_machine
+            .transition(crate::input::Event::FinishEditing)
+            .unwrap();
+        self.queued_command.message = Some(self.database.input.clone());
         self.database.input.clear();
         self.reset_cursor();
-        self.input_mode = InputMode::Normal
     }
 
     fn reset_cursor(&mut self) {
-        self.character_index = 0;
+        self.database.character_index = 0;
     }
+    fn move_cursor_left(&mut self) {
+        let cursor_moved_left = self.database.character_index.saturating_sub(1);
+        self.database.character_index = self.clamp_cursor(cursor_moved_left);
+    }
+
+    fn delete_char(&mut self) {
+        let is_not_cursor_leftmost = self.database.character_index != 0;
+        if is_not_cursor_leftmost {
+            let current_index = self.database.character_index;
+            let from_left_to_current_index = current_index - 1;
+            let before_char_to_delete =
+                self.database.input.chars().take(from_left_to_current_index);
+            let after_char_to_delete = self.database.input.chars().skip(current_index);
+            self.database.input = before_char_to_delete.chain(after_char_to_delete).collect();
+            self.move_cursor_left();
+        }
+    }
+
     fn user_input_mode(&mut self) -> AppResult<()> {
         if let Event::Key(key) = event::read()? {
-            match self.input_mode {
-                InputMode::Normal => match key.code {
-                    KeyCode::Char('e') => {
-                        self.input_mode = InputMode::Editing;
-                    }
-                    KeyCode::Char('q') => {
-                        return Ok(());
-                    }
-                    _ => {}
-                },
-                InputMode::Editing if key.kind == KeyEventKind::Press => match key.code {
+            if key.kind == KeyEventKind::Press {
+                match key.code {
                     KeyCode::Enter => self.submit_message(),
                     KeyCode::Char(to_insert) => {
                         self.enter_char(to_insert);
                     }
-                    // KeyCode::Backspace => {
-                    //     self.delete_char();
-                    // }
-                    // KeyCode::Left => {
-                    //     self.move_cursor_left();
-                    // }
-                    // KeyCode::Right => {
-                    //     self.move_cursor_right();
-                    // }
-                    // KeyCode::Esc => {
-                    //     self.input_mode = InputMode::Normal;
-                    // }
+                    KeyCode::Backspace => {
+                        self.delete_char();
+                    }
+                    KeyCode::Left => {
+                        self.move_cursor_left();
+                    }
+                    KeyCode::Right => {
+                        self.move_cursor_right();
+                    }
+                    KeyCode::Esc => {
+                        self.input_mode_state_machine
+                            .transition(crate::input::Event::AbortEditing)
+                            .unwrap();
+                    }
                     _ => {}
-                },
-                InputMode::Editing => {}
+                }
             }
         }
         Ok(())
@@ -294,46 +307,33 @@ impl Controller {
     fn normal_mode(&mut self) -> AppResult<()> {
         if event::poll(std::time::Duration::from_millis(3000))? {
             let res = match if let Event::Key(key) = event::read()? {
+                dbg!(key);
                 Ok(Command::from(key))
             } else {
                 Err(app_error_other!("Could not poll"))
             } {
                 Ok(command) => {
+                    self.last_command = CommandWrapper::new(command.clone(), None);
                     let result = match command {
-                        Command::Quit => {
-                            self.last_command = CommandWrapper::new(Command::Quit, None);
-                            Ok(())
-                        }
+                        Command::Quit => Ok(()),
                         Command::Copy => self.copy(),
                         Command::RegexTransform => {
-                            // self.regex_transform()
-                            self.input_mode = InputMode::Editing;
-                            self.last_command = CommandWrapper::new(Command::RegexTransform, None);
+                            self.queued_command = CommandWrapper::new(command.clone(), None);
+                            self.input_mode_state_machine
+                                .transition(StartEditing)
+                                .unwrap();
                             Ok(())
                         }
                         Command::Edit => self.edit_cell(),
                         Command::SqlQuery => self.sql_query(),
-                        Command::IllegalOperation => {
-                            self.last_command =
-                                CommandWrapper::new(Command::IllegalOperation, None);
-                            Ok(())
-                        }
-                        Command::None => {
-                            self.last_command = CommandWrapper::new(Command::None, None);
-                            Ok(())
-                        }
+                        Command::IllegalOperation => Ok(()),
+                        Command::None => Ok(()),
                         Command::Sort => self.sort(),
                         Command::Save => self.save_to_sqlite_file(),
                         Command::Move(direction) => self.database.move_cursor(direction),
                         Command::RegexFilter => self.regex_filter(),
-                        Command::NextTable => {
-                            self.last_command = CommandWrapper::new(Command::NextTable, None);
-                            self.database.next_table()
-                        }
-                        Command::PrevTable => {
-                            self.last_command = CommandWrapper::new(Command::PrevTable, None);
-                            self.database.prev_table()
-                        }
+                        Command::NextTable => self.database.next_table(),
+                        Command::PrevTable => self.database.prev_table(),
                         Command::ExactSearch => self.exact_search(),
 
                         Command::TextToInt => self.text_to_int(),
@@ -351,19 +351,15 @@ impl Controller {
                 Err(result) => {
                     self.database.slices[0].has_changed();
 
-                    self.set_last_command(CommandWrapper::new(
-                        Command::IllegalOperation,
-                        Some(result.to_string()),
-                    ));
+                    self.last_command =
+                        CommandWrapper::new(Command::IllegalOperation, Some(result.to_string()));
                     Ok(())
                 }
             };
             if let Err(e) = res {
                 self.database.slices[0].has_changed();
-                self.set_last_command(CommandWrapper::new(
-                    Command::IllegalOperation,
-                    Some(format!(": {}", e)),
-                ));
+                self.last_command =
+                    CommandWrapper::new(Command::IllegalOperation, Some(format!(": {}", e)));
             }
         }
         Ok(())
@@ -371,18 +367,38 @@ impl Controller {
     pub fn run(&mut self) -> AppResult<()> {
         loop {
             TUI::draw(self)?;
-            match self.input_mode {
-                InputMode::Normal => {
+            log::info!("state: {:?}", self.input_mode_state_machine.get_state());
+            log::info!("queued_command: {:?}", self.queued_command);
+            match self.input_mode_state_machine.get_state() {
+                InputMode::Normal if (self.queued_command.command == Command::None) => {
                     let res = self.normal_mode();
                     if self.last_command.command == Command::Quit {
                         self.ui.shutdown()?;
                         break Ok(());
                     }
                 }
+                InputMode::Normal => {
+                    log::info!("state: {:?}", self.input_mode_state_machine.get_state());
+                    log::info!("queued_command: {:?}", self.queued_command);
+                    let res = self.execute_queued_command();
+                    self.queued_command = CommandWrapper::new(Command::None, None);
+                    log::info!("state: {:?}", self.input_mode_state_machine.get_state());
+                    log::info!("queued_command: {:?}", self.queued_command);
+                }
                 InputMode::Editing => {
                     let res = self.user_input_mode();
-                    log::info!("editing stuff");
                 }
+                InputMode::Abort => {
+                    self.last_command =
+                        CommandWrapper::new(Command::None, Some("Aborted input".to_string()));
+
+                    self.queued_command = CommandWrapper::new(Command::None, None);
+                    self.input_mode_state_machine.transition(Reset).unwrap();
+                }
+                InputMode::Finish => {
+                    self.input_mode_state_machine.transition(Reset).unwrap();
+                }
+                InputMode::ExternalEditor => todo!(),
             }
         }
     }
@@ -405,12 +421,7 @@ impl Controller {
     /// If the user enter a capture group we will ask for a second input that shows how the capture group should be transformed.
     /// If the user doesn't enter a capture group we will just copy the regex match.
     pub fn regex_transform(&mut self) -> AppResult<()> {
-        self.input_mode = InputMode::Editing;
-        let pattern = if cfg!(debug_assertions) {
-            TUI::get_user_input(r"(u).*(.)")?
-        } else {
-            TUI::get_user_input(r"Enter regex, e.g. (?<last>[^,\s]+),\s+(?<first>\S+)")?
-        };
+        let pattern = self.queued_command.message.clone().unwrap();
         let regex = regex::Regex::new(&pattern)?;
         let contains_capture_pattern = regex.capture_names().len() > 1;
         let header = self.database.get_current_header()?;
@@ -437,7 +448,7 @@ impl Controller {
 
     pub fn copy(&mut self) -> AppResult<()> {
         self.database.copy()?;
-        self.set_last_command(CommandWrapper::new(Command::Copy, None));
+        self.last_command = CommandWrapper::new(Command::Copy, None);
         Ok(())
     }
 
@@ -494,6 +505,39 @@ impl Controller {
         let new_column = TUI::get_user_input("Enter new column name.")?;
         self.database.rename_column(&new_column)?;
         self.last_command = CommandWrapper::new(Command::RenameColumn, None);
+        Ok(())
+    }
+
+    fn execute_queued_command(&mut self) -> AppResult<()> {
+        let result: AppResult<()> = match self.queued_command.command {
+            Command::RegexTransform => {
+                self.regex_transform()?;
+                Ok(())
+            }
+            _ => unreachable!("Invalid command"),
+            // Command::Quit => Ok(()),
+            // Command::Copy => self.copy(),
+            // Command::Edit => self.edit_cell(),
+            // Command::SqlQuery => self.sql_query(),
+            // Command::IllegalOperation => Ok(()),
+            // Command::None => Ok(()),
+            // Command::Sort => self.sort(),
+            // Command::Save => self.save_to_sqlite_file(),
+            // Command::Move(direction) => self.database.move_cursor(direction),
+            // Command::RegexFilter => self.regex_filter(),
+            // Command::NextTable => self.database.next_table(),
+            // Command::PrevTable => self.database.prev_table(),
+            // Command::ExactSearch => self.exact_search(),
+
+            // Command::TextToInt => self.text_to_int(),
+            // Command::IntToText => self.int_to_text(),
+            // Command::DeleteColumn => self.delete_column(),
+            // Command::RenameColumn => self.rename_column(),
+            // Command::Join(_) => todo!(),
+        };
+        if self.queued_command.command.requires_updating_view() {
+            self.database.slices[0].has_changed();
+        }
         Ok(())
     }
 }
