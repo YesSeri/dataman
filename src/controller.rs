@@ -277,6 +277,13 @@ impl Controller {
 
     fn user_input_mode(&mut self) -> AppResult<()> {
         if let Event::Key(key) = event::read()? {
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                if let KeyCode::Char('c') = key.code {
+                    self.input_mode_state_machine
+                        .transition(crate::input::Event::AbortEditing)
+                        .unwrap();
+                }
+            }
             if key.kind == KeyEventKind::Press {
                 match key.code {
                     KeyCode::Enter => self.submit_message(),
@@ -307,7 +314,6 @@ impl Controller {
     fn normal_mode(&mut self) -> AppResult<()> {
         if event::poll(std::time::Duration::from_millis(3000))? {
             let res = match if let Event::Key(key) = event::read()? {
-                dbg!(key);
                 Ok(Command::from(key))
             } else {
                 Err(app_error_other!("Could not poll"))
