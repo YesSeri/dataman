@@ -96,28 +96,28 @@ impl TUI {
         }
     }
 
-    pub fn get_user_input(data: &str) -> AppResult<String> {
-        // let editor_var = std::env::var("EDITOR").unwrap();
-        // let editor_and_args = editor_var.split_whitespace().collect::<Vec<_>>();
-        // let (editor, args) = editor_and_args.split_first().unwrap_or((&"nano", &[]));
-        // let mut args = args.to_vec();
-        // let mut file_path = std::env::temp_dir();
-        // file_path.push("dataman_input.txt");
-        // args.push(file_path.to_str().unwrap());
+    // pub fn get_user_input(data: &str) -> AppResult<String> {
+    // let editor_var = std::env::var("EDITOR").unwrap();
+    // let editor_and_args = editor_var.split_whitespace().collect::<Vec<_>>();
+    // let (editor, args) = editor_and_args.split_first().unwrap_or((&"nano", &[]));
+    // let mut args = args.to_vec();
+    // let mut file_path = std::env::temp_dir();
+    // file_path.push("dataman_input.txt");
+    // args.push(file_path.to_str().unwrap());
 
-        // let mut file = std::fs::File::create(&file_path)?;
-        // file.write_all(data.as_bytes())?;
+    // let mut file = std::fs::File::create(&file_path)?;
+    // file.write_all(data.as_bytes())?;
 
-        // info!("editor: {:?} args: {:?}", editor, args);
-        // std::process::Command::new(editor).args(args).status()?;
+    // info!("editor: {:?} args: {:?}", editor, args);
+    // std::process::Command::new(editor).args(args).status()?;
 
-        // let mut editable = String::new();
-        // std::fs::File::open(file_path)?.read_to_string(&mut editable)?;
-        // let trimmed = editable.trim_end_matches('\n').to_string();
-        // info!("editable: {:?} | trimmed: {:?}", editable, trimmed);
-        // Ok(trimmed)
-        todo!()
-    }
+    // let mut editable = String::new();
+    // std::fs::File::open(file_path)?.read_to_string(&mut editable)?;
+    // let trimmed = editable.trim_end_matches('\n').to_string();
+    // info!("editable: {:?} | trimmed: {:?}", editable, trimmed);
+    // Ok(trimmed)
+    // todo!()
+    // }
     fn update(
         f: &mut Frame,
         database: &mut Database,
@@ -130,7 +130,7 @@ impl TUI {
                 vec![
                     Constraint::Max(1000),
                     Constraint::Length(1),
-                    Constraint::Length(5),
+                    Constraint::Length(1),
                 ]
             }
             InputMode::Normal | InputMode::Abort | InputMode::Finish => {
@@ -215,18 +215,23 @@ impl TUI {
         f.render_widget(paragraph, rects[1]);
 
         if input_mode == InputMode::Editing {
-            let input = Paragraph::new(database.input.as_str())
-                // show cursor
-                .style(Style::default().fg(Color::Yellow))
-                .block(Block::bordered().title("Input"));
+            let prefix_text = "Input:";
+            let paragraph = Paragraph::new(Line::from(vec![
+                Span::raw(prefix_text).style(Style::default().fg(Color::Yellow)),
+                Span::from(database.input.as_str()),
+            ]));
+            // let input = Paragraph::new(database.input.as_str())
+            //     // show cursor
+            //     .style(Style::default().fg(Color::Yellow))
+            //     .block(Block::default().borders(Borders::empty()).title("Input"));
             f.set_cursor(
                 // Draw the cursor at the current position in the input field.
                 // This position is can be controlled via the left and right arrow key
-                rects[2].x + database.character_index as u16 + 1,
+                rects[2].x + database.character_index as u16 + prefix_text.len() as u16,
                 // Move one line down, from the border to the input line
-                rects[2].y + 1,
+                rects[2].y,
             );
-            f.render_widget(input, rects[2]);
+            f.render_widget(paragraph, rects[2]);
             // match app.input_mode {
             //     InputMode::Normal =>
             //         // Hide the cursor. `Frame` does this by default, so we don't need to do anything here

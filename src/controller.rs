@@ -26,6 +26,10 @@ pub(crate) struct CommandWrapper {
     command: Command,
     message: Option<String>,
 }
+enum InputTypes {
+    Normal(String),
+    Double(String, String),
+}
 
 impl CommandWrapper {
     pub(crate) fn new(command: Command, message: Option<String>) -> Self {
@@ -202,13 +206,14 @@ pub struct Controller {
 
 impl Controller {
     pub(crate) fn save_to_sqlite_file(&self) -> AppResult<()> {
-        let filename = TUI::get_user_input("Enter file name")?;
-        let path = PathBuf::from(filename);
-        Ok(self.database.backup_db(path)?)
+        // let filename = TUI::get_user_input("Enter file name")?;
+        todo!();
+        // let path = PathBuf::from(filename);
+        // Ok(self.database.backup_db(path)?)
     }
 
     pub(crate) fn sql_query(&self) -> Result<(), AppError> {
-        let query = TUI::get_user_input("Enter sqlite query")?;
+        let query = self.queued_command.message.clone().unwrap();
         self.database.sql_query(query)
     }
 
@@ -250,6 +255,10 @@ impl Controller {
             .transition(crate::input::Event::FinishEditing)
             .unwrap();
         self.queued_command.message = Some(self.database.input.clone());
+        self.reset_input();
+    }
+
+    fn reset_input(&mut self) {
         self.database.input.clear();
         self.reset_cursor();
     }
@@ -280,8 +289,10 @@ impl Controller {
             if key.modifiers.contains(KeyModifiers::CONTROL) {
                 if let KeyCode::Char('c') = key.code {
                     self.input_mode_state_machine
-                        .transition(crate::input::Event::AbortEditing)
+                        .transition(AbortEditing)
                         .unwrap();
+                    self.reset_input();
+                    return Ok(());
                 }
             }
             if key.kind == KeyEventKind::Press {
@@ -303,6 +314,7 @@ impl Controller {
                         self.input_mode_state_machine
                             .transition(crate::input::Event::AbortEditing)
                             .unwrap();
+                        self.reset_input();
                     }
                     _ => {}
                 }
@@ -321,31 +333,30 @@ impl Controller {
                 Ok(command) => {
                     self.last_command = CommandWrapper::new(command.clone(), None);
                     let result = match command {
-                        Command::Quit => Ok(()),
-                        Command::Copy => self.copy(),
-                        Command::RegexTransform => {
+                        Command::RegexTransform
+                        | Command::Save
+                        | Command::RegexFilter
+                        | Command::Edit
+                        | Command::ExactSearch
+                        | Command::SqlQuery
+                        | Command::RenameColumn => {
                             self.queued_command = CommandWrapper::new(command.clone(), None);
                             self.input_mode_state_machine
                                 .transition(StartEditing)
                                 .unwrap();
                             Ok(())
                         }
-                        Command::Edit => self.edit_cell(),
-                        Command::SqlQuery => self.sql_query(),
+                        Command::Quit => Ok(()),
+                        Command::Copy => self.copy(),
                         Command::IllegalOperation => Ok(()),
                         Command::None => Ok(()),
                         Command::Sort => self.sort(),
-                        Command::Save => self.save_to_sqlite_file(),
                         Command::Move(direction) => self.database.move_cursor(direction),
-                        Command::RegexFilter => self.regex_filter(),
                         Command::NextTable => self.database.next_table(),
                         Command::PrevTable => self.database.prev_table(),
-                        Command::ExactSearch => self.exact_search(),
-
                         Command::TextToInt => self.text_to_int(),
                         Command::IntToText => self.int_to_text(),
                         Command::DeleteColumn => self.delete_column(),
-                        Command::RenameColumn => self.rename_column(),
                         Command::Join(_) => todo!(),
                     };
 
@@ -415,11 +426,9 @@ impl Controller {
     }
 
     pub fn regex_filter(&mut self) -> AppResult<()> {
-        let pattern = TUI::get_user_input("Enter regex")?;
-        info!("pattern: {:?}", pattern);
+        let pattern = self.queued_command.message.clone().unwrap();
         let header = self.database.get_current_header()?;
         self.database.regex_filter(&header, &pattern)?;
-
         Ok(())
     }
 
@@ -432,17 +441,18 @@ impl Controller {
         let contains_capture_pattern = regex.capture_names().len() > 1;
         let header = self.database.get_current_header()?;
         if contains_capture_pattern {
-            let transformation = if cfg!(debug_assertions) {
-                TUI::get_user_input(r"${1}${2}")?
-            } else {
-                TUI::get_user_input(
-                    r"Enter transformation, e.g. '${first} ${second}' or '${1} ${2}' if un-named",
-                )?
-            };
-            info!("pattern: {pattern:?}, transformation: {transformation:?}");
+            todo!();
+            // let transformation = if cfg!(debug_assertions) {
+            //     TUI::get_user_input(r"${1}${2}")?
+            // } else {
+            //     TUI::get_user_input(
+            //         r"Enter transformation, e.g. '${first} ${second}' or '${1} ${2}' if un-named",
+            //     )?
+            // };
+            // info!("pattern: {pattern:?}, transformation: {transformation:?}");
 
-            self.database
-                .regex_capture_group_transform(&pattern, &header, &transformation)?;
+            // self.database
+            //     .regex_capture_group_transform(&pattern, &header, &transformation)?;
         } else {
             info!("pattern: {pattern:?}");
             self.database
@@ -466,7 +476,7 @@ impl Controller {
         let data = self.database.get_cell(id, &header)?;
         info!("data: {:?}", data);
 
-        let result = TUI::get_user_input(&data)?;
+        let result = self.queued_command.message.clone().unwrap();
         self.database.update_cell(header.as_str(), id, &result)?;
         Ok(())
     }
@@ -475,7 +485,7 @@ impl Controller {
         self.database.sort()
     }
     fn exact_search(&mut self) -> AppResult<()> {
-        let pattern = TUI::get_user_input("Enter regex")?;
+        let pattern = self.queued_command.message.clone().unwrap();
         info!("pattern: {:?}", pattern);
         let header = self.database.get_current_header()?;
         match self.database.exact_search(&header, &pattern) {
@@ -508,7 +518,7 @@ impl Controller {
     }
 
     fn rename_column(&mut self) -> Result<(), AppError> {
-        let new_column = TUI::get_user_input("Enter new column name.")?;
+        let new_column = self.queued_command.message.clone().unwrap();
         self.database.rename_column(&new_column)?;
         self.last_command = CommandWrapper::new(Command::RenameColumn, None);
         Ok(())
@@ -520,6 +530,11 @@ impl Controller {
                 self.regex_transform()?;
                 Ok(())
             }
+            Command::Edit => self.edit_cell(),
+            Command::SqlQuery => self.sql_query(),
+            Command::RegexFilter => self.regex_filter(),
+            Command::RenameColumn => self.rename_column(),
+            Command::ExactSearch => self.exact_search(),
             _ => unreachable!("Invalid command"),
             // Command::Quit => Ok(()),
             // Command::Copy => self.copy(),
