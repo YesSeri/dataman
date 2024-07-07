@@ -18,14 +18,9 @@ use ratatui::{
     Frame, Terminal,
 };
 
-use crate::input::InputMode;
-use crate::model::datarow::DataTable;
+use crate::{app_error_other, controller};
+use crate::{controller::input::InputMode, model::datarow::DataTable};
 use crate::{
-    app_error_other,
-    controller::{Command, CommandWrapper},
-};
-use crate::{
-    controller::Controller,
     error::{AppError, AppResult},
     model::database::Database,
 };
@@ -68,7 +63,7 @@ impl TUI {
         terminal::disable_raw_mode()?;
         Ok(())
     }
-    pub fn draw(controller: &mut Controller) -> AppResult<()> {
+    pub fn draw(controller: &mut controller::controller_impl::Controller) -> AppResult<()> {
         let table_height = TUI::get_table_height().unwrap();
         controller.ui.terminal.draw(|f| {
             match TUI::update(
@@ -87,9 +82,9 @@ impl TUI {
         Ok(())
     }
 
-    pub fn get_input() -> AppResult<Command> {
+    pub fn get_input() -> AppResult<controller::command::Command> {
         if let Event::Key(key) = event::read()? {
-            let command = Command::from(key);
+            let command = controller::command::Command::from(key);
             Ok(command)
         } else {
             Err(app_error_other!("Could not get input."))
@@ -121,7 +116,7 @@ impl TUI {
     fn update(
         f: &mut Frame,
         database: &mut Database,
-        last_command: &CommandWrapper,
+        last_command: &controller::command::CommandWrapper,
         table_height: u16,
         input_mode: InputMode,
     ) -> AppResult<()> {

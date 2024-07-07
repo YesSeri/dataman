@@ -1,3 +1,4 @@
+use crate::controller;
 use std::ffi::OsStr;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
@@ -350,12 +351,15 @@ impl Database {
         Ok(self.get_headers(&table_name)?.len() as u16)
     }
 
-    pub(crate) fn move_cursor(&mut self, direction: crate::controller::Direction) -> AppResult<()> {
+    pub(crate) fn move_cursor(
+        &mut self,
+        direction: controller::direction::Direction,
+    ) -> AppResult<()> {
         match direction {
-            crate::controller::Direction::Left => self.previous_header()?,
-            crate::controller::Direction::Right => self.next_header()?,
-            crate::controller::Direction::Up => self.previous_row()?,
-            crate::controller::Direction::Down => self.next_row()?,
+            controller::direction::Direction::Left => self.previous_header()?,
+            controller::direction::Direction::Right => self.next_header()?,
+            controller::direction::Direction::Up => self.previous_row()?,
+            controller::direction::Direction::Down => self.next_row()?,
         }
         Ok(())
     }

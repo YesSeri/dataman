@@ -8,7 +8,7 @@ pub enum InputMode {
 }
 
 #[derive(Debug)]
-pub enum Event {
+pub(super) enum Event {
     StartEditing,
     AbortEditing,
     FinishEditing,
@@ -28,7 +28,7 @@ impl StateMachine {
         }
     }
 
-    pub fn transition(&mut self, event: Event) -> Result<(), &str> {
+    pub(super) fn transition(&mut self, event: Event) -> Result<(), &str> {
         self.state = match (&self.state, event) {
             (InputMode::Normal, Event::StartEditing) => InputMode::Editing,
             (InputMode::Editing, Event::AbortEditing) => InputMode::Abort,
@@ -49,7 +49,7 @@ impl StateMachine {
 // tests
 #[cfg(test)]
 mod tests {
-    use crate::input::*;
+    use crate::controller::input::*;
 
     #[test]
     fn test_state_machine() {

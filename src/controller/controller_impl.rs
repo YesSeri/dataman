@@ -1,199 +1,16 @@
-use std::path::Path;
-use std::process::exit;
-use std::{
-    io::{Read, Write},
-    path::PathBuf,
-};
-
-use crate::input::Event::*;
-use crossterm::event::{self, Event, KeyEventKind};
-use crossterm::{
-    event::{KeyCode, KeyEvent, KeyModifiers},
-    ExecutableCommand,
-};
-use log::{error, info};
-use rusqlite::Statement;
-
-use crate::error::AppError;
-use crate::input::{InputMode, StateMachine};
+use crate::app_error_other;
+use crate::controller::command::{Command, CommandWrapper};
+use crate::controller::direction::Direction;
+use crate::controller::input::{self, InputMode};
+use crate::error::{AppError, AppResult};
+use crate::model::database::Database;
 use crate::model::datarow::DataTable;
 use crate::tui::TUI;
-use crate::{app_error_other, Config};
-use crate::{error::AppResult, model::database::Database};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use log::info;
+use std::path::PathBuf;
 
-#[derive(Debug, Clone)]
-pub(crate) struct CommandWrapper {
-    command: Command,
-    message: Option<String>,
-}
-enum InputTypes {
-    Normal(String),
-    Double(String, String),
-}
-
-impl CommandWrapper {
-    pub(crate) fn new(command: Command, message: Option<String>) -> Self {
-        Self { command, message }
-    }
-}
-
-impl std::fmt::Display for CommandWrapper {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.message.clone() {
-            Some(msg) => write!(f, "{:?}: {}", self.command, msg),
-            None => write!(f, "{:?}", self.command),
-        }
-    }
-}
-
-// #[derive(Debug, Clone, Copy, PartialEq)]
-// pub(crate) enum InputMode {
-//     Normal,
-//     Editing,
-//     FinishedEditing,
-// }
-#[derive(Debug, Clone, PartialEq)]
-pub enum Command {
-    None,
-    Copy,
-    RegexTransform,
-    RegexFilter,
-    Edit,
-    SqlQuery,
-    IllegalOperation,
-    Quit,
-    Sort,
-    Save,
-    Move(Direction),
-    NextTable,
-    PrevTable,
-    ExactSearch,
-    TextToInt,
-    IntToText,
-    DeleteColumn,
-    RenameColumn,
-    Join(Join),
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct Join {
-    tables: (String, String),
-    conditions: Vec<(String, String)>, // Pairs of column names to join on
-    join_type: JoinType,
-}
-//
-//impl Clone for Join {
-//fn clone(&self) -> Self {
-//let conditions: Vec<(String, String)> =
-//self.conditions.iter().map(|c| (c.0.clone(), c.1.clone()));
-//Self {
-//tables: (self.tables.0.clone(), self.tables.0.clone()),
-//conditions,
-//join_type: self.join_type,
-//}
-//}
-//}
-
-/// Outer Join is Left Outer Join
-/// Cross Join is cartesian product of the two tables.
-#[derive(Debug, PartialEq, Clone)]
-pub(crate) enum JoinType {
-    Inner,
-    Outer,
-    Cross,
-}
-impl Command {
-    fn requires_updating_view(&self) -> bool {
-        match self {
-            Command::Copy
-            | Command::RegexTransform
-            | Command::Edit
-            | Command::SqlQuery
-            | Command::Sort
-            | Command::NextTable
-            | Command::PrevTable
-            | Command::TextToInt
-            | Command::IntToText
-            | Command::DeleteColumn
-            | Command::RenameColumn
-            | Command::ExactSearch
-            | Command::Join(_)
-            | Command::RegexFilter => true,
-            Command::None
-            | Command::IllegalOperation
-            | Command::Save
-            | Command::Quit
-            | Command::Move(_) => false,
-        }
-    }
-}
-
-impl From<KeyEvent> for Command {
-    fn from(key_event: KeyEvent) -> Self {
-        match key_event.code {
-            KeyCode::Char('r') => Command::RegexTransform,
-            KeyCode::Char('e') => Command::Edit,
-            KeyCode::Right | KeyCode::Left | KeyCode::Up | KeyCode::Down => {
-                if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                    match key_event.code {
-                        KeyCode::Right => return Command::NextTable,
-                        KeyCode::Left => return Command::PrevTable,
-                        _ => (),
-                    }
-                }
-                Command::Move(Direction::from(key_event.code))
-            }
-            KeyCode::Char('w') => Command::Sort,
-            KeyCode::Char('a') => Command::Save,
-            KeyCode::Char('q') => Command::SqlQuery,
-            KeyCode::Char('f') => Command::RegexFilter,
-            KeyCode::Char('c') => {
-                if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                    Command::Quit
-                } else {
-                    Command::Copy
-                }
-            }
-            KeyCode::Char('s') => {
-                if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                    Command::Save
-                } else {
-                    Command::Sort
-                }
-            }
-            KeyCode::Char('/') => Command::ExactSearch,
-            KeyCode::Char('#') => Command::TextToInt,
-            KeyCode::Char('$') => Command::IntToText,
-            KeyCode::Char('X') => Command::DeleteColumn,
-            KeyCode::Char('R') => Command::RenameColumn,
-            KeyCode::Char(c) => {
-                info!("clicked: {c}");
-                Command::None
-            }
-            _ => Command::None,
-        }
-    }
-}
-
-impl From<KeyCode> for Direction {
-    fn from(value: KeyCode) -> Self {
-        match value {
-            KeyCode::Right => Direction::Right,
-            KeyCode::Left => Direction::Left,
-            KeyCode::Up => Direction::Up,
-            KeyCode::Down => Direction::Down,
-            _ => unreachable!(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum Direction {
-    Up,
-    Down,
-    Left,
-    Right,
-}
+use super::input::StateMachine;
 
 #[derive(Debug)]
 pub struct Controller {
@@ -205,18 +22,6 @@ pub struct Controller {
 }
 
 impl Controller {
-    pub(crate) fn save_to_sqlite_file(&self) -> AppResult<()> {
-        // let filename = TUI::get_user_input("Enter file name")?;
-        todo!();
-        // let path = PathBuf::from(filename);
-        // Ok(self.database.backup_db(path)?)
-    }
-
-    pub(crate) fn sql_query(&self) -> Result<(), AppError> {
-        let query = self.queued_command.message.clone().unwrap();
-        self.database.sql_query(query)
-    }
-
     pub fn new(ui: TUI, database: Database) -> Self {
         Self {
             ui,
@@ -225,6 +30,21 @@ impl Controller {
             queued_command: CommandWrapper::new(Command::None, None),
             input_mode_state_machine: StateMachine::new(),
         }
+    }
+
+    pub(crate) fn save_to_sqlite_file(&self) -> AppResult<()> {
+        let filename = self.queued_command.message.clone();
+        if let Some(filename) = filename {
+            let path = PathBuf::from(filename);
+            Ok(self.database.backup_db(path)?)
+        } else {
+            Err(app_error_other!("No filename provided"))
+        }
+    }
+
+    pub(crate) fn sql_query(&self) -> Result<(), AppError> {
+        let query = self.queued_command.message.clone().unwrap();
+        self.database.sql_query(query)
     }
 
     fn enter_char(&mut self, new_char: char) {
@@ -252,7 +72,7 @@ impl Controller {
     fn submit_message(&mut self) {
         log::info!("{}", self.database.input.clone());
         self.input_mode_state_machine
-            .transition(crate::input::Event::FinishEditing)
+            .transition(input::Event::FinishEditing)
             .unwrap();
         self.queued_command.message = Some(self.database.input.clone());
         self.reset_input();
@@ -289,7 +109,7 @@ impl Controller {
             if key.modifiers.contains(KeyModifiers::CONTROL) {
                 if let KeyCode::Char('c') = key.code {
                     self.input_mode_state_machine
-                        .transition(AbortEditing)
+                        .transition(input::Event::AbortEditing)
                         .unwrap();
                     self.reset_input();
                     return Ok(());
@@ -312,7 +132,7 @@ impl Controller {
                     }
                     KeyCode::Esc => {
                         self.input_mode_state_machine
-                            .transition(crate::input::Event::AbortEditing)
+                            .transition(input::Event::AbortEditing)
                             .unwrap();
                         self.reset_input();
                     }
@@ -342,7 +162,7 @@ impl Controller {
                         | Command::RenameColumn => {
                             self.queued_command = CommandWrapper::new(command.clone(), None);
                             self.input_mode_state_machine
-                                .transition(StartEditing)
+                                .transition(input::Event::StartEditing)
                                 .unwrap();
                             Ok(())
                         }
@@ -357,7 +177,7 @@ impl Controller {
                         Command::TextToInt => self.text_to_int(),
                         Command::IntToText => self.int_to_text(),
                         Command::DeleteColumn => self.delete_column(),
-                        Command::Join(_) => todo!(),
+                        // Command::Join(_) => todo!(),
                     };
 
                     if command.requires_updating_view() {
@@ -410,10 +230,14 @@ impl Controller {
                         CommandWrapper::new(Command::None, Some("Aborted input".to_string()));
 
                     self.queued_command = CommandWrapper::new(Command::None, None);
-                    self.input_mode_state_machine.transition(Reset).unwrap();
+                    self.input_mode_state_machine
+                        .transition(input::Event::Reset)
+                        .unwrap();
                 }
                 InputMode::Finish => {
-                    self.input_mode_state_machine.transition(Reset).unwrap();
+                    self.input_mode_state_machine
+                        .transition(input::Event::Reset)
+                        .unwrap();
                 }
                 InputMode::ExternalEditor => todo!(),
             }
@@ -561,6 +385,7 @@ impl Controller {
         }
         Ok(())
     }
+    // Other methods from the Controller struct
 }
 
 #[cfg(test)]

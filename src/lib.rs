@@ -7,7 +7,6 @@ use once_cell::sync::Lazy;
 
 pub mod controller;
 pub mod error;
-pub mod input;
 pub mod model;
 pub mod tui;
 

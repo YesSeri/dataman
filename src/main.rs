@@ -11,7 +11,10 @@ use std::process::exit;
 use env_logger::{Builder, Env};
 use log::error;
 
-use dataman::{controller::Controller, error::AppError, model::database::Database, tui::TUI, Cli};
+use dataman::{
+    controller::controller_impl::Controller, error::AppError, model::database::Database, tui::TUI,
+    Cli,
+};
 
 fn main() {
     // if not release mode, print logs
