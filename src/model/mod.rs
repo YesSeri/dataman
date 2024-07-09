@@ -2,6 +2,6 @@ pub mod converter;
 pub mod database;
 pub mod datarow;
 pub mod db_slice;
-pub(crate) mod embedded_engine;
+// pub(crate) mod embedded_engine;
 pub mod regexping;
 pub mod sql_queries;

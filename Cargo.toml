@@ -27,6 +27,6 @@ serde = { version = "1.0.197", features = ["derive"] }
 mlua = { version = "0.9.9", features = ["lua54", "vendored"] }
 
 
-[dependencies.pyo3]
-version = "0.22.1"
-features = ["auto-initialize", "serde"]
+# [dependencies.pyo3]
+# version = "0.22.1"
+# features = ["auto-initialize", "serde"]

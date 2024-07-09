@@ -91,28 +91,29 @@ impl TUI {
         }
     }
 
-    // pub fn get_user_input(data: &str) -> AppResult<String> {
-    // let editor_var = std::env::var("EDITOR").unwrap();
-    // let editor_and_args = editor_var.split_whitespace().collect::<Vec<_>>();
-    // let (editor, args) = editor_and_args.split_first().unwrap_or((&"nano", &[]));
-    // let mut args = args.to_vec();
-    // let mut file_path = std::env::temp_dir();
-    // file_path.push("dataman_input.txt");
-    // args.push(file_path.to_str().unwrap());
+    pub fn get_external_editor_input(data: &str) -> AppResult<String> {
+        let res = std::env::var("EDITOR");
+        let editor_var = match res {
+            Err(err) => return Err(app_error_other!(format!("Could not get editor: {:?}", err))),
+            Ok(ev) => ev,
+        };
+        let editor_and_args = editor_var.split_whitespace().collect::<Vec<_>>();
+        let (editor, args) = editor_and_args.split_first().unwrap_or((&"nano", &[]));
+        let mut args = args.to_vec();
+        let mut file_path = std::env::temp_dir();
+        file_path.push("dataman_input.txt");
+        args.push(file_path.to_str().unwrap());
 
-    // let mut file = std::fs::File::create(&file_path)?;
-    // file.write_all(data.as_bytes())?;
+        let mut file = std::fs::File::create(&file_path)?;
+        file.write_all(data.as_bytes())?;
 
-    // info!("editor: {:?} args: {:?}", editor, args);
-    // std::process::Command::new(editor).args(args).status()?;
+        std::process::Command::new(editor).args(args).status()?;
 
-    // let mut editable = String::new();
-    // std::fs::File::open(file_path)?.read_to_string(&mut editable)?;
-    // let trimmed = editable.trim_end_matches('\n').to_string();
-    // info!("editable: {:?} | trimmed: {:?}", editable, trimmed);
-    // Ok(trimmed)
-    // todo!()
-    // }
+        let mut editable = String::new();
+        std::fs::File::open(file_path)?.read_to_string(&mut editable)?;
+        let trimmed = editable.trim_end_matches('\n').to_string();
+        Ok(trimmed)
+    }
     fn update(
         f: &mut Frame,
         database: &mut Database,

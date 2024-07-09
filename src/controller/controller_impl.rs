@@ -56,6 +56,7 @@ impl Controller {
         let cursor_moved_right = self.database.character_index.saturating_add(1);
         self.database.character_index = self.clamp_cursor(cursor_moved_right);
     }
+
     fn clamp_cursor(&self, new_cursor_pos: usize) -> usize {
         new_cursor_pos.clamp(0, self.database.input.chars().count())
     }
@@ -103,13 +104,16 @@ impl Controller {
         }
     }
 
+    fn get_external_data(&mut self) -> AppResult<String> {
+        TUI::get_external_editor_input(&self.database.input)
+    }
+
     fn user_input_mode(&mut self) -> AppResult<()> {
         if let Event::Key(key) = event::read()? {
             if key.modifiers.contains(KeyModifiers::CONTROL) {
                 if let KeyCode::Char('c') = key.code {
                     self.input_mode_state_machine
-                        .transition(input::Event::AbortEditing)
-                        .unwrap();
+                        .transition(input::Event::AbortEditing)?;
                     self.reset_input();
                     return Ok(());
                 }
@@ -131,9 +135,19 @@ impl Controller {
                     }
                     KeyCode::Esc => {
                         self.input_mode_state_machine
-                            .transition(input::Event::AbortEditing)
-                            .unwrap();
+                            .transition(input::Event::AbortEditing)?;
                         self.reset_input();
+                    }
+                    KeyCode::Tab => {
+                        self.input_mode_state_machine
+                            .transition(input::Event::UseExternalEditor)?;
+                        let res = self.get_external_data();
+                        if let Ok(data) = res {
+                            self.database.character_index = data.len();
+                            self.database.input = data;
+                        }
+                        self.input_mode_state_machine
+                            .transition(input::Event::ExitExternalEditor)?;
                     }
                     _ => {}
                 }
@@ -162,8 +176,7 @@ impl Controller {
                         | Command::RenameTable => {
                             self.queued_command = CommandWrapper::new(command.clone(), None);
                             self.input_mode_state_machine
-                                .transition(input::Event::StartEditing)
-                                .unwrap();
+                                .transition(input::Event::StartEditing)?;
                             Ok(())
                         }
                         Command::Quit => Ok(()),
@@ -245,13 +258,11 @@ impl Controller {
 
                     self.queued_command = CommandWrapper::new(Command::None, None);
                     self.input_mode_state_machine
-                        .transition(input::Event::Reset)
-                        .unwrap();
+                        .transition(input::Event::Reset)?;
                 }
                 InputMode::Finish => {
                     self.input_mode_state_machine
-                        .transition(input::Event::Reset)
-                        .unwrap();
+                        .transition(input::Event::Reset)?;
                 }
                 InputMode::ExternalEditor => todo!(),
             }
