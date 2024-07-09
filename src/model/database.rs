@@ -127,10 +127,9 @@ impl Database {
     }
     pub(crate) fn count_rows(&self) -> Option<u32> {
         let table_name = self.get_current_table_name().ok()?;
-        log::error!("table_name: {:?}", table_name);
         self.connection
             .query_row(
-                &format!(r#"SELECT COUNT(*) FROM {table_name};"#),
+                &format!(r#"SELECT COUNT(*) FROM "{table_name}";"#),
                 [],
                 |row| row.get(0),
             )

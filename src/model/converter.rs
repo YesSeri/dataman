@@ -58,7 +58,7 @@ pub(crate) fn database_from_csv(path: PathBuf, connection: Connection) -> AppRes
     //     database.connection.execute_batch(&queries)?;
     // }
     let query =
-        "SELECT rowid FROM sqlite_master WHERE type='table' ORDER BY rowid LIMIT 1;".to_string();
+        r#"SELECT rowid FROM sqlite_master WHERE type='table' ORDER BY rowid LIMIT 1;"#.to_string();
     let table_idx: u16 = database
         .connection
         .query_row(&query, [], |row| row.get(0))?;
@@ -101,13 +101,17 @@ pub(crate) fn create_table_query(
 
     let headers_string: String = headers
         .iter()
-        .map(|header| format!("\n\t`{}` TEXT", header))
+        .map(|header| format!(r#""{}" TEXT"#, header))
         .collect::<Vec<String>>()
         .join(",");
+    log::info!("Creating table with headers: {}", headers_string);
     let query = format!(
-        "CREATE TABLE IF NOT EXISTS '{}' (\n\tid INTEGER PRIMARY KEY, {}\n);",
+        r#"CREATE TABLE IF NOT EXISTS '{}'
+	(id INTEGER PRIMARY KEY, {})
+	;"#,
         table_name, headers_string
     );
+    log::info!("Query: {}", query);
     Ok(query)
 }
 
@@ -125,15 +129,15 @@ pub(crate) fn get_headers_for_query(
 }
 
 pub(crate) fn sqlite_to_out(connection: &Connection, path: PathBuf) -> AppResult<()> {
-    let mut stmt =
-        connection.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name;")?;
+    let mut stmt = connection
+        .prepare(r#"SELECT "name" FROM sqlite_master WHERE type='table' ORDER BY "name";"#)?;
 
     let tables: Vec<String> = stmt
         .query_map([], |row| row.get(0))?
         .collect::<Result<_, _>>()?;
     let mut wtr = csv::Writer::from_path(path)?;
     for table in tables {
-        let query = &format!("SELECT * FROM `{}`;", table);
+        let query = &format!(r#"SELECT * FROM `{}`;"#, table);
         let mut stmt = connection.prepare(query)?;
         let headers = stmt
             .column_names()
@@ -217,7 +221,7 @@ fn batch_exec_and_clear(
 ) -> AppResult<()> {
     queries.clear();
     *queries = format!(
-        "INSERT INTO '{}' ({}) VALUES \n{};",
+        r#"INSERT INTO '{}' ({}) VALUES {};"#,
         table_name,
         columns,
         items.join(",\n")
