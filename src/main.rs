@@ -1,10 +1,7 @@
 use std::io::Write;
-use std::path::PathBuf;
-use std::process::exit;
 
 use crossterm::terminal::disable_raw_mode;
 use env_logger::{Builder, Env};
-use log::error;
 
 use dataman::{
     controller::controller_impl::Controller, error::AppError, model::database::Database, tui::TUI,
@@ -14,19 +11,18 @@ use dataman::{
 fn main() -> Result<(), AppError> {
     // if not release mode, print logs
     // if release mode, logs are not printed
-    setup_panic_hook()?;
-    setup_logging()?;
+    setup_panic_hook();
+    setup_logging();
     setup_application()?.run()
 }
 
-fn setup_panic_hook() -> Result<(), AppError> {
+fn setup_panic_hook() {
     std::panic::set_hook(Box::new(|_| {
         match disable_raw_mode() {
-            Ok(_) => println!("disabled raw mode"),
+            Ok(()) => println!("disabled raw mode"),
             Err(err) => println!("could not disable raw mode due to {err}"),
         };
     }));
-    Ok(())
 }
 
 fn setup_application() -> Result<Controller, AppError> {
@@ -37,7 +33,7 @@ fn setup_application() -> Result<Controller, AppError> {
     Ok(Controller::new(tui, database))
 }
 
-fn setup_logging() -> Result<(), AppError> {
+fn setup_logging() {
     let env = Env::default();
 
     Builder::from_env(env)
@@ -57,5 +53,4 @@ fn setup_logging() -> Result<(), AppError> {
             )
         })
         .init();
-    Ok(())
 }
