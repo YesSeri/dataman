@@ -8,6 +8,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::process::exit;
 
+use crossterm::terminal::disable_raw_mode;
 use env_logger::{Builder, Env};
 use log::error;
 
@@ -17,11 +18,14 @@ use dataman::{
 };
 
 fn main() {
+    std::panic::set_hook(Box::new(|_| {
+        match disable_raw_mode() {
+            Ok(_) => println!("disabled raw mode"),
+            Err(err) => println!("could not disable raw mode due to {err}"),
+        };
+    }));
     // if not release mode, print logs
     // if release mode, logs are not printed
-    // let a = "xxx";
-    // println!(r#"abc"{a}"abc"#);
-    // return;
     setup_logging();
     let mut controller = setup_application().unwrap_or_else(|err| {
         eprintln!("Could not start due to {err}");
