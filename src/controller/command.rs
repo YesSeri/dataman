@@ -47,6 +47,8 @@ pub enum Command {
     TextToInt,
     IntToText,
     DeleteColumn,
+    DeleteTable,
+    RenameTable,
     RenameColumn,
 }
 
@@ -63,8 +65,10 @@ impl Command {
             | Command::TextToInt
             | Command::IntToText
             | Command::DeleteColumn
+            | Command::RenameTable
             | Command::RenameColumn
             | Command::ExactSearch
+            | Command::DeleteTable
             | Command::RegexFilter => true,
             Command::None
             | Command::IllegalOperation
@@ -78,7 +82,7 @@ impl Command {
 impl From<KeyEvent> for Command {
     fn from(key_event: KeyEvent) -> Self {
         match key_event.code {
-            KeyCode::Char('r') => Command::RegexTransform,
+            KeyCode::Char('t') => Command::RegexTransform,
             KeyCode::Char('e') => Command::Edit,
             KeyCode::Right | KeyCode::Left | KeyCode::Up | KeyCode::Down => {
                 if key_event.modifiers.contains(KeyModifiers::CONTROL) {
@@ -112,7 +116,9 @@ impl From<KeyEvent> for Command {
             KeyCode::Char('#') => Command::TextToInt,
             KeyCode::Char('$') => Command::IntToText,
             KeyCode::Char('X') => Command::DeleteColumn,
-            KeyCode::Char('R') => Command::RenameColumn,
+            KeyCode::Char('D') => Command::DeleteTable,
+            KeyCode::Char('r') => Command::RenameColumn,
+            KeyCode::Char('R') => Command::RenameTable,
             KeyCode::Char(c) => {
                 info!("clicked: {c}");
                 Command::None

@@ -1,10 +1,6 @@
 use crate::error::AppResult;
 
-pub fn build_regex_filter_query(
-    header: &str,
-    pattern: &str,
-    table_name: &str,
-) -> AppResult<String> {
+pub fn regex_filter_query(header: &str, pattern: &str, table_name: &str) -> AppResult<String> {
     // create new table with filter applied using create table as sqlite statement.
     regex::Regex::new(pattern)?;
     let select_query =
@@ -13,7 +9,7 @@ pub fn build_regex_filter_query(
     Ok(create_table_query)
 }
 
-pub(crate) fn build_regex_with_capture_group_transform_query(
+pub(crate) fn regex_with_capture_group_transform_query(
     header: &str,
     pattern: &str,
     transformation: &str,
@@ -34,7 +30,7 @@ pub(crate) fn build_regex_with_capture_group_transform_query(
     Ok(queries)
 }
 
-pub(crate) fn build_regex_no_capture_group_transform_query(
+pub(crate) fn regex_no_capture_group_transform_query(
     header: &str,
     pattern: &str,
     table_name: &str,

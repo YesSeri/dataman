@@ -158,7 +158,8 @@ impl Controller {
                         | Command::Edit
                         | Command::ExactSearch
                         | Command::SqlQuery
-                        | Command::RenameColumn => {
+                        | Command::RenameColumn
+                        | Command::RenameTable => {
                             self.queued_command = CommandWrapper::new(command.clone(), None);
                             self.input_mode_state_machine
                                 .transition(input::Event::StartEditing)
@@ -176,8 +177,21 @@ impl Controller {
                         Command::TextToInt => self.text_to_int(),
                         Command::IntToText => self.int_to_text(),
                         Command::DeleteColumn => self.delete_column(),
+                        Command::DeleteTable => self.database.delete_table(),
                         // Command::Join(_) => todo!(),
                     };
+                    match command {
+                        Command::RenameTable => {
+                            let old_table_name = self.database.get_current_table_name()?;
+                            self.database.character_index = old_table_name.len();
+                            self.database.input = old_table_name;
+                        }
+
+                        Command::RenameColumn => {
+                            log::info!("testing 2");
+                        }
+                        _ => {}
+                    }
 
                     if command.requires_updating_view() {
                         self.database.slices[0].has_changed();
@@ -203,8 +217,12 @@ impl Controller {
     pub fn run(&mut self) -> AppResult<()> {
         loop {
             TUI::draw(self)?;
-            log::info!("state: {:?}", self.input_mode_state_machine.get_state());
-            log::info!("queued_command: {:?}", self.queued_command);
+            // log::info!("state: {:?}", self.input_mode_state_machine.get_state());
+            // log::info!("queued_command: {:?}", self.queued_command);
+            log::info!(
+                "database info: tbl idx {:?}, ",
+                self.database.current_table_idx
+            );
             match self.input_mode_state_machine.get_state() {
                 InputMode::Normal if (self.queued_command.command == Command::None) => {
                     let res = self.normal_mode();
@@ -214,10 +232,11 @@ impl Controller {
                     }
                 }
                 InputMode::Normal => {
-                    let res = self.execute_queued_command();
+                    self.execute_queued_command()?;
                     self.queued_command = CommandWrapper::new(Command::None, None);
                 }
                 InputMode::Editing => {
+                    log::error!("editing {}", self.database.input);
                     let res = self.user_input_mode();
                 }
                 InputMode::Abort => {
@@ -354,31 +373,41 @@ impl Controller {
             Command::SqlQuery => self.sql_query(),
             Command::RegexFilter => self.regex_filter(),
             Command::RenameColumn => self.rename_column(),
+            Command::RenameTable => self.rename_table(),
             Command::ExactSearch => self.exact_search(),
-            _ => unreachable!("Invalid command"),
-            // Command::Quit => Ok(()),
-            // Command::Copy => self.copy(),
-            // Command::Edit => self.edit_cell(),
-            // Command::SqlQuery => self.sql_query(),
-            // Command::IllegalOperation => Ok(()),
-            // Command::None => Ok(()),
-            // Command::Sort => self.sort(),
-            // Command::Save => self.save_to_sqlite_file(),
-            // Command::Move(direction) => self.database.move_cursor(direction),
-            // Command::RegexFilter => self.regex_filter(),
-            // Command::NextTable => self.database.next_table(),
-            // Command::PrevTable => self.database.prev_table(),
-            // Command::ExactSearch => self.exact_search(),
+            _ => {
+                log::error!("Command not implemented: {:?}", self.queued_command.command);
+                return Err(AppError::from("Command not implemented"));
+            } // Command::Quit => Ok(()),
+              // Command::Copy => self.copy(),
+              // Command::Edit => self.edit_cell(),
+              // Command::SqlQuery => self.sql_query(),
+              // Command::IllegalOperation => Ok(()),
+              // Command::None => Ok(()),
+              // Command::Sort => self.sort(),
+              // Command::Save => self.save_to_sqlite_file(),
+              // Command::Move(direction) => self.database.move_cursor(direction),
+              // Command::RegexFilter => self.regex_filter(),
+              // Command::NextTable => self.database.next_table(),
+              // Command::PrevTable => self.database.prev_table(),
+              // Command::ExactSearch => self.exact_search(),
 
-            // Command::TextToInt => self.text_to_int(),
-            // Command::IntToText => self.int_to_text(),
-            // Command::DeleteColumn => self.delete_column(),
-            // Command::RenameColumn => self.rename_column(),
-            // Command::Join(_) => todo!(),
+              // Command::TextToInt => self.text_to_int(),
+              // Command::IntToText => self.int_to_text(),
+              // Command::DeleteColumn => self.delete_column(),
+              // Command::RenameColumn => self.rename_column(),
+              // Command::Join(_) => todo!(),
         };
         if self.queued_command.command.requires_updating_view() {
             self.database.slices[0].has_changed();
         }
+        Ok(())
+    }
+
+    fn rename_table(&mut self) -> Result<(), AppError> {
+        let new_table_name = self.queued_command.message.clone().unwrap();
+        self.database.rename_table(&new_table_name)?;
+        self.last_command = CommandWrapper::new(Command::RenameColumn, None);
         Ok(())
     }
     // Other methods from the Controller struct

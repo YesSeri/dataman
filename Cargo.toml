@@ -24,4 +24,9 @@ ratatui = { version = "0.26.2", features = ["all-widgets"] }
 regex = "1.10.4"
 rusqlite = { version = "0.31.0", features = ["bundled", "functions", "backup"] }
 serde = { version = "1.0.197", features = ["derive"] }
+mlua = { version = "0.9.9", features = ["lua54", "vendored"] }
 
+
+[dependencies.pyo3]
+version = "0.22.1"
+features = ["auto-initialize", "serde"]

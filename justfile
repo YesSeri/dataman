@@ -13,7 +13,7 @@ release:
     cargo build --release
 
 install: release
-    cp target/release/dataman ~/.local/bin/dataman
+    cp target/release/dataman ~/.local/bin/dam
 
 clean:
     cargo clean

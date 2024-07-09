@@ -20,7 +20,7 @@ use crate::tui::TUI;
 use super::datarow::DataTable;
 use super::db_slice::DatabaseSlice;
 use super::regexping;
-use super::{converter, query_builder};
+use super::{converter, sql_queries};
 
 #[derive(Debug)]
 pub struct Database {
@@ -249,7 +249,7 @@ impl Database {
     pub fn regex_filter(&mut self, header: &str, pattern: &str) -> AppResult<()> {
         // create new table with filter applied using create table as sqlite statement.
         let table_name = self.get_current_table_name()?;
-        let query = regexping::build_regex_filter_query(header, pattern, &table_name)?;
+        let query = regexping::regex_filter_query(header, pattern, &table_name)?;
 
         self.execute(&query, [])?;
         self.next_table()?;
@@ -261,7 +261,7 @@ impl Database {
         let table_name = self.get_current_table_name()?;
         let current_row =
             self.slices[0].row_offset + self.slices[0].table_state.selected().unwrap_or(0) as u32;
-        let query = query_builder::build_exact_search_query(
+        let query = sql_queries::build::exact_search_query(
             &self.get_ordering(),
             search_header,
             current_row,
@@ -290,7 +290,7 @@ impl Database {
     ) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
         // for each row in the table, run fun on the value of column name and insert the result into the new column
-        let queries = regexping::build_regex_with_capture_group_transform_query(
+        let queries = regexping::regex_with_capture_group_transform_query(
             header,
             pattern,
             transformation,
@@ -307,7 +307,7 @@ impl Database {
         let table_name = self.get_current_table_name()?;
         // for each row in the table, run fun on the value of column name and insert the result into the new column
         let queries =
-            regexping::build_regex_no_capture_group_transform_query(header, pattern, &table_name)?;
+            regexping::regex_no_capture_group_transform_query(header, pattern, &table_name)?;
         self.execute_batch(&queries)?;
         Ok(())
     }
@@ -443,14 +443,14 @@ impl Database {
     pub(crate) fn text_to_int(&self) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
         let column = self.get_current_header()?;
-        let queries = query_builder::build_text_to_int(&table_name, &column);
+        let queries = sql_queries::build::text_to_int(&table_name, &column);
         self.execute_batch(&queries)
     }
 
     pub(crate) fn int_to_text(&self) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
         let column = self.get_current_header()?;
-        let queries = query_builder::build_int_to_text_query(&table_name, &column);
+        let queries = sql_queries::build::int_to_text_query(&table_name, &column);
         self.execute_batch(&queries)
     }
 
@@ -461,7 +461,7 @@ impl Database {
         if Some(&column) == order_column.as_ref() {
             self.order_column = None;
         }
-        let queries = query_builder::build_delete_column_query(&table_name, &column);
+        let queries = sql_queries::build::delete_column_query(&table_name, &column);
         self.execute_batch(&queries)?;
         self.header_idx = self.header_idx.saturating_sub(1);
         Ok(Some(format!("Deleted column {column} from {table_name}")))
@@ -474,7 +474,7 @@ impl Database {
         if Some(&column) == order_column.as_ref() {
             self.order_column = Some(new_column.to_string());
         }
-        let queries = query_builder::build_rename_column_query(&table_name, &column, new_column);
+        let queries = sql_queries::build::rename_column_query(&table_name, &column, new_column);
         self.execute_batch(&queries)
     }
     pub(crate) fn open_table_of_tables(&self) -> AppResult<String> {
@@ -487,6 +487,22 @@ impl Database {
             names.push(row.get(0)?);
         }
         Ok("aaa".to_string())
+    }
+
+    pub(crate) fn delete_table(&mut self) -> AppResult<()> {
+        let table_name = self.get_current_table_name()?;
+        let query = sql_queries::build::delete_table_query(&table_name);
+        self.execute(&query, [])?;
+        self.current_table_idx = self.current_table_idx.saturating_sub(1);
+        log::info!("Deleted table {table_name}");
+        Ok(())
+    }
+
+    pub(crate) fn rename_table(&self, new_table_name: &str) -> AppResult<()> {
+        let old_table_name = &self.get_current_table_name()?;
+        let query = sql_queries::build::rename_table_query(old_table_name, new_table_name);
+        self.execute(&query, [])?;
+        Ok(())
     }
 }
 

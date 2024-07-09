@@ -16,7 +16,7 @@ pub(crate) fn database_from_csv(path: PathBuf, connection: Connection) -> AppRes
     // let table_name = Database::get_table_name(path);
     // let table_names = vec![table_name.to_string()];
     // let mut queries = String::new();
-    // let query = build_create_table_query(&mut csv, &table_name).unwrap();
+    // let query = create_table_query(&mut csv, &table_name).unwrap();
     // queries.push_str(&query);
     // connection.execute_batch(&queries)?;
     // queries.clear();
@@ -31,7 +31,7 @@ pub(crate) fn database_from_csv(path: PathBuf, connection: Connection) -> AppRes
     // let mut items = Vec::with_capacity(LIMIT);
     // for record in records {
     //     let record = record?;
-    //     let result = build_value_query(&record);
+    //     let result = value_query(&record);
     //     items.push(result);
     //     i += 1;
     //     if i == LIMIT {
@@ -67,7 +67,7 @@ pub(crate) fn database_from_csv(path: PathBuf, connection: Connection) -> AppRes
     Ok(database)
 }
 
-fn build_value_query(record: &StringRecord) -> String {
+fn value_query(record: &StringRecord) -> String {
     let row = record
         .iter()
         .map(|s| {
@@ -88,7 +88,7 @@ pub(crate) fn database_from_sqlite(connection: Connection) -> AppResult<Database
     Ok(database)
 }
 
-pub(crate) fn build_create_table_query(
+pub(crate) fn create_table_query(
     csv: &mut Reader<File>,
     table_name: &str,
 ) -> Result<String, Box<dyn Error>> {
@@ -182,7 +182,7 @@ pub(crate) fn insert_csv_data_database(
         Database::get_table_name(path).ok_or(app_error_other!("could not get table name."))?;
     let table_names = [table_name.to_string()];
     let mut queries = String::new();
-    let query = build_create_table_query(&mut csv, &table_name).unwrap();
+    let query = create_table_query(&mut csv, &table_name).unwrap();
     queries.push_str(&query);
     connection.execute_batch(&queries)?;
     queries.clear();
@@ -228,7 +228,7 @@ fn batch_exec_and_clear(
 }
 
 fn create_insert_stmt_record(record: StringRecord, items: &mut Vec<String>) {
-    let result = build_value_query(&record);
+    let result = value_query(&record);
     items.push(result);
 }
 

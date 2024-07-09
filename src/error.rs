@@ -60,6 +60,11 @@ impl From<rusqlite::Error> for AppError {
     }
 }
 
+impl From<&str> for AppError {
+    fn from(s: &str) -> AppError {
+        AppError::Other(Some(s.to_string()))
+    }
+}
 #[macro_export]
 macro_rules! app_error_other {
     ($expression:expr) => {

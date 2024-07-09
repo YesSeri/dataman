@@ -1,3 +1,8 @@
+#![allow(unreachable_code)]
+#![allow(unused_imports)]
+#![allow(unused_variables)]
+#![allow(unused_mut)]
+#![allow(unused_assignments)]
 use std::io::Write;
 
 use crossterm::terminal::disable_raw_mode;
