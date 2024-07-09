@@ -31,9 +31,15 @@ fn setup_panic_hook() {
 }
 
 fn setup_application() -> Result<Controller, AppError> {
+    let time_start = std::time::Instant::now();
     let cli = <Cli as clap::Parser>::parse();
     let paths = cli.paths;
     let database = Database::try_from(paths)?;
+    let time_end = std::time::Instant::now();
+    log::debug!(
+        "Time taken to setup application: {:?}",
+        time_end - time_start
+    );
     let tui = TUI::new();
     Ok(Controller::new(tui, database))
 }
@@ -44,7 +50,7 @@ fn setup_logging() {
     Builder::from_env(env)
         .write_style(env_logger::WriteStyle::Always)
         .format(|buf, record| {
-            let timestamp = buf.timestamp();
+            let timestamp = buf.timestamp_millis();
             let write_style = buf.default_level_style(record.level());
 
             writeln!(

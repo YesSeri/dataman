@@ -194,6 +194,7 @@ impl TUI {
         let a = database.header_idx;
         let row = database.slices[0].table_state.selected().unwrap_or(0);
         let total_rows = database.count_rows().unwrap_or(0);
+        log::error!("total rows: {:?}", total_rows);
         // let rowid = rows.get(b).unwrap().data.get(0);
         let rowid = rows
             .get(row)

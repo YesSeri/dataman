@@ -232,10 +232,6 @@ impl Controller {
             TUI::draw(self)?;
             // log::info!("state: {:?}", self.input_mode_state_machine.get_state());
             // log::info!("queued_command: {:?}", self.queued_command);
-            log::info!(
-                "database info: tbl idx {:?}, ",
-                self.database.current_table_idx
-            );
             match self.input_mode_state_machine.get_state() {
                 InputMode::Normal if (self.queued_command.command == Command::None) => {
                     let res = self.normal_mode();
@@ -249,7 +245,6 @@ impl Controller {
                     self.queued_command = CommandWrapper::new(Command::None, None);
                 }
                 InputMode::Editing => {
-                    log::error!("editing {}", self.database.input);
                     let res = self.user_input_mode();
                 }
                 InputMode::Abort => {
