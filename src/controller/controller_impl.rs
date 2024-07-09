@@ -70,7 +70,6 @@ impl Controller {
     }
 
     fn submit_message(&mut self) {
-        log::info!("{}", self.database.input.clone());
         self.input_mode_state_machine
             .transition(input::Event::FinishEditing)
             .unwrap();
@@ -215,12 +214,8 @@ impl Controller {
                     }
                 }
                 InputMode::Normal => {
-                    log::info!("state: {:?}", self.input_mode_state_machine.get_state());
-                    log::info!("queued_command: {:?}", self.queued_command);
                     let res = self.execute_queued_command();
                     self.queued_command = CommandWrapper::new(Command::None, None);
-                    log::info!("state: {:?}", self.input_mode_state_machine.get_state());
-                    log::info!("queued_command: {:?}", self.queued_command);
                 }
                 InputMode::Editing => {
                     let res = self.user_input_mode();
@@ -355,6 +350,7 @@ impl Controller {
                 Ok(())
             }
             Command::Edit => self.edit_cell(),
+            // CREATE TABLE data2 AS SELECT firstname FROM data WHERE lastname = 'zenkert';
             Command::SqlQuery => self.sql_query(),
             Command::RegexFilter => self.regex_filter(),
             Command::RenameColumn => self.rename_column(),

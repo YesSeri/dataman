@@ -1,9 +1,3 @@
-#![allow(unreachable_code)]
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-#![allow(unused_mut)]
-#![allow(unused_assignments)]
-
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::exit;
@@ -17,29 +11,22 @@ use dataman::{
     Cli,
 };
 
-fn main() {
+fn main() -> Result<(), AppError> {
+    // if not release mode, print logs
+    // if release mode, logs are not printed
+    setup_panic_hook()?;
+    setup_logging()?;
+    setup_application()?.run()
+}
+
+fn setup_panic_hook() -> Result<(), AppError> {
     std::panic::set_hook(Box::new(|_| {
         match disable_raw_mode() {
             Ok(_) => println!("disabled raw mode"),
             Err(err) => println!("could not disable raw mode due to {err}"),
         };
     }));
-    // if not release mode, print logs
-    // if release mode, logs are not printed
-    setup_logging();
-    let mut controller = setup_application().unwrap_or_else(|err| {
-        eprintln!("Could not start due to {err}");
-        exit(1);
-        // '1' indicates an error setting up the application,
-        // dunno if this is a good way to do it,
-        // should probably be more fine-grained.
-    });
-
-    if let Err(err) = controller.run() {
-        eprintln!("Program has quit due to error: {err}");
-        exit(2);
-        // '2' indicates an error running the application
-    }
+    Ok(())
 }
 
 fn setup_application() -> Result<Controller, AppError> {
@@ -50,7 +37,7 @@ fn setup_application() -> Result<Controller, AppError> {
     Ok(Controller::new(tui, database))
 }
 
-fn setup_logging() {
+fn setup_logging() -> Result<(), AppError> {
     let env = Env::default();
 
     Builder::from_env(env)
@@ -70,4 +57,5 @@ fn setup_logging() {
             )
         })
         .init();
+    Ok(())
 }

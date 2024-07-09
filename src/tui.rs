@@ -125,14 +125,12 @@ impl TUI {
                 vec![
                     Constraint::Max(1000),
                     Constraint::Length(1),
-                    Constraint::Length(1),
+                    Constraint::Length(3),
                 ]
             }
             InputMode::Normal | InputMode::Abort | InputMode::Finish => {
                 vec![Constraint::Max(1000), Constraint::Length(1)]
             }
-            InputMode::Abort => todo!(),
-            InputMode::Finish => todo!(),
             InputMode::ExternalEditor => todo!(),
         };
         let rects = Layout::default()
@@ -210,21 +208,23 @@ impl TUI {
         f.render_widget(paragraph, rects[1]);
 
         if input_mode == InputMode::Editing {
-            let prefix_text = "Input:";
-            let paragraph = Paragraph::new(Line::from(vec![
-                Span::raw(prefix_text).style(Style::default().fg(Color::Yellow)),
-                Span::from(database.input.as_str()),
-            ]));
-            // let input = Paragraph::new(database.input.as_str())
-            //     // show cursor
-            //     .style(Style::default().fg(Color::Yellow))
-            //     .block(Block::default().borders(Borders::empty()).title("Input"));
+            // let prefix_text = "Input:";
+            // let paragraph = Paragraph::new(Line::from(vec![
+            //     Span::raw(prefix_text).style(Style::default().fg(Color::Yellow)),
+            //     Span::from(database.input.as_str()),
+            // ]));
+
+            // f.set_cursor(
+            //     rects[2].x + database.character_index as u16 + prefix_text.len() as u16,
+            //     rects[2].y,
+            // );
+            let paragraph = Paragraph::new(database.input.as_str())
+                .style(Style::default().fg(Color::Yellow))
+                .block(Block::default().borders(Borders::ALL).title("Input"));
+
             f.set_cursor(
-                // Draw the cursor at the current position in the input field.
-                // This position is can be controlled via the left and right arrow key
-                rects[2].x + database.character_index as u16 + prefix_text.len() as u16,
-                // Move one line down, from the border to the input line
-                rects[2].y,
+                rects[2].x + database.character_index as u16 + 1,
+                rects[2].y + 1,
             );
             f.render_widget(paragraph, rects[2]);
             // match app.input_mode {
