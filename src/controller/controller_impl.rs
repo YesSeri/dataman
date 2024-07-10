@@ -207,12 +207,12 @@ impl Controller {
                     }
 
                     if command.requires_updating_view() {
-                        self.database.slices[0].has_changed();
+                        self.database.slice.has_changed();
                     }
                     result
                 }
                 Err(result) => {
-                    self.database.slices[0].has_changed();
+                    self.database.slice.has_changed();
 
                     self.last_command =
                         CommandWrapper::new(Command::IllegalOperation, Some(result.to_string()));
@@ -220,7 +220,7 @@ impl Controller {
                 }
             };
             if let Err(e) = res {
-                self.database.slices[0].has_changed();
+                self.database.slice.has_changed();
                 self.last_command =
                     CommandWrapper::new(Command::IllegalOperation, Some(format!(": {}", e)));
             }
@@ -405,7 +405,7 @@ impl Controller {
               // Command::Join(_) => todo!(),
         };
         if self.queued_command.command.requires_updating_view() {
-            self.database.slices[0].has_changed();
+            self.database.slice.has_changed();
         }
         Ok(())
     }

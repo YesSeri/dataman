@@ -49,8 +49,8 @@ impl TUI {
             is_user_input_active: false,
         }
     }
-    pub fn get_table_height() -> AppResult<u16> {
-        let height = crossterm::terminal::size()?.1 - 4;
+    pub fn get_table_height() -> AppResult<u32> {
+        let height = (crossterm::terminal::size()?.1 - 4) as u32;
         Ok(height)
     }
 
@@ -118,7 +118,7 @@ impl TUI {
         f: &mut Frame,
         database: &mut Database,
         last_command: &controller::command::CommandWrapper,
-        table_height: u16,
+        table_height: u32,
         input_mode: InputMode,
     ) -> AppResult<()> {
         let constraints: Vec<Constraint> = match input_mode {
@@ -142,7 +142,7 @@ impl TUI {
         let table_name = database.get_current_table_name()?;
 
         let (headers, rows): DataTable =
-            database.get(100, database.slices[0].row_offset, table_name)?;
+            database.get(100, database.slice.row_offset, table_name)?;
         let id_space: u16 = rows.iter().fold(0, |acc, row| {
             let id = row.first().unwrap().to_string().len() as u16;
             if id > acc {
@@ -152,7 +152,7 @@ impl TUI {
             }
         });
 
-        let widths: Vec<u16> = database.slices[0].column_widths();
+        let widths: Vec<u16> = database.slice.column_widths();
         let sum: u16 = widths.iter().sum();
         let constraints = widths
             .iter()
@@ -189,16 +189,16 @@ impl TUI {
             .highlight_style(selected_style)
             // .highlight_symbol(">> ")
             .bg(Color::Black);
-        f.render_stateful_widget(t, rects[0], &mut database.slices[0].table_state);
+        f.render_stateful_widget(t, rects[0], &mut database.slice.table_state);
 
         let a = database.header_idx;
-        let row = database.slices[0].table_state.selected().unwrap_or(0);
+        let row = database.slice.table_state.selected().unwrap_or(0);
         let total_rows = database.count_rows().unwrap_or(0);
         let rowid = rows
             .get(row)
             .map(|el| el.first().unwrap().to_string())
             .unwrap_or("xxx".to_owned());
-        let offset = database.slices[0].table_state.offset();
+        let offset = database.slice.table_state.offset();
         let text = vec![Line::from(vec![Span::raw(format!(
             // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
             "row: {row}, total rows: {total_rows},  last command: {last_command}, height: {table_height}",
