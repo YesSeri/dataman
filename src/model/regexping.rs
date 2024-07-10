@@ -4,8 +4,9 @@ pub fn regex_filter_query(header: &str, pattern: &str, table_name: &str) -> AppR
     // create new table with filter applied using create table as sqlite statement.
     regex::Regex::new(pattern)?;
     let select_query =
-        format!(r#"SELECT * FROM `{table_name}` WHERE `{header}` REGEXP '{pattern}'"#);
-    let create_table_query = format!("CREATE TABLE `{table_name}RegexFiltered` AS {select_query};");
+        format!(r#"SELECT * FROM "{table_name}" WHERE "{header}" REGEXP '{pattern}'"#);
+    let create_table_query =
+        format!(r#"CREATE TABLE "{table_name}RegexFiltered" AS {select_query};"#);
     Ok(create_table_query)
 }
 
@@ -18,12 +19,12 @@ pub(crate) fn regex_with_capture_group_transform_query(
     regex::Regex::new(pattern)?;
     let derived_header_name = format!("derived{}", header);
     let create_header_query =
-        format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{derived_header_name}" TEXT;\n"#);
+        format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{derived_header_name}" TEXT;"#);
 
     let mut queries = String::new();
     queries.push_str(&create_header_query);
     let update_query = format!(
-        r#"UPDATE "{table_name}" SET "{derived_header_name}" = regexp_transform_with_capture_group('{pattern}', "{header}", '{transformation}');\n"#
+        r#"UPDATE "{table_name}" SET "{derived_header_name}" = regexp_transform_with_capture_group('{pattern}', "{header}", '{transformation}');"#
     );
 
     queries.push_str(&update_query);
@@ -39,13 +40,12 @@ pub(crate) fn regex_no_capture_group_transform_query(
     // for each row in the table, run fun on the value of column name and insert the result into the new column
     let derived_header_name = format!("derived{}", header);
     let create_header_query =
-        format!("ALTER TABLE `{table_name}` ADD COLUMN `{derived_header_name}` TEXT;\n");
+        format!(r#"ALTER TABLE `{table_name}` ADD COLUMN `{derived_header_name}` TEXT;"#);
 
     let mut queries = String::new();
     queries.push_str(&create_header_query);
     let update_query = format!(
-        "UPDATE `{table_name}` SET `{derived_header_name}` \n
-        = regexp_transform_no_capture_group('{pattern}', `{header}`);\n"
+        r#"UPDATE "{table_name}" SET "{derived_header_name}" = regexp_transform_no_capture_group('{pattern}', "{header}");"#
     );
 
     queries.push_str(&update_query);
@@ -106,15 +106,11 @@ pub(crate) mod custom_functions {
                 let substitution_pattern = ctx.get::<String>(2)?;
                 match text {
                     Ok(text) => {
-                        // Check if the regex has changed, and recompile if necessary
                         let mut cached_with_capture_regex =
                             cached_with_capture_regex.lock().unwrap();
                         if cached_with_capture_regex.as_str() != regex_str {
                             *cached_with_capture_regex = Regex::new(&regex_str).unwrap();
                         }
-                        // let re = Regex::new(r"(?P<first>\w+)\s+(?P<second>\w+)").unwrap();
-                        // let result = re.replace("deep fried", "${first}_$second");
-                        // assert_eq!(result, "deep_fried");
                         let is_match = cached_with_capture_regex.is_match(&text);
                         if is_match {
                             let val = cached_with_capture_regex

@@ -16,6 +16,7 @@ use dataman::{
 fn main() -> Result<(), AppError> {
     // if not release mode, print logs
     // if release mode, logs are not printed
+    std::env::set_var("RUST_BACKTRACE", "1");
     setup_panic_hook();
     setup_logging();
     setup_application()?.run()

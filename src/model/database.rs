@@ -36,7 +36,7 @@ pub struct Database {
 
 impl Database {
     pub fn new(connection: Connection) -> AppResult<Self> {
-        let query = "SELECT rowid FROM sqlite_master WHERE type='table' ORDER BY rowid LIMIT 1;"
+        let query = r#"SELECT rowid FROM sqlite_master WHERE type='table' ORDER BY rowid LIMIT 1;"#
             .to_string();
         let rowid: u16 = connection.query_row(&query, [], |row| row.get(0))?;
 
@@ -159,7 +159,12 @@ impl Database {
     }
 
     pub(super) fn execute_batch(&self, sql: &str) -> AppResult<()> {
-        let query = &format!("BEGIN TRANSACTION;\n{}\nCOMMIT;", sql);
+        let query = &format!(
+            r#"BEGIN TRANSACTION;
+				{}
+			COMMIT;"#,
+            sql
+        );
         if cfg!(debug_assertions) {
             info!("{query}");
         }
@@ -228,7 +233,7 @@ impl Database {
         Ok(())
     }
     pub fn get_table_names(&self) -> AppResult<Vec<String>> {
-        let query = "SELECT name FROM sqlite_master WHERE type='table' ORDER BY rowid;";
+        let query = r#"SELECT name FROM sqlite_master WHERE type='table' ORDER BY rowid;"#;
         let mut stmt = self.prepare(query)?;
         let mut rows = stmt.query([])?;
         let mut table_names = Vec::new();
@@ -240,7 +245,7 @@ impl Database {
     }
     pub fn get_current_table_name(&self) -> AppResult<String> {
         let query = format!(
-            "SELECT name FROM sqlite_master WHERE type='table' AND rowid='{}';",
+            r#"SELECT name FROM sqlite_master WHERE type='table' AND rowid='{}';"#,
             self.current_table_idx
         );
         let table_name = self.connection.query_row(&query, [], |row| row.get(0))?;
@@ -317,12 +322,12 @@ impl Database {
         let header = self.get_current_header()?;
         let derived_header_name = format!("derived{}", header);
         let create_header_query =
-            format!("ALTER TABLE `{table_name}` ADD COLUMN `{derived_header_name}` TEXT;\n");
+            format!(r#"ALTER TABLE `{table_name}` ADD COLUMN `{derived_header_name}` TEXT;"#);
 
         let mut queries = String::new();
         queries.push_str(&create_header_query);
         let update_query =
-            format!("UPDATE `{table_name}` SET `{derived_header_name}` = `{header}`;");
+            format!(r#"UPDATE "{table_name}" SET "{derived_header_name}" = "{header}";"#);
         queries.push_str(&update_query);
         self.execute_batch(&queries)
     }
@@ -338,7 +343,7 @@ impl Database {
     }
 
     pub fn get_headers(&self, table_name: &str) -> AppResult<Vec<String>> {
-        let query = format!("PRAGMA table_info(`{}`)", table_name);
+        let query = format!(r#"PRAGMA table_info("{}")"#, table_name);
         let mut stmt = self.connection.prepare(&query)?;
         let column_names: Vec<String> = stmt
             .query_map([], |row| row.get(1))?
@@ -417,14 +422,14 @@ impl Database {
     }
     pub fn update_cell(&self, header: &str, id: i32, content: &str) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
-        let update_query = format!("UPDATE `{}` SET '{}' = ? WHERE id = ?;", table_name, header);
+        let update_query = format!(r#"UPDATE "{table_name}" SET '{header}' = ? WHERE id = ?;"#);
         self.execute(&update_query, params![content, id])?;
         Ok(())
     }
 
     pub fn next_table(&mut self) -> AppResult<()> {
         let query = format!(
-            "SELECT rowid FROM sqlite_master WHERE type='table' AND rowid > {} ORDER BY rowid ASC LIMIT 1;",
+            r#"SELECT rowid FROM sqlite_master WHERE type='table' AND rowid > '{}' ORDER BY rowid ASC LIMIT 1;"#,
             self.current_table_idx
         );
         self.current_table_idx = self.connection.query_row(&query, [], |row| row.get(0))?;
@@ -433,7 +438,7 @@ impl Database {
 
     pub(crate) fn prev_table(&mut self) -> AppResult<()> {
         let query = format!(
-            "SELECT rowid FROM sqlite_master WHERE type='table' AND rowid < {} ORDER BY rowid DESC LIMIT 1;",
+            r#"SELECT rowid FROM sqlite_master WHERE type='table' AND rowid < {} ORDER BY rowid DESC LIMIT 1;"#,
             self.current_table_idx
         );
         self.current_table_idx = self.connection.query_row(&query, [], |row| row.get(0))?;
@@ -479,8 +484,8 @@ impl Database {
         self.execute_batch(&queries)
     }
     pub(crate) fn open_table_of_tables(&self) -> AppResult<String> {
-        let query = "SELECT name FROM sqlite_master WHERE type='table';".to_string();
-        let mut stmt = self.connection.prepare(&query)?;
+        let query = "SELECT name FROM sqlite_master WHERE type='table';";
+        let mut stmt = self.connection.prepare(query)?;
         let mut rows = stmt.query([])?;
 
         let mut names: Vec<String> = Vec::new();
