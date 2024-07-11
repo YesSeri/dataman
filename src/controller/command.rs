@@ -3,23 +3,38 @@ use log::info;
 
 use super::direction::Direction;
 
-pub(crate) enum CommandInput {
-    Single(String),
-    Double(String, String),
+#[derive(Debug, Clone)]
+pub(crate) struct QueuedCommand {
+    pub(super) command: Command,
+    pub(super) inputs: Vec<String>,
+}
+
+impl QueuedCommand {
+    pub(crate) fn new(command: Command) -> Self {
+        Self {
+            command,
+            inputs: vec![],
+        }
+    }
+}
+impl Default for QueuedCommand {
+    fn default() -> Self {
+        QueuedCommand::new(Command::None)
+    }
 }
 #[derive(Debug, Clone)]
-pub(crate) struct CommandWrapper {
+pub(crate) struct PreviousCommand {
     pub(super) command: Command,
     pub(super) message: Option<String>,
 }
 
-impl CommandWrapper {
+impl PreviousCommand {
     pub(crate) fn new(command: Command, message: Option<String>) -> Self {
         Self { command, message }
     }
 }
 
-impl std::fmt::Display for CommandWrapper {
+impl std::fmt::Display for PreviousCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.message.clone() {
             Some(msg) => write!(f, "{:?}: {}", self.command, msg),

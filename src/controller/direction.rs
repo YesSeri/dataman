@@ -1,6 +1,7 @@
 use crossterm::event::KeyCode;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub enum Direction {
     Up,
     Down,

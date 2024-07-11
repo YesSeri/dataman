@@ -40,7 +40,7 @@ pub(crate) fn regex_no_capture_group_transform_query(
     // for each row in the table, run fun on the value of column name and insert the result into the new column
     let derived_header_name = format!("derived{}", header);
     let create_header_query =
-        format!(r#"ALTER TABLE `{table_name}` ADD COLUMN `{derived_header_name}` TEXT;"#);
+        format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{derived_header_name}" TEXT;"#);
 
     let mut queries = String::new();
     queries.push_str(&create_header_query);

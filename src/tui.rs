@@ -117,7 +117,7 @@ impl TUI {
     fn update(
         f: &mut Frame,
         database: &mut Database,
-        last_command: &controller::command::CommandWrapper,
+        last_command: &controller::command::PreviousCommand,
         table_height: u32,
         input_mode: InputMode,
     ) -> AppResult<()> {

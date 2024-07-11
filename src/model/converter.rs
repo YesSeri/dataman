@@ -95,7 +95,7 @@ pub(crate) fn create_table_query(
     let headers = csv.headers()?;
     let columns: String = headers
         .iter()
-        .map(|header| format!("`{}`", header))
+        .map(|header| format!(r#""{}""#, header))
         .collect::<Vec<String>>()
         .join(", ");
 
@@ -137,7 +137,7 @@ pub(crate) fn sqlite_to_out(connection: &Connection, path: PathBuf) -> AppResult
         .collect::<Result<_, _>>()?;
     let mut wtr = csv::Writer::from_path(path)?;
     for table in tables {
-        let query = &format!(r#"SELECT * FROM `{}`;"#, table);
+        let query = &format!(r#"SELECT * FROM "{}";"#, table);
         let mut stmt = connection.prepare(query)?;
         let headers = stmt
             .column_names()

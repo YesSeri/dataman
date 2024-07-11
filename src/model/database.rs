@@ -274,7 +274,7 @@ impl Database {
             .query_row(&query, [pattern], |row| row.get(0))?;
         let row_number = row_number - 1;
         let height = TUI::get_table_height()?;
-        let row_idx = row_number % height as u32;
+        let row_idx = row_number % height;
         let row_offset = row_number - row_idx;
 
         self.slice.update(row_idx, row_offset);
@@ -318,7 +318,7 @@ impl Database {
         let header = self.get_current_header()?;
         let derived_header_name = format!("derived{}", header);
         let create_header_query =
-            format!(r#"ALTER TABLE `{table_name}` ADD COLUMN `{derived_header_name}` TEXT;"#);
+            format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{derived_header_name}" TEXT;"#);
 
         let mut queries = String::new();
         queries.push_str(&create_header_query);
@@ -330,7 +330,7 @@ impl Database {
     /// This is a regex capture without capture groups e.g. [g-k].*n.
     /// Get the first capture that matches the pattern, a letter between g and k, followed by any number of characters, followed by n.
 
-    pub(crate) fn sql_query(&self, query: String) -> AppResult<()> {
+    pub(crate) fn sql_query(&self, query: &str) -> AppResult<()> {
         self.execute_batch(&query)
     }
 
@@ -422,7 +422,7 @@ impl Database {
         let i = match self.slice.table_state.selected() {
             Some(i) if i == 0 && self.slice.row_offset != 0 => {
                 let height = TUI::get_table_height()?;
-                self.slice.row_offset = self.slice.row_offset.saturating_sub(height as u32);
+                self.slice.row_offset = self.slice.row_offset.saturating_sub(height);
                 self.slice.has_changed();
                 height as usize - 1
             }
@@ -706,7 +706,6 @@ mod tests {
     #[test]
     fn custom_functions_regexp_test() {
         let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
-        // let query = "SELECT firstname FROM `data` WHERE firstname REGEXP 'hen'";
         let query = r#"SELECT firstname FROM "data" WHERE regexp('h.*k', firstname)"#;
         let result: String = database
             .connection

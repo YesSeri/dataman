@@ -1,5 +1,5 @@
 use crate::app_error_other;
-use crate::controller::command::{Command, CommandWrapper};
+use crate::controller::command::{Command, PreviousCommand};
 use crate::controller::direction::Direction;
 use crate::controller::input::{self, InputMode};
 use crate::error::{AppError, AppResult};
@@ -10,14 +10,15 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use log::info;
 use std::path::PathBuf;
 
+use super::command::QueuedCommand;
 use super::input::StateMachine;
 
 #[derive(Debug)]
 pub struct Controller {
     pub(crate) ui: TUI,
     pub(crate) database: Database,
-    pub(crate) last_command: CommandWrapper,
-    queued_command: CommandWrapper,
+    pub(crate) last_command: PreviousCommand,
+    queued_command: Option<QueuedCommand>,
     pub(crate) input_mode_state_machine: StateMachine,
 }
 
@@ -26,24 +27,28 @@ impl Controller {
         Self {
             ui,
             database,
-            last_command: CommandWrapper::new(Command::None, None),
-            queued_command: CommandWrapper::new(Command::None, None),
+            last_command: PreviousCommand::new(Command::None, None),
+            queued_command: None,
             input_mode_state_machine: StateMachine::new(),
         }
     }
 
     pub(crate) fn save_to_sqlite_file(&self) -> AppResult<()> {
-        let filename = self.queued_command.message.clone();
-        if let Some(filename) = filename {
-            let path = PathBuf::from(filename);
-            Ok(self.database.backup_db(path)?)
+        if let Some(queued_command) = &self.queued_command {
+            let filename = queued_command.inputs.first();
+            if let Some(filename) = filename {
+                let path = PathBuf::from(filename);
+                Ok(self.database.backup_db(path)?)
+            } else {
+                Err(app_error_other!("No filename provided"))
+            }
         } else {
-            Err(app_error_other!("No filename provided"))
+            Err(app_error_other!("No queued command"))
         }
     }
 
     pub(crate) fn sql_query(&self) -> Result<(), AppError> {
-        let query = self.queued_command.message.clone().unwrap();
+        let query = self.queued_command.inputs.first().unwrap();
         self.database.sql_query(query)
     }
 
@@ -74,7 +79,7 @@ impl Controller {
         self.input_mode_state_machine
             .transition(input::Event::FinishEditing)
             .unwrap();
-        self.queued_command.message = Some(self.database.input.clone());
+        self.queued_command.inputs.push(self.database.input.clone());
         self.reset_input();
     }
 
@@ -164,7 +169,7 @@ impl Controller {
                 Err(app_error_other!("Could not poll"))
             } {
                 Ok(command) => {
-                    self.last_command = CommandWrapper::new(command.clone(), None);
+                    self.last_command = PreviousCommand::new(command.clone(), None);
                     let result = match command {
                         Command::RegexTransform
                         | Command::Save
@@ -174,7 +179,7 @@ impl Controller {
                         | Command::SqlQuery
                         | Command::RenameColumn
                         | Command::RenameTable => {
-                            self.queued_command = CommandWrapper::new(command.clone(), None);
+                            self.queued_command = QueuedCommand::new(command.clone());
                             self.input_mode_state_machine
                                 .transition(input::Event::StartEditing)?;
                             Ok(())
@@ -215,14 +220,14 @@ impl Controller {
                     self.database.slice.has_changed();
 
                     self.last_command =
-                        CommandWrapper::new(Command::IllegalOperation, Some(result.to_string()));
+                        PreviousCommand::new(Command::IllegalOperation, Some(result.to_string()));
                     Ok(())
                 }
             };
             if let Err(e) = res {
                 self.database.slice.has_changed();
                 self.last_command =
-                    CommandWrapper::new(Command::IllegalOperation, Some(format!(": {}", e)));
+                    PreviousCommand::new(Command::IllegalOperation, Some(format!(": {}", e)));
             }
         }
         Ok(())
@@ -242,16 +247,16 @@ impl Controller {
                 }
                 InputMode::Normal => {
                     self.execute_queued_command()?;
-                    self.queued_command = CommandWrapper::new(Command::None, None);
+                    self.queued_command = PreviousCommand::new(Command::None, None);
                 }
                 InputMode::Editing => {
                     let res = self.user_input_mode();
                 }
                 InputMode::Abort => {
                     self.last_command =
-                        CommandWrapper::new(Command::None, Some("Aborted input".to_string()));
+                        PreviousCommand::new(Command::None, Some("Aborted input".to_string()));
 
-                    self.queued_command = CommandWrapper::new(Command::None, None);
+                    self.queued_command = PreviousCommand::new(Command::None, None);
                     self.input_mode_state_machine
                         .transition(input::Event::Reset)?;
                 }
@@ -308,20 +313,17 @@ impl Controller {
 
     pub fn copy(&mut self) -> AppResult<()> {
         self.database.copy()?;
-        self.last_command = CommandWrapper::new(Command::Copy, None);
+        self.last_command = PreviousCommand::new(Command::Copy, None);
         Ok(())
     }
 
-    pub(crate) fn edit_cell(&mut self) -> AppResult<()> {
+    pub(crate) fn edit_cell(&mut self, inputs: Vec<String>) -> AppResult<()> {
         let header = self.database.get_current_header()?;
-        info!("header: {:?}", header);
         let id = self.database.get_current_id()?;
-        info!("id: {:?}", id);
         let data = self.database.get_cell(id, &header)?;
-        info!("data: {:?}", data);
 
-        let result = self.queued_command.message.clone().unwrap();
-        self.database.update_cell(header.as_str(), id, &result)?;
+        self.database
+            .update_cell(header.as_str(), id, &edit_result)?;
         Ok(())
     }
 
@@ -335,77 +337,80 @@ impl Controller {
         match self.database.exact_search(&header, &pattern) {
             Ok(_) => {
                 self.last_command =
-                    CommandWrapper::new(Command::ExactSearch, Some("Match found".to_string()));
+                    PreviousCommand::new(Command::ExactSearch, Some("Match found".to_string()));
             }
             Err(_) => {
                 self.last_command =
-                    CommandWrapper::new(Command::ExactSearch, Some("No match found".to_string()));
+                    PreviousCommand::new(Command::ExactSearch, Some("No match found".to_string()));
             }
         }
         Ok(())
     }
 
     fn text_to_int(&mut self) -> AppResult<()> {
-        self.last_command = CommandWrapper::new(Command::TextToInt, None);
+        self.last_command = PreviousCommand::new(Command::TextToInt, None);
         self.database.text_to_int()
     }
 
     fn int_to_text(&mut self) -> AppResult<()> {
-        self.last_command = CommandWrapper::new(Command::IntToText, None);
+        self.last_command = PreviousCommand::new(Command::IntToText, None);
         self.database.int_to_text()
     }
 
     fn delete_column(&mut self) -> Result<(), AppError> {
         let text = self.database.delete_column()?;
-        self.last_command = CommandWrapper::new(Command::DeleteColumn, text);
+        self.last_command = PreviousCommand::new(Command::DeleteColumn, text);
         Ok(())
     }
 
     fn rename_column(&mut self) -> Result<(), AppError> {
         let new_column = self.queued_command.message.clone().unwrap();
         self.database.rename_column(&new_column)?;
-        self.last_command = CommandWrapper::new(Command::RenameColumn, None);
+        self.last_command = PreviousCommand::new(Command::RenameColumn, None);
         Ok(())
     }
 
     fn execute_queued_command(&mut self) -> AppResult<()> {
-        let result: AppResult<()> = match self.queued_command.command {
-            Command::RegexTransform => {
-                self.regex_transform()?;
-                Ok(())
-            }
-            Command::Edit => self.edit_cell(),
-            // CREATE TABLE data2 AS SELECT firstname FROM data WHERE lastname = 'zenkert';
-            Command::SqlQuery => self.sql_query(),
-            Command::RegexFilter => self.regex_filter(),
-            Command::RenameColumn => self.rename_column(),
-            Command::RenameTable => self.rename_table(),
-            Command::ExactSearch => self.exact_search(),
-            _ => {
-                log::error!("Command not implemented: {:?}", self.queued_command.command);
-                return Err(AppError::from("Command not implemented"));
-            } // Command::Quit => Ok(()),
-              // Command::Copy => self.copy(),
-              // Command::Edit => self.edit_cell(),
-              // Command::SqlQuery => self.sql_query(),
-              // Command::IllegalOperation => Ok(()),
-              // Command::None => Ok(()),
-              // Command::Sort => self.sort(),
-              // Command::Save => self.save_to_sqlite_file(),
-              // Command::Move(direction) => self.database.move_cursor(direction),
-              // Command::RegexFilter => self.regex_filter(),
-              // Command::NextTable => self.database.next_table(),
-              // Command::PrevTable => self.database.prev_table(),
-              // Command::ExactSearch => self.exact_search(),
+        if let Some(queued_command) = &self.queued_command {
+            let inputs = queued_command.inputs;
+            let result: AppResult<()> = match queued_command.command {
+                Command::RegexTransform => {
+                    self.regex_transform()?;
+                    Ok(())
+                }
+                Command::Edit => self.edit_cell(inputs),
+                // CREATE TABLE data2 AS SELECT firstname FROM data WHERE lastname = 'zenkert';
+                Command::SqlQuery => self.sql_query(),
+                Command::RegexFilter => self.regex_filter(),
+                Command::RenameColumn => self.rename_column(),
+                Command::RenameTable => self.rename_table(),
+                Command::ExactSearch => self.exact_search(),
+                _ => {
+                    log::error!("Command not implemented: {:?}", queued_command.command);
+                    return Err(AppError::from("Command not implemented"));
+                } // Command::Quit => Ok(()),
+                  // Command::Copy => self.copy(),
+                  // Command::Edit => self.edit_cell(),
+                  // Command::SqlQuery => self.sql_query(),
+                  // Command::IllegalOperation => Ok(()),
+                  // Command::None => Ok(()),
+                  // Command::Sort => self.sort(),
+                  // Command::Save => self.save_to_sqlite_file(),
+                  // Command::Move(direction) => self.database.move_cursor(direction),
+                  // Command::RegexFilter => self.regex_filter(),
+                  // Command::NextTable => self.database.next_table(),
+                  // Command::PrevTable => self.database.prev_table(),
+                  // Command::ExactSearch => self.exact_search(),
 
-              // Command::TextToInt => self.text_to_int(),
-              // Command::IntToText => self.int_to_text(),
-              // Command::DeleteColumn => self.delete_column(),
-              // Command::RenameColumn => self.rename_column(),
-              // Command::Join(_) => todo!(),
-        };
-        if self.queued_command.command.requires_updating_view() {
-            self.database.slice.has_changed();
+                  // Command::TextToInt => self.text_to_int(),
+                  // Command::IntToText => self.int_to_text(),
+                  // Command::DeleteColumn => self.delete_column(),
+                  // Command::RenameColumn => self.rename_column(),
+                  // Command::Join(_) => todo!(),
+            };
+            if self.queued_command.command.requires_updating_view() {
+                self.database.slice.has_changed();
+            }
         }
         Ok(())
     }
@@ -413,7 +418,7 @@ impl Controller {
     fn rename_table(&mut self) -> Result<(), AppError> {
         let new_table_name = self.queued_command.message.clone().unwrap();
         self.database.rename_table(&new_table_name)?;
-        self.last_command = CommandWrapper::new(Command::RenameColumn, None);
+        self.last_command = PreviousCommand::new(Command::RenameColumn, None);
         Ok(())
     }
     // Other methods from the Controller struct
