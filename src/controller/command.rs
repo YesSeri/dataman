@@ -1,5 +1,4 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use log::info;
 
 use super::direction::Direction;
 
@@ -135,7 +134,7 @@ impl From<KeyEvent> for Command {
             KeyCode::Char('r') => Command::RenameColumn,
             KeyCode::Char('R') => Command::RenameTable,
             KeyCode::Char(c) => {
-                info!("clicked: {c}");
+                log::info!("clicked: {c}");
                 Command::None
             }
             _ => Command::None,

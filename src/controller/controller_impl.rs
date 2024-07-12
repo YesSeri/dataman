@@ -7,7 +7,6 @@ use crate::model::database::Database;
 use crate::model::datarow::DataTable;
 use crate::tui::TUI;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use log::info;
 use std::path::PathBuf;
 
 use super::command::QueuedCommand;
@@ -20,6 +19,7 @@ pub struct Controller {
     pub(crate) last_command: PreviousCommand,
     queued_command: Option<QueuedCommand>,
     pub(crate) input_mode_state_machine: StateMachine,
+    finished_taking_inputs: bool,
 }
 
 impl Controller {
@@ -30,6 +30,7 @@ impl Controller {
             last_command: PreviousCommand::new(Command::None, None),
             queued_command: None,
             input_mode_state_machine: StateMachine::new(),
+            finished_taking_inputs: true,
         }
     }
 
@@ -47,9 +48,9 @@ impl Controller {
         }
     }
 
-    pub(crate) fn sql_query(&self) -> Result<(), AppError> {
-        let query = self.queued_command.inputs.first().unwrap();
-        self.database.sql_query(query)
+    pub(crate) fn sql_query(&self, inputs: Vec<String>) -> Result<(), AppError> {
+        let query = inputs[0].to_owned();
+        self.database.sql_query(&query)
     }
 
     fn enter_char(&mut self, new_char: char) {
@@ -76,10 +77,15 @@ impl Controller {
     }
 
     fn submit_message(&mut self) {
-        self.input_mode_state_machine
-            .transition(input::Event::FinishEditing)
-            .unwrap();
-        self.queued_command.inputs.push(self.database.input.clone());
+        if let Some(queued_command) = &mut self.queued_command {
+            if queued_command.command != Command::RegexTransform || queued_command.inputs.len() == 1
+            {
+                self.input_mode_state_machine
+                    .transition(input::Event::FinishEditing)
+                    .unwrap();
+            }
+            queued_command.inputs.push(self.database.input.clone());
+        }
         self.reset_input();
     }
 
@@ -179,7 +185,7 @@ impl Controller {
                         | Command::SqlQuery
                         | Command::RenameColumn
                         | Command::RenameTable => {
-                            self.queued_command = QueuedCommand::new(command.clone());
+                            self.queued_command = Some(QueuedCommand::new(command.clone()));
                             self.input_mode_state_machine
                                 .transition(input::Event::StartEditing)?;
                             Ok(())
@@ -235,36 +241,38 @@ impl Controller {
     pub fn run(&mut self) -> AppResult<()> {
         loop {
             TUI::draw(self)?;
-            // log::info!("state: {:?}", self.input_mode_state_machine.get_state());
-            // log::info!("queued_command: {:?}", self.queued_command);
             match self.input_mode_state_machine.get_state() {
-                InputMode::Normal if (self.queued_command.command == Command::None) => {
+                InputMode::Finish => {
+                    if let Some(queued_command) = self.queued_command.clone() {
+                        self.execute_queued_command()?;
+                        self.queued_command = None;
+                        self.last_command = PreviousCommand::new(queued_command.command, None);
+                        self.input_mode_state_machine
+                            .transition(input::Event::Reset)?;
+                    } else {
+                        return Err(app_error_other!("No queued command, but in finish state"));
+                    }
+                }
+                InputMode::Editing if (self.queued_command.is_some()) => {
+                    let res = self.user_input_mode();
+                }
+                InputMode::Normal => {
                     let res = self.normal_mode();
                     if self.last_command.command == Command::Quit {
                         self.ui.shutdown()?;
                         break Ok(());
                     }
                 }
-                InputMode::Normal => {
-                    self.execute_queued_command()?;
-                    self.queued_command = PreviousCommand::new(Command::None, None);
-                }
-                InputMode::Editing => {
-                    let res = self.user_input_mode();
-                }
                 InputMode::Abort => {
                     self.last_command =
                         PreviousCommand::new(Command::None, Some("Aborted input".to_string()));
 
-                    self.queued_command = PreviousCommand::new(Command::None, None);
-                    self.input_mode_state_machine
-                        .transition(input::Event::Reset)?;
-                }
-                InputMode::Finish => {
+                    self.queued_command = None;
                     self.input_mode_state_machine
                         .transition(input::Event::Reset)?;
                 }
                 InputMode::ExternalEditor => todo!(),
+                InputMode::Editing => unreachable!(),
             }
         }
     }
@@ -274,8 +282,8 @@ impl Controller {
         self.database.get(limit, 0, first_table)
     }
 
-    pub fn regex_filter(&mut self) -> AppResult<()> {
-        let pattern = self.queued_command.message.clone().unwrap();
+    pub fn regex_filter(&mut self, inputs: Vec<String>) -> AppResult<()> {
+        let pattern = inputs[0].to_owned();
         let header = self.database.get_current_header()?;
         self.database.regex_filter(&header, &pattern)?;
         Ok(())
@@ -284,30 +292,29 @@ impl Controller {
     /// The user enters a regex and we will derive a new column from that.
     /// If the user enter a capture group we will ask for a second input that shows how the capture group should be transformed.
     /// If the user doesn't enter a capture group we will just copy the regex match.
-    pub fn regex_transform(&mut self) -> AppResult<()> {
-        let pattern = self.queued_command.message.clone().unwrap();
+    pub fn regex_transform(&mut self, inputs: Vec<String>) -> AppResult<()> {
+        let pattern = inputs[0].to_owned();
         let regex = regex::Regex::new(&pattern)?;
         let contains_capture_pattern = regex.capture_names().len() > 1;
         let header = self.database.get_current_header()?;
-        if contains_capture_pattern {
-            todo!();
-            // let transformation = if cfg!(debug_assertions) {
-            //     TUI::get_user_input(r"${1}${2}")?
-            // } else {
-            //     TUI::get_user_input(
-            //         r"Enter transformation, e.g. '${first} ${second}' or '${1} ${2}' if un-named",
-            //     )?
-            // };
-            // info!("pattern: {pattern:?}, transformation: {transformation:?}");
 
-            // self.database
-            //     .regex_capture_group_transform(&pattern, &header, &transformation)?;
-        } else {
-            info!("pattern: {pattern:?}");
-            self.database
-                .regex_no_capture_group_transform(&pattern, &header)?;
+        log::error!("TODO implement capture groups again!!!");
+        if let Some(transformation) = inputs.get(1) {
+            if contains_capture_pattern && !transformation.is_empty() {
+                // let transformation = if cfg!(debug_assertions) {
+                //     TUI::get_user_input(r"${1}${2}")?
+                // } else {
+                // TUI::get_user_input(
+                //     r"Enter transformation, e.g. '${first} ${second}' or '${1} ${2}' if un-named",
+                // )?
+                // };
+                self.database
+                    .regex_capture_group_transform(&pattern, &header, transformation)?;
+                return Ok(());
+            }
         }
-
+        self.database
+            .regex_no_capture_group_transform(&pattern, &header)?;
         Ok(())
     }
 
@@ -321,6 +328,7 @@ impl Controller {
         let header = self.database.get_current_header()?;
         let id = self.database.get_current_id()?;
         let data = self.database.get_cell(id, &header)?;
+        let edit_result = inputs[0].to_owned();
 
         self.database
             .update_cell(header.as_str(), id, &edit_result)?;
@@ -330,9 +338,8 @@ impl Controller {
     pub(crate) fn sort(&mut self) -> AppResult<()> {
         self.database.sort()
     }
-    fn exact_search(&mut self) -> AppResult<()> {
-        let pattern = self.queued_command.message.clone().unwrap();
-        info!("pattern: {:?}", pattern);
+    fn exact_search(&mut self, inputs: Vec<String>) -> AppResult<()> {
+        let pattern = inputs[0].to_owned();
         let header = self.database.get_current_header()?;
         match self.database.exact_search(&header, &pattern) {
             Ok(_) => {
@@ -363,8 +370,8 @@ impl Controller {
         Ok(())
     }
 
-    fn rename_column(&mut self) -> Result<(), AppError> {
-        let new_column = self.queued_command.message.clone().unwrap();
+    fn rename_column(&mut self, inputs: Vec<String>) -> Result<(), AppError> {
+        let new_column = inputs[0].to_owned();
         self.database.rename_column(&new_column)?;
         self.last_command = PreviousCommand::new(Command::RenameColumn, None);
         Ok(())
@@ -372,22 +379,20 @@ impl Controller {
 
     fn execute_queued_command(&mut self) -> AppResult<()> {
         if let Some(queued_command) = &self.queued_command {
-            let inputs = queued_command.inputs;
+            // TODO: this is not good, but makes it a bit easier to read
+            let inputs = queued_command.inputs.clone();
             let result: AppResult<()> = match queued_command.command {
-                Command::RegexTransform => {
-                    self.regex_transform()?;
-                    Ok(())
-                }
+                Command::RegexTransform => self.regex_transform(inputs),
                 Command::Edit => self.edit_cell(inputs),
                 // CREATE TABLE data2 AS SELECT firstname FROM data WHERE lastname = 'zenkert';
-                Command::SqlQuery => self.sql_query(),
-                Command::RegexFilter => self.regex_filter(),
-                Command::RenameColumn => self.rename_column(),
-                Command::RenameTable => self.rename_table(),
-                Command::ExactSearch => self.exact_search(),
+                Command::SqlQuery => self.sql_query(inputs),
+                Command::RegexFilter => self.regex_filter(inputs),
+                Command::RenameColumn => self.rename_column(inputs),
+                Command::RenameTable => self.rename_table(inputs),
+                Command::ExactSearch => self.exact_search(inputs),
                 _ => {
                     log::error!("Command not implemented: {:?}", queued_command.command);
-                    return Err(AppError::from("Command not implemented"));
+                    Err(AppError::from("Command not implemented"))
                 } // Command::Quit => Ok(()),
                   // Command::Copy => self.copy(),
                   // Command::Edit => self.edit_cell(),
@@ -408,15 +413,17 @@ impl Controller {
                   // Command::RenameColumn => self.rename_column(),
                   // Command::Join(_) => todo!(),
             };
-            if self.queued_command.command.requires_updating_view() {
-                self.database.slice.has_changed();
+            if let Some(queued_command) = self.queued_command.as_ref() {
+                if queued_command.command.requires_updating_view() {
+                    self.database.slice.has_changed();
+                }
             }
         }
         Ok(())
     }
 
-    fn rename_table(&mut self) -> Result<(), AppError> {
-        let new_table_name = self.queued_command.message.clone().unwrap();
+    fn rename_table(&mut self, inputs: Vec<String>) -> Result<(), AppError> {
+        let new_table_name = inputs[0].to_owned();
         self.database.rename_table(&new_table_name)?;
         self.last_command = PreviousCommand::new(Command::RenameColumn, None);
         Ok(())

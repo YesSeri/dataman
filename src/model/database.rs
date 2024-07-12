@@ -1,4 +1,5 @@
 use crate::controller;
+use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::hash::Hash;
 use std::path::{Path, PathBuf};
@@ -6,8 +7,8 @@ use std::process::id;
 use std::{slice, time};
 
 use crossterm::ExecutableCommand;
-use log::{error, info};
 use ratatui::widgets::TableState;
+use regex::Regex;
 use rusqlite::types::ValueRef;
 use rusqlite::{backup, params, Connection, Statement};
 
@@ -32,6 +33,7 @@ pub struct Database {
     pub(crate) slice: DatabaseSlice,
     pub(crate) input: String,
     pub(crate) character_index: usize,
+    regex_map: HashMap<String, Regex>,
 }
 
 impl Database {
@@ -53,9 +55,10 @@ impl Database {
             slice,
             input: String::new(),
             character_index: 0,
+            regex_map: HashMap::new(),
         };
-        if let Err(err) = regexping::custom_functions::add_custom_functions(&database) {
-            info!("Error adding custom functions, e.g. REGEXP: {}", err);
+        if let Err(err) = regexping::custom_functions::add_custom_functions(&database.connection) {
+            log::info!("Error adding custom functions, e.g. REGEXP: {}", err);
             Err(AppError::Sqlite(err))
         } else {
             Ok(database)
@@ -135,7 +138,7 @@ impl Database {
         let table_name = self.get_current_table_name()?;
         let query = format!(r#"SELECT "{}" FROM "{}" WHERE id = ?;"#, header, table_name);
         let mut stmt = self.prepare(&query)?;
-        info!("id: {}", id);
+        log::info!("id: {}", id);
         let mut rows = stmt.query(params![id])?;
         let row = rows.next()?.unwrap();
         let cell = row.get(0)?;
@@ -143,12 +146,12 @@ impl Database {
         Ok(cell)
     }
     fn prepare(&self, sql: &str) -> rusqlite::Result<Statement> {
-        info!("{sql}");
+        log::info!("{sql}");
         self.connection.prepare(sql)
     }
     fn execute<P: rusqlite::Params>(&self, sql: &str, params: P) -> AppResult<()> {
         if cfg!(debug_assertions) {
-            info!("{sql}");
+            log::info!("{sql}");
         }
         self.connection.execute(sql, params)?;
         Ok(())
@@ -162,14 +165,14 @@ impl Database {
             sql
         );
         if cfg!(debug_assertions) {
-            info!("{query}");
+            log::info!("{query}");
         }
 
         match self.connection.execute_batch(query) {
             Ok(_) => Ok(()),
             Err(err) => {
                 self.execute("ROLLBACK;", [])?;
-                info!("Error executing batch query: {}", err);
+                log::info!("Error executing batch query: {}", err);
                 Err(AppError::Sqlite(err))
             }
         }
@@ -384,15 +387,7 @@ impl Database {
         let l = self.slice.data_rows.len();
         let val = row_idx + row_offset;
         let is_last_page = height > l as u32;
-        log::info!(
-            "height {}, row_idx {} row_offset {} val: {}, l: {}, is_last_page: {}",
-            height,
-            row_idx,
-            row_offset,
-            val,
-            l,
-            is_last_page
-        );
+
         if is_last_page && row_idx + 2 > l as u32 {
             return Ok(());
         }
@@ -462,7 +457,6 @@ impl Database {
         let table_name = self.get_current_table_name()?;
         let column = self.get_current_header()?;
         let queries = sql_queries::build::text_to_int(&table_name, &column);
-        log::info!("{:?}", queries);
         self.execute_batch(&queries)
     }
 

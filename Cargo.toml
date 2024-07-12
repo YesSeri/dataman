@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [profile.release]
-opt-level = 'z'     # Optimize for size
-lto = true          # Enable link-time optimization
-codegen-units = 1   # Reduce number of codegen units to increase optimizations
-panic = 'abort'     # Abort on panic
-strip = true        # Strip symbols from binary*
+opt-level = 'z'   # Optimize for size
+lto = true        # Enable link-time optimization
+codegen-units = 1 # Reduce number of codegen units to increase optimizations
+panic = 'abort'   # Abort on panic
+strip = true      # Strip symbols from binary*
 
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -25,8 +25,19 @@ regex = "1.10.4"
 rusqlite = { version = "0.31.0", features = ["bundled", "functions", "backup"] }
 serde = { version = "1.0.197", features = ["derive"] }
 mlua = { version = "0.9.9", features = ["lua54", "vendored"] }
+r2d2 = "0.8.10"
+r2d2_sqlite = "0.24.0"
 
 
 # [dependencies.pyo3]
 # version = "0.22.1"
 # features = ["auto-initialize", "serde"]
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "benchmark_regexp"
+harness = false
+[profile.bench]
+debug = true
