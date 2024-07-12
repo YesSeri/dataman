@@ -23,22 +23,13 @@ impl Default for QueuedCommand {
 }
 #[derive(Debug, Clone)]
 pub(crate) struct PreviousCommand {
-    pub(super) command: Command,
+    pub(crate) command: Command,
     pub(super) message: Option<String>,
 }
 
 impl PreviousCommand {
     pub(crate) fn new(command: Command, message: Option<String>) -> Self {
         Self { command, message }
-    }
-}
-
-impl std::fmt::Display for PreviousCommand {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.message.clone() {
-            Some(msg) => write!(f, "{:?}: {}", self.command, msg),
-            None => write!(f, "{:?}", self.command),
-        }
     }
 }
 
@@ -138,6 +129,34 @@ impl From<KeyEvent> for Command {
                 Command::None
             }
             _ => Command::None,
+        }
+    }
+}
+
+use std::fmt;
+impl fmt::Display for Command {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Command::None => write!(f, "None"),
+            Command::Copy => write!(f, "Copy"),
+            Command::RegexTransform => write!(f, "Regex Transform"),
+            Command::RegexFilter => write!(f, "Regex Filter"),
+            Command::Edit => write!(f, "Edit"),
+            Command::SqlQuery => write!(f, "Sql Query"),
+            Command::IllegalOperation => write!(f, "Illegal Operation"),
+            Command::Quit => write!(f, "Quit"),
+            Command::Sort => write!(f, "Sort"),
+            Command::Save => write!(f, "Save"),
+            Command::Move(dir) => write!(f, "Move {}", dir),
+            Command::NextTable => write!(f, "Next Table"),
+            Command::PrevTable => write!(f, "Prev Table"),
+            Command::ExactSearch => write!(f, "Exact Search"),
+            Command::TextToInt => write!(f, "Text to Int"),
+            Command::IntToText => write!(f, "Int to Text"),
+            Command::DeleteColumn => write!(f, "Delete Column"),
+            Command::DeleteTable => write!(f, "Delete Table"),
+            Command::RenameTable => write!(f, "Rename Table"),
+            Command::RenameColumn => write!(f, "Rename Column"),
         }
     }
 }

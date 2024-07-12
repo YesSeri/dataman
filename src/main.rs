@@ -19,7 +19,8 @@ fn main() -> Result<(), AppError> {
     std::env::set_var("RUST_BACKTRACE", "1");
     setup_panic_hook();
     setup_logging();
-    setup_application()?.run()
+    let (mut controller, tui) = setup_application()?;
+    controller.run(tui)
 }
 
 fn setup_panic_hook() {
@@ -31,7 +32,7 @@ fn setup_panic_hook() {
     }));
 }
 
-fn setup_application() -> Result<Controller, AppError> {
+fn setup_application() -> Result<(Controller, TUI), AppError> {
     let time_start = std::time::Instant::now();
     let cli = <Cli as clap::Parser>::parse();
     let paths = cli.paths;
@@ -42,7 +43,7 @@ fn setup_application() -> Result<Controller, AppError> {
         time_end - time_start
     );
     let tui = TUI::new();
-    Ok(Controller::new(tui, database))
+    Ok((Controller::new(database), tui))
 }
 
 fn setup_logging() {

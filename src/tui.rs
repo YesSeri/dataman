@@ -18,7 +18,10 @@ use ratatui::{
     Frame, Terminal,
 };
 
-use crate::{app_error_other, controller};
+use crate::{
+    app_error_other,
+    controller::{self, controller_impl::Controller},
+};
 use crate::{controller::input::InputMode, model::datarow::DataTable};
 use crate::{
     error::{AppError, AppResult},
@@ -27,15 +30,6 @@ use crate::{
 
 pub struct TUI {
     terminal: Terminal<CrosstermBackend<Stdout>>,
-    is_user_input_active: bool,
-}
-
-impl std::fmt::Debug for TUI {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TUI")
-            .field("terminal", &self.terminal)
-            .finish()
-    }
 }
 
 impl TUI {
@@ -44,10 +38,7 @@ impl TUI {
         let backend = CrosstermBackend::new(stdout);
         let terminal = Terminal::new(backend).unwrap();
         enable_raw_mode().unwrap();
-        Self {
-            terminal,
-            is_user_input_active: false,
-        }
+        Self { terminal }
     }
     pub fn get_table_height() -> AppResult<u32> {
         let height = (crossterm::terminal::size()?.1 - 4) as u32;
@@ -63,20 +54,14 @@ impl TUI {
         terminal::disable_raw_mode()?;
         Ok(())
     }
-    pub fn draw(controller: &mut controller::controller_impl::Controller) -> AppResult<()> {
-        let table_height = TUI::get_table_height().unwrap();
-        controller.ui.terminal.draw(|f| {
-            match TUI::update(
-                f,
-                &mut controller.database,
-                &controller.last_command,
-                table_height,
-                controller.input_mode_state_machine.get_state(),
-            ) {
-                Ok(_) => (),
-                Err(err) => {
-                    log::error!("Error updating TUI: {:?}", err);
-                }
+    pub fn draw(
+        &mut self,
+        controller: &mut controller::controller_impl::Controller,
+    ) -> AppResult<()> {
+        self.terminal.draw(|f| match TUI::update(f, controller) {
+            Ok(_) => (),
+            Err(err) => {
+                log::error!("Error updating TUI: {:?}", err);
             }
         })?;
         Ok(())
@@ -114,14 +99,9 @@ impl TUI {
         let trimmed = editable.trim_end_matches('\n').to_string();
         Ok(trimmed)
     }
-    fn update(
-        f: &mut Frame,
-        database: &mut Database,
-        last_command: &controller::command::PreviousCommand,
-        table_height: u32,
-        input_mode: InputMode,
-    ) -> AppResult<()> {
-        let constraints: Vec<Constraint> = match input_mode {
+
+    fn update(f: &mut Frame, controller: &mut Controller) -> AppResult<()> {
+        let constraints: Vec<Constraint> = match controller.input_mode_state_machine.get_state() {
             InputMode::Editing => {
                 vec![
                     Constraint::Max(1000),
@@ -139,10 +119,12 @@ impl TUI {
             .constraints(constraints.as_slice())
             .split(f.size());
 
-        let table_name = database.get_current_table_name()?;
+        let table_name = controller.database.get_current_table_name()?;
 
         let (headers, rows): DataTable =
-            database.get(100, database.slice.row_offset, table_name)?;
+            controller
+                .database
+                .get(100, controller.database.slice.row_offset, table_name)?;
         let id_space: u16 = rows.iter().fold(0, |acc, row| {
             let id = row.first().unwrap().to_string().len() as u16;
             if id > acc {
@@ -152,13 +134,13 @@ impl TUI {
             }
         });
 
-        let widths: Vec<u16> = database.slice.column_widths();
+        let widths: Vec<u16> = controller.database.slice.column_widths();
         let sum: u16 = widths.iter().sum();
         let constraints = widths
             .iter()
             .map(|w| Constraint::Min(*w))
             .collect::<Vec<_>>();
-        let current_header = database.header_idx;
+        let current_header = controller.database.header_idx;
         // mark current header
 
         let header = Row::new(headers.iter().enumerate().map(|(i, h)| {
@@ -182,23 +164,30 @@ impl TUI {
             Row::new(data_row).height(1)
         });
         let selected_style = Style::default().add_modifier(Modifier::UNDERLINED);
-        let table_name = database.get_current_table_name()?;
+        let table_name = controller.database.get_current_table_name()?;
         let t = Table::new(tui_rows, constraints)
             .header(header)
             .block(Block::default().borders(Borders::ALL).title(table_name))
             .highlight_style(selected_style)
             // .highlight_symbol(">> ")
             .bg(Color::Black);
-        f.render_stateful_widget(t, rects[0], &mut database.slice.table_state);
+        f.render_stateful_widget(t, rects[0], &mut controller.database.slice.table_state);
 
-        let a = database.header_idx;
-        let row = database.slice.table_state.selected().unwrap_or(0);
-        let total_rows = database.count_rows().unwrap_or(0);
+        let a = controller.database.header_idx;
+        let row = controller
+            .database
+            .slice
+            .table_state
+            .selected()
+            .unwrap_or(0);
+        let total_rows = controller.database.count_rows().unwrap_or(0);
         let rowid = rows
             .get(row)
             .map(|el| el.first().unwrap().to_string())
             .unwrap_or("xxx".to_owned());
-        let offset = database.slice.table_state.offset();
+        let offset = controller.database.slice.table_state.offset();
+        let last_command = controller.last_command.command.to_string();
+        let table_height = rects[0].height;
         let text = vec![Line::from(vec![Span::raw(format!(
             // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
             "row: {row}, total rows: {total_rows},  last command: {last_command}, height: {table_height}",
@@ -207,23 +196,18 @@ impl TUI {
 
         f.render_widget(paragraph, rects[1]);
 
-        if input_mode == InputMode::Editing {
-            // let prefix_text = "Input:";
-            // let paragraph = Paragraph::new(Line::from(vec![
-            //     Span::raw(prefix_text).style(Style::default().fg(Color::Yellow)),
-            //     Span::from(database.input.as_str()),
-            // ]));
-
-            // f.set_cursor(
-            //     rects[2].x + database.character_index as u16 + prefix_text.len() as u16,
-            //     rects[2].y,
-            // );
-            let paragraph = Paragraph::new(database.input.as_str())
+        if controller.input_mode_state_machine.get_state() == InputMode::Editing {
+            let title = controller.last_command.command.to_string();
+            let paragraph = Paragraph::new(controller.database.input.as_str())
                 .style(Style::default().fg(Color::Yellow))
-                .block(Block::default().borders(Borders::ALL).title("Input"));
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(format!("{title} input")),
+                );
 
             f.set_cursor(
-                rects[2].x + database.character_index as u16 + 1,
+                rects[2].x + controller.database.character_index as u16 + 1,
                 rects[2].y + 1,
             );
             f.render_widget(paragraph, rects[2]);

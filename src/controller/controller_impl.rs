@@ -14,23 +14,23 @@ use super::input::StateMachine;
 
 #[derive(Debug)]
 pub struct Controller {
-    pub(crate) ui: TUI,
     pub(crate) database: Database,
     pub(crate) last_command: PreviousCommand,
-    queued_command: Option<QueuedCommand>,
+    pub(crate) queued_command: Option<QueuedCommand>,
     pub(crate) input_mode_state_machine: StateMachine,
     finished_taking_inputs: bool,
+    is_running: bool,
 }
 
 impl Controller {
-    pub fn new(ui: TUI, database: Database) -> Self {
+    pub fn new(database: Database) -> Self {
         Self {
-            ui,
             database,
             last_command: PreviousCommand::new(Command::None, None),
             queued_command: None,
             input_mode_state_machine: StateMachine::new(),
             finished_taking_inputs: true,
+            is_running: true,
         }
     }
 
@@ -238,9 +238,10 @@ impl Controller {
         }
         Ok(())
     }
-    pub fn run(&mut self) -> AppResult<()> {
+    pub fn run(&mut self, mut tui: TUI) -> AppResult<()> {
         loop {
-            TUI::draw(self)?;
+            if !self.is_running {}
+            tui.draw(self)?;
             match self.input_mode_state_machine.get_state() {
                 InputMode::Finish => {
                     if let Some(queued_command) = self.queued_command.clone() {
@@ -259,7 +260,7 @@ impl Controller {
                 InputMode::Normal => {
                     let res = self.normal_mode();
                     if self.last_command.command == Command::Quit {
-                        self.ui.shutdown()?;
+                        tui.shutdown()?;
                         break Ok(());
                     }
                 }
