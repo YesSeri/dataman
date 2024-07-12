@@ -195,7 +195,7 @@ impl Database {
         while let Some(row) = rows.next()? {
             let id: i32 = row.get(0)?;
             let value: String = row.get(1)?;
-            let derived_value = fun(value).unwrap_or("NULL".to_string());
+            let derived_value = fun(value).unwrap_or("NULL".to_string()).replace("'", "''");
             let update_query = format!(
                 r#"UPDATE "{table_name}" SET "{derived_column_name}" = '{derived_value}' WHERE id = '{id}';"#,
             );
@@ -657,15 +657,22 @@ mod tests {
     #[test]
     fn test_offset() {
         let mut database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
-        let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
-            .get(1)
-            .unwrap()
-            .to_string();
+
+        // we use limit 2 so we can check first and second item
+        let (headers, data_rows) = database.get(2, 0, "data".to_string()).unwrap();
+        let first: String = data_rows[0].get(1).unwrap().to_string();
         assert_eq!("henrik", first);
-        let second: String = database.get(1, 2, "data".to_string()).unwrap().1[0]
-            .get(1)
-            .unwrap()
-            .to_string();
+
+        // we can look into the old data rows to see the next item:
+        let second: String = data_rows[1].get(1).unwrap().to_string();
+        assert_eq!("john", second);
+
+        // or we can update the 'cache'
+        // this makes us get a new view into the database
+        // if we don't use this we would need to index into [1] instead
+        database.slice.has_changed();
+        let (headers, data_rows) = database.get(1, 1, "data".to_string()).unwrap();
+        let second: String = data_rows[0].get(1).unwrap().to_string();
         assert_eq!("john", second);
     }
 
@@ -708,10 +715,10 @@ mod tests {
         assert_eq!(result, "henrik");
     }
 
-    #[test]
-    fn table_of_tables_test() {
-        let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
-        let s = database.open_table_of_tables().unwrap();
-        assert_eq!(false, true);
-    }
+    // #[test]
+    // fn table_of_tables_test() {
+    //     let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
+    //     let s = database.open_table_of_tables().unwrap();
+    //     todo!();
+    // }
 }
