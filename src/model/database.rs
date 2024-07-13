@@ -495,10 +495,34 @@ impl Database {
         let mut stmt = self.connection.prepare(query)?;
         let mut rows = stmt.query([])?;
 
-        let mut names: Vec<String> = Vec::new();
+        let mut table_names: Vec<String> = Vec::new();
         while let Some(row) = rows.next()? {
-            names.push(row.get(0)?);
+            table_names.push(row.get(0)?);
         }
+        let create_table_query = "CREATE TABLE IF NOT EXISTS 'table_of_tables' ( table_name TEXT NOT NULL, num_rows INTEGER NOT NULL);";
+        self.execute(create_table_query, [])?;
+
+        let mut values = vec![];
+        for table_name in table_names {
+            let num_rows = format!("SELECT COUNT(*) FROM {table_name};");
+            let num_rows: u32 = self.connection.query_row(&num_rows, [], |row| row.get(0))?;
+            values.push(format!(r#"("{table_name}", {num_rows})"#));
+        }
+        let values = values.join(", ");
+        let insert_query =
+            format!(r#"INSERT INTO table_of_tables ("table_name", "num_rows") VALUES {values};"#);
+        dbg!(&insert_query);
+        self.execute(&insert_query, [])?;
+        let get_data_query = "SELECT * FROM table_of_tables;";
+        let mut stmt = self.connection.prepare(get_data_query)?;
+        let mut rows = stmt.query([])?;
+        let mut data = String::new();
+        while let Some(row) = rows.next()? {
+            let table_name: String = row.get(0)?;
+            let num_rows: u32 = row.get(1)?;
+            data.push_str(&format!("{table_name} {num_rows}\n"));
+        }
+        dbg!(data);
         Ok("aaa".to_string())
     }
 
@@ -715,10 +739,9 @@ mod tests {
         assert_eq!(result, "henrik");
     }
 
-    // #[test]
-    // fn table_of_tables_test() {
-    //     let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
-    //     let s = database.open_table_of_tables().unwrap();
-    //     todo!();
-    // }
+    #[test]
+    fn table_of_tables_test() {
+        let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
+        let s = database.open_table_of_tables().unwrap();
+    }
 }
