@@ -491,7 +491,9 @@ impl Database {
         self.execute_batch(&queries)
     }
     pub(crate) fn open_table_of_tables(&self) -> AppResult<String> {
-        let query = "SELECT name FROM sqlite_master WHERE type='table';";
+        // ignore table with name table_of_tables
+        let query =
+            "SELECT name FROM sqlite_master WHERE type='table' AND name != 'table_of_tables';";
         let mut stmt = self.connection.prepare(query)?;
         let mut rows = stmt.query([])?;
 
