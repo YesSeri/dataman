@@ -240,7 +240,6 @@ impl Controller {
     }
     pub fn run(&mut self, mut tui: TUI) -> AppResult<()> {
         loop {
-            if !self.is_running {}
             tui.draw(self)?;
             match self.input_mode_state_machine.get_state() {
                 InputMode::Finish => {

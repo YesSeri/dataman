@@ -1,13 +1,17 @@
 use crate::error::AppResult;
 
-pub fn regex_filter_query(header: &str, pattern: &str, table_name: &str) -> AppResult<String> {
+pub fn regex_filter_query(
+    header: &str,
+    pattern: &str,
+    table_name: &str,
+) -> AppResult<(String, String)> {
     // create new table with filter applied using create table as sqlite statement.
     regex::Regex::new(pattern)?;
     let select_query =
         format!(r#"SELECT * FROM "{table_name}" WHERE "{header}" REGEXP '{pattern}'"#);
-    let create_table_query =
-        format!(r#"CREATE TABLE "{table_name}RegexFiltered" AS {select_query};"#);
-    Ok(create_table_query)
+    let new_table_name = format!("{table_name}RegexFiltered");
+    let create_table_query = format!(r#"CREATE TABLE "{new_table_name}" AS {select_query};"#);
+    Ok((create_table_query, new_table_name.to_owned()))
 }
 
 pub(crate) fn regex_with_capture_group_transform_query(
@@ -143,7 +147,7 @@ mod tests {
         let header = "header";
         let pattern = r#"^(\d+)$"#;
         let table_name = "table";
-        let query = regex_filter_query(header, pattern, table_name).unwrap();
+        let (query, _) = regex_filter_query(header, pattern, table_name).unwrap();
 
         let expected_query = r#"CREATE TABLE "tableRegexFiltered" AS SELECT * FROM "table" WHERE "header" REGEXP '^(\d+)$';"#;
 

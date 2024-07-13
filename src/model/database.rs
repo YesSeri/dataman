@@ -195,7 +195,7 @@ impl Database {
         while let Some(row) = rows.next()? {
             let id: i32 = row.get(0)?;
             let value: String = row.get(1)?;
-            let derived_value = fun(value).unwrap_or("NULL".to_string()).replace("'", "''");
+            let derived_value = fun(value).unwrap_or("NULL".to_string()).replace('\'', "''");
             let update_query = format!(
                 r#"UPDATE "{table_name}" SET "{derived_column_name}" = '{derived_value}' WHERE id = '{id}';"#,
             );
@@ -253,10 +253,10 @@ impl Database {
     pub fn regex_filter(&mut self, header: &str, pattern: &str) -> AppResult<()> {
         // create new table with filter applied using create table as sqlite statement.
         let table_name = self.get_current_table_name()?;
-        let query = regexping::regex_filter_query(header, pattern, &table_name)?;
+        let (query, new_table_name) = regexping::regex_filter_query(header, pattern, &table_name)?;
 
         self.execute(&query, [])?;
-        self.next_table()?;
+        self.select_table(&new_table_name)?;
         Ok(())
     }
 
@@ -334,7 +334,7 @@ impl Database {
     /// Get the first capture that matches the pattern, a letter between g and k, followed by any number of characters, followed by n.
 
     pub(crate) fn sql_query(&self, query: &str) -> AppResult<()> {
-        self.execute_batch(&query)
+        self.execute_batch(query)
     }
 
     pub(crate) fn get_table_name(file: PathBuf) -> Option<String> {
@@ -441,6 +441,17 @@ impl Database {
             self.current_table_idx
         );
         self.current_table_idx = self.connection.query_row(&query, [], |row| row.get(0))?;
+        self.slice.row_offset = 0;
+        self.slice.table_state.select(Some(0));
+        Ok(())
+    }
+    pub fn select_table(&mut self, table_name: &str) -> AppResult<()> {
+        let query = format!(
+            r#"SELECT rowid FROM sqlite_master WHERE type='table' AND name = '{table_name}';"#
+        );
+        self.current_table_idx = self.connection.query_row(&query, [], |row| row.get(0))?;
+        self.slice.row_offset = 0;
+        self.slice.table_state.select(Some(0));
         Ok(())
     }
 
@@ -450,6 +461,8 @@ impl Database {
             self.current_table_idx
         );
         self.current_table_idx = self.connection.query_row(&query, [], |row| row.get(0))?;
+        self.slice.row_offset = 0;
+        self.slice.table_state.select(Some(0));
         Ok(())
     }
 
