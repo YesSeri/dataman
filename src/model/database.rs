@@ -157,7 +157,7 @@ impl Database {
         Ok(())
     }
 
-    pub(super) fn execute_batch(&self, sql: &str) -> AppResult<()> {
+    pub fn execute_batch(&self, sql: &str) -> AppResult<()> {
         let query = &format!(
             r#"BEGIN TRANSACTION;
 				{}
@@ -503,17 +503,6 @@ impl Database {
         let queries = sql_queries::build::rename_column_query(&table_name, &column, new_column);
         self.execute_batch(&queries)
     }
-    pub(crate) fn open_table_of_tables(&self) -> AppResult<String> {
-        let query = "SELECT name FROM sqlite_master WHERE type='table';";
-        let mut stmt = self.connection.prepare(query)?;
-        let mut rows = stmt.query([])?;
-
-        let mut names: Vec<String> = Vec::new();
-        while let Some(row) = rows.next()? {
-            names.push(row.get(0)?);
-        }
-        Ok("aaa".to_string())
-    }
 
     pub(crate) fn delete_table(&mut self) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
@@ -599,15 +588,85 @@ impl TryFrom<Vec<PathBuf>> for Database {
     }
 }
 
+mod table_of_tables {
+    use rusqlite::{params, Connection};
+
+    use crate::error::AppResult;
+
+    fn create_table_of_tables(conn: &Connection) -> AppResult<()> {
+        conn.execute("DROP TABLE IF EXISTS table_of_tables;", [])?;
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS table_of_tables (
+            table_name TEXT PRIMARY KEY,
+            row_count INTEGER,
+            column_count INTEGER
+        )",
+            [],
+        )?;
+        Ok(())
+    }
+
+    fn get_tables(conn: &Connection) -> AppResult<Vec<String>> {
+        let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != 'table_of_tables'")?;
+        let table_names = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<Vec<String>, rusqlite::Error>>()?;
+        Ok(table_names)
+    }
+
+    fn get_table_row_count(conn: &Connection, table_name: &str) -> AppResult<i64> {
+        let mut stmt = conn.prepare(&format!(r#"SELECT COUNT(*) FROM "{}""#, table_name))?;
+        let row_count: i64 = stmt.query_row([], |row| row.get(0))?;
+        Ok(row_count)
+    }
+
+    fn get_table_column_count(conn: &Connection, table_name: &str) -> AppResult<usize> {
+        let mut stmt = conn.prepare(&format!(r#"PRAGMA table_info("{}")"#, table_name))?;
+        let column_count = stmt.query_map([], |_row| Ok(()))?.count();
+        Ok(column_count)
+    }
+
+    fn populate_table_table_of_tables(conn: &Connection) -> AppResult<()> {
+        let tables = get_tables(conn)?;
+
+        for table in tables {
+            let row_count = get_table_row_count(conn, &table)?;
+            let column_count = get_table_column_count(conn, &table)?;
+
+            conn.execute(
+            r#"INSERT INTO table_of_tables (table_name, row_count, column_count) VALUES (?1, ?2, ?3)"#,
+            params![table, row_count, column_count],
+        )?;
+        }
+        Ok(())
+    }
+}
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
 
     use super::*;
 
+    fn setup_database() -> Database {
+        Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap()
+    }
+    fn setup_three_table_db() -> Database {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute("CREATE TABLE t1 (id INTEGER PRIMARY KEY)", [])
+            .unwrap();
+        connection
+            .execute("CREATE TABLE t2 (id INTEGER PRIMARY KEY)", [])
+            .unwrap();
+        connection
+            .execute("CREATE TABLE t3 (id INTEGER PRIMARY KEY)", [])
+            .unwrap();
+        Database::new(connection).unwrap()
+    }
+
     #[test]
     fn get_number_of_headers_test() {
-        let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
+        let database = setup_database();
         let number_of_headers = database.count_headers().unwrap();
         assert_eq!(number_of_headers, 4)
     }
@@ -691,20 +750,20 @@ mod tests {
 
     #[test]
     fn get_table_names_test() {
-        let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
+        let database = setup_database();
         let table_names = database.get_table_names().unwrap();
     }
 
     #[test]
     fn get_current_table_name_test() {
-        let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
+        let database = setup_database();
         let table_name = database.get_current_table_name().unwrap();
         assert_eq!(table_name, "data".to_string());
     }
 
     #[test]
     fn get_headers_test() {
-        let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
+        let database = setup_database();
         let table_name = database.get_current_table_name().unwrap();
         let headers = database.get_headers(&table_name).unwrap();
         assert_eq!(headers, vec!["id", "firstname", "lastname", "age"]);
@@ -712,14 +771,14 @@ mod tests {
 
     #[test]
     fn count_rows_test() {
-        let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
+        let database = setup_database();
         let rows_len = database.count_rows().unwrap();
         assert_eq!(rows_len, 6)
     }
 
     #[test]
     fn custom_functions_regexp_test() {
-        let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
+        let database = setup_database();
         let query = r#"SELECT firstname FROM "data" WHERE regexp('h.*k', firstname)"#;
         let result: String = database
             .connection
@@ -727,11 +786,18 @@ mod tests {
             .unwrap();
         assert_eq!(result, "henrik");
     }
+    #[test]
+    fn select_table_test() {
+        let mut database = setup_three_table_db();
+        let table_name = database.get_current_table_name().unwrap();
+        assert!(table_name == "t1");
+        database.select_table("t3").unwrap();
+        let table_name = database.get_current_table_name().unwrap();
+        assert!(table_name == "t3");
+    }
 
-    // #[test]
-    // fn table_of_tables_test() {
-    //     let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
-    //     let s = database.open_table_of_tables().unwrap();
-    //     todo!();
-    // }
+    #[test]
+    fn table_of_tables_test() {
+        let database = setup_three_table_db();
+    }
 }
