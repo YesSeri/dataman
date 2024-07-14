@@ -6,3 +6,4 @@ log.txt
 *.sqlite
 
 dataman.error.log*
+test.db
