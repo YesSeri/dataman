@@ -177,32 +177,39 @@ impl Database {
             }
         }
     }
-    // pub fn derive_column<F>(&self, column_name: String, fun: F) -> AppResult<()>
-    // where
-    //     F: Fn(String) -> Option<String>,
-    // {
-    //     // create a new column in the table. The new value for each row is the value string value of column name after running fun function on it.
-    //     let table_name = self.get_current_table_name()?;
-    //     // for each row in the table, run fun on the value of column name and insert the result into the new column
-    //     let query = format!(r#"SELECT "id", "{column_name}" FROM "{table_name}""#);
-    //     let mut binding = self.prepare(&query)?;
-    //     let mut rows = binding.query([])?;
-    //     let create_column_query =
-    //         format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" TEXT;"#);
-    //     let mut transaction = String::new();
-    //     transaction.push_str(create_column_query.as_ref());
-    //     while let Some(row) = rows.next()? {
-    //         let id: i32 = row.get(0)?;
-    //         let value: String = row.get(1)?;
-    //         let derived_value = fun(value).unwrap_or("NULL".to_string()).replace('\'', "''");
-    //         let update_query = format!(
-    //             r#"UPDATE "{table_name}" SET "{column_name}" = '{derived_value}' WHERE id = '{id}';"#,
-    //         );
-    //         transaction.push_str(&update_query);
-    //     }
-    //     self.execute_batch(&transaction)?;
-    //     Ok(())
-    // }
+    pub fn derive_column<F>(
+        &self,
+        old_column_name: &str,
+        new_column_name: &str,
+        fun: F,
+    ) -> AppResult<()>
+    where
+        F: Fn(String) -> Option<String>,
+    {
+        // create a new column in the table. The new value for each row is the value string value of column name after running fun function on it.
+        let table_name = self.get_current_table_name()?;
+        // for each row in the table, run fun on the value of column name and insert the result into the new column
+        let query = format!(r#"SELECT "id", "{old_column_name}" FROM "{table_name}""#);
+        let mut binding = self.prepare(&query)?;
+        let mut rows = binding.query([])?;
+        let create_column_query =
+            format!(r#"ALTER TABLE "{table_name}" ADD COLUMN '{new_column_name}' TEXT;"#);
+        dbg!(&create_column_query);
+        // return Ok(());
+        let mut transaction = String::new();
+        transaction.push_str(create_column_query.as_ref());
+        while let Some(row) = rows.next()? {
+            let id: i32 = row.get(0)?;
+            let value: String = row.get(1)?;
+            let derived_value = fun(value).unwrap_or("NULL".to_string()).replace('\'', "''");
+            let update_query = format!(
+                r#"UPDATE "{table_name}" SET "{new_column_name}" = '{derived_value}' WHERE id = '{id}';"#,
+            );
+            transaction.push_str(&update_query);
+        }
+        self.execute_batch(&transaction)?;
+        Ok(())
+    }
 
     pub(crate) fn get_current_id(&self) -> AppResult<i32> {
         let i = self.slice.table_state.selected().unwrap_or(0);
@@ -684,6 +691,8 @@ mod table_of_tables {
 mod tests {
     use std::time::Instant;
 
+    use controller::direction::Direction;
+
     use super::*;
 
     fn setup_database() -> Database {
@@ -740,15 +749,16 @@ mod tests {
     fn derive_column_test() {
         let mut database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
         let col = "firstname";
-        // let fun = |s| Some(format!("{}-changed", s));
-        // database.derive_column(col.to_string(), fun).unwrap();
-        // let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
-        //     .get(4)
-        //     .unwrap()
-        //     .to_string();
-        // assert_eq!(first, "henrik-changed");
-        // let n = database.count_headers().unwrap();
-        // assert_eq!(n, 5);
+        let col_new = "firstname_derived";
+        let fun = |s| Some(format!("{}-changed", s));
+        database.derive_column(col, col_new, fun).unwrap();
+        let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
+            .get(4)
+            .unwrap()
+            .to_string();
+        assert_eq!(first, "henrik-changed");
+        let n = database.count_headers().unwrap();
+        assert_eq!(n, 5);
     }
 
     #[test]
@@ -838,5 +848,50 @@ mod tests {
     #[test]
     fn table_of_tables_test() {
         let database = setup_three_table_db();
+    }
+
+    #[test]
+    fn copy_column_long_test() {
+        let p = vec![PathBuf::from("assets/data-long.csv")];
+        let mut database = Database::try_from(p).unwrap();
+
+        let copy_fun = |s: String| Some(s.to_string());
+        database.move_cursor(Direction::Right).unwrap();
+
+        let column_name = database.get_current_header().unwrap();
+        let new_column_name = database.find_unused_header_name(&column_name).unwrap();
+        database
+            .derive_column(&column_name, &new_column_name, copy_fun)
+            .unwrap();
+        let headers = database
+            .get_headers(&database.get_current_table_name().unwrap())
+            .unwrap();
+        let table_name = database.get_current_table_name().unwrap();
+        let (_, res) = database.get(20, 0, table_name).unwrap();
+        for row in res.iter() {
+            let original = row.get(1);
+            let copy = row.get(4);
+            assert_eq!(original, copy);
+        }
+    }
+
+    #[test]
+    fn copy_column_test() {
+        let p = vec![PathBuf::from("assets/data.csv")];
+        let mut database = Database::try_from(p).unwrap();
+        let copy_fun = |s: String| Some(s.to_string());
+
+        database.move_cursor(Direction::Right).unwrap();
+        let column_name = database.get_current_header().unwrap();
+        let new_column_name = database.find_unused_header_name(&column_name).unwrap();
+        database
+            .derive_column(&column_name, &new_column_name, copy_fun)
+            .unwrap();
+        let (_, res) = database.get(20, 100, "data".to_string()).unwrap();
+        for row in res.iter() {
+            let original = row.get(1);
+            let copy = row.get(4);
+            assert_eq!(original, copy);
+        }
     }
 }
