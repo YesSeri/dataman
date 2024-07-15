@@ -1,57 +1,48 @@
 use crate::error::AppResult;
 
-pub fn regex_filter_query(
+pub(crate) fn regex_filter_query(
     header: &str,
     pattern: &str,
-    table_name: &str,
+    old_table_name: &str,
+    new_table_name: &str,
 ) -> AppResult<(String, String)> {
     // create new table with filter applied using create table as sqlite statement.
     regex::Regex::new(pattern)?;
     let select_query =
-        format!(r#"SELECT * FROM "{table_name}" WHERE "{header}" REGEXP '{pattern}'"#);
-    let new_table_name = format!("{table_name}RegexFiltered");
+        format!(r#"SELECT * FROM "{old_table_name}" WHERE "{header}" REGEXP '{pattern}'"#);
+
     let create_table_query = format!(r#"CREATE TABLE "{new_table_name}" AS {select_query};"#);
     Ok((create_table_query, new_table_name.to_owned()))
 }
 
 pub(crate) fn regex_with_capture_group_transform_query(
-    header: &str,
+    old_header: &str,
+    new_header: &str,
     pattern: &str,
     transformation: &str,
     table_name: &str,
 ) -> AppResult<String> {
     regex::Regex::new(pattern)?;
-    let derived_header_name = format!("derived{}", header);
-    let create_header_query =
-        format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{derived_header_name}" TEXT;"#);
-
-    let mut queries = String::new();
-    queries.push_str(&create_header_query);
+    let mut queries = format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{new_header}" TEXT;"#);
     let update_query = format!(
-        r#"UPDATE "{table_name}" SET "{derived_header_name}" = regexp_transform_with_capture_group('{pattern}', "{header}", '{transformation}');"#
+        r#"UPDATE "{table_name}" SET "{new_header}" = regexp_transform_with_capture_group('{pattern}', "{old_header}", '{transformation}');"#
     );
-
     queries.push_str(&update_query);
     Ok(queries)
 }
 
 pub(crate) fn regex_no_capture_group_transform_query(
-    header: &str,
+    old_header: &str,
+    new_header: &str,
     pattern: &str,
     table_name: &str,
 ) -> AppResult<String> {
     regex::Regex::new(pattern)?;
     // for each row in the table, run fun on the value of column name and insert the result into the new column
-    let derived_header_name = format!("derived{}", header);
-    let create_header_query =
-        format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{derived_header_name}" TEXT;"#);
-
-    let mut queries = String::new();
-    queries.push_str(&create_header_query);
+    let mut queries = format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{new_header}" TEXT;"#);
     let update_query = format!(
-        r#"UPDATE "{table_name}" SET "{derived_header_name}" = regexp_transform_no_capture_group('{pattern}', "{header}");"#
+        r#"UPDATE "{table_name}" SET "{new_header}" = regexp_transform_no_capture_group('{pattern}', "{old_header}");"#
     );
-
     queries.push_str(&update_query);
     Ok(queries)
 }
@@ -145,9 +136,11 @@ mod tests {
     #[test]
     fn test_regex() {
         let header = "header";
+        let header_new = "header";
         let pattern = r#"^(\d+)$"#;
         let table_name = "table";
-        let (query, _) = regex_filter_query(header, pattern, table_name).unwrap();
+        let (query, _) =
+            regex_filter_query(header, pattern, table_name, "tableRegexFiltered").unwrap();
 
         let expected_query = r#"CREATE TABLE "tableRegexFiltered" AS SELECT * FROM "table" WHERE "header" REGEXP '^(\d+)$';"#;
 

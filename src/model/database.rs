@@ -10,7 +10,7 @@ use crossterm::ExecutableCommand;
 use ratatui::widgets::TableState;
 use regex::Regex;
 use rusqlite::types::ValueRef;
-use rusqlite::{backup, params, Connection, Statement};
+use rusqlite::{backup, params, Connection, Error, Statement};
 
 use crate::app_error_other;
 use crate::error::{AppError, AppResult};
@@ -177,33 +177,32 @@ impl Database {
             }
         }
     }
-    pub fn derive_column<F>(&self, column_name: String, fun: F) -> AppResult<()>
-    where
-        F: Fn(String) -> Option<String>,
-    {
-        // create a new column in the table. The new value for each row is the value string value of column name after running fun function on it.
-        let table_name = self.get_current_table_name()?;
-        // for each row in the table, run fun on the value of column name and insert the result into the new column
-        let query = format!(r#"SELECT "id", "{column_name}" FROM "{table_name}""#);
-        let mut binding = self.prepare(&query)?;
-        let mut rows = binding.query([])?;
-        let derived_column_name = format!("derived{}", column_name);
-        let create_column_query =
-            format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{derived_column_name}" TEXT;"#);
-        let mut transaction = String::new();
-        transaction.push_str(create_column_query.as_ref());
-        while let Some(row) = rows.next()? {
-            let id: i32 = row.get(0)?;
-            let value: String = row.get(1)?;
-            let derived_value = fun(value).unwrap_or("NULL".to_string()).replace('\'', "''");
-            let update_query = format!(
-                r#"UPDATE "{table_name}" SET "{derived_column_name}" = '{derived_value}' WHERE id = '{id}';"#,
-            );
-            transaction.push_str(&update_query);
-        }
-        self.execute_batch(&transaction)?;
-        Ok(())
-    }
+    // pub fn derive_column<F>(&self, column_name: String, fun: F) -> AppResult<()>
+    // where
+    //     F: Fn(String) -> Option<String>,
+    // {
+    //     // create a new column in the table. The new value for each row is the value string value of column name after running fun function on it.
+    //     let table_name = self.get_current_table_name()?;
+    //     // for each row in the table, run fun on the value of column name and insert the result into the new column
+    //     let query = format!(r#"SELECT "id", "{column_name}" FROM "{table_name}""#);
+    //     let mut binding = self.prepare(&query)?;
+    //     let mut rows = binding.query([])?;
+    //     let create_column_query =
+    //         format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" TEXT;"#);
+    //     let mut transaction = String::new();
+    //     transaction.push_str(create_column_query.as_ref());
+    //     while let Some(row) = rows.next()? {
+    //         let id: i32 = row.get(0)?;
+    //         let value: String = row.get(1)?;
+    //         let derived_value = fun(value).unwrap_or("NULL".to_string()).replace('\'', "''");
+    //         let update_query = format!(
+    //             r#"UPDATE "{table_name}" SET "{column_name}" = '{derived_value}' WHERE id = '{id}';"#,
+    //         );
+    //         transaction.push_str(&update_query);
+    //     }
+    //     self.execute_batch(&transaction)?;
+    //     Ok(())
+    // }
 
     pub(crate) fn get_current_id(&self) -> AppResult<i32> {
         let i = self.slice.table_state.selected().unwrap_or(0);
@@ -250,12 +249,41 @@ impl Database {
         let table_name = self.connection.query_row(&query, [], |row| row.get(0))?;
         Ok(table_name)
     }
+
+    fn find_unused_table_name(&self, table_name: &str) -> AppResult<String> {
+        let table_names = self.get_table_names()?;
+        let mut new_table_name = table_name.to_string();
+        let mut suffix = 1;
+        while table_names.contains(&new_table_name) {
+            new_table_name = format!("{}_{}", table_name, suffix);
+            suffix += 1;
+        }
+        Ok(new_table_name)
+    }
+
+    fn find_unused_header_name(&self, header_name: &str) -> AppResult<String> {
+        let table_name = self.get_current_table_name()?;
+        let header_names = self.get_headers(&table_name)?;
+        let mut new_header_name = header_name.to_string();
+        let mut suffix = 1;
+        while header_names.contains(&new_header_name) {
+            new_header_name = format!("{}_{}", header_name, suffix);
+            suffix += 1;
+        }
+        // log everything
+        Ok(new_header_name)
+    }
     pub fn regex_filter(&mut self, header: &str, pattern: &str) -> AppResult<()> {
         // create new table with filter applied using create table as sqlite statement.
-        let table_name = self.get_current_table_name()?;
-        let (query, new_table_name) = regexping::regex_filter_query(header, pattern, &table_name)?;
+        let old_table_name = self.get_current_table_name()?;
+        let temp_table_name = format!("{}_filt", old_table_name);
+        let new_table_name = self.find_unused_table_name(&temp_table_name)?;
+        let (query, new_table_name) =
+            regexping::regex_filter_query(header, pattern, &old_table_name, &new_table_name)?;
 
-        self.execute(&query, [])?;
+        let res = self.execute(&query, []);
+        dbg!(&res);
+        res?;
         self.select_table(&new_table_name)?;
         Ok(())
     }
@@ -294,8 +322,12 @@ impl Database {
     ) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
         // for each row in the table, run fun on the value of column name and insert the result into the new column
+        let transform_header = format!("{}_tform", header);
+        let new_header_name = self.find_unused_header_name(&transform_header)?;
+        log::error!("{} {} {}", table_name, transform_header, new_header_name);
         let queries = regexping::regex_with_capture_group_transform_query(
             header,
+            &new_header_name,
             pattern,
             transformation,
             &table_name,
@@ -309,9 +341,14 @@ impl Database {
         header: &str,
     ) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
-        // for each row in the table, run fun on the value of column name and insert the result into the new column
-        let queries =
-            regexping::regex_no_capture_group_transform_query(header, pattern, &table_name)?;
+        let transform_header = format!("{}_tform", header);
+        let new_header_name = self.find_unused_header_name(&transform_header)?;
+        let queries = regexping::regex_no_capture_group_transform_query(
+            header,
+            &new_header_name,
+            pattern,
+            &table_name,
+        )?;
         self.execute_batch(&queries)?;
         Ok(())
     }
@@ -319,14 +356,16 @@ impl Database {
     pub(crate) fn copy(&self) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
         let header = self.get_current_header()?;
-        let derived_header_name = format!("derived{}", header);
+        let transform_header = format!("{}_copy", header);
+        let new_header_name = self.find_unused_header_name(&transform_header)?;
+        // let derived_header_name = format!("derived_{}", header);
         let create_header_query =
-            format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{derived_header_name}" TEXT;"#);
+            format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{new_header_name}" TEXT;"#);
 
         let mut queries = String::new();
         queries.push_str(&create_header_query);
         let update_query =
-            format!(r#"UPDATE "{table_name}" SET "{derived_header_name}" = "{header}";"#);
+            format!(r#"UPDATE "{table_name}" SET "{new_header_name}" = "{header}";"#);
         queries.push_str(&update_query);
         self.execute_batch(&queries)
     }
@@ -437,7 +476,7 @@ impl Database {
 
     pub fn next_table(&mut self) -> AppResult<()> {
         let query = format!(
-            r#"SELECT rowid FROM sqlite_master WHERE type='table' AND rowid > '{}' ORDER BY rowid ASC LIMIT 1;"#,
+            r#"SELECT rowid FROM sqlite_master WHERE type='table' AND rowid > '{}' AND name != 'table_of_tables' ORDER BY rowid ASC LIMIT 1;"#,
             self.current_table_idx
         );
         self.current_table_idx = self.connection.query_row(&query, [], |row| row.get(0))?;
@@ -457,7 +496,7 @@ impl Database {
 
     pub(crate) fn prev_table(&mut self) -> AppResult<()> {
         let query = format!(
-            r#"SELECT rowid FROM sqlite_master WHERE type='table' AND rowid < {} ORDER BY rowid DESC LIMIT 1;"#,
+            r#"SELECT rowid FROM sqlite_master WHERE type='table' AND rowid < {} AND name != 'table_of_tables' ORDER BY rowid DESC LIMIT 1;"#,
             self.current_table_idx
         );
         self.current_table_idx = self.connection.query_row(&query, [], |row| row.get(0))?;
@@ -508,8 +547,8 @@ impl Database {
         let table_name = self.get_current_table_name()?;
         let query = sql_queries::build::delete_table_query(&table_name);
         self.execute(&query, [])?;
-        self.current_table_idx = self.current_table_idx.saturating_sub(1);
         log::info!("Deleted table {table_name}");
+        self.prev_table()?;
         Ok(())
     }
 
@@ -701,15 +740,15 @@ mod tests {
     fn derive_column_test() {
         let mut database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
         let col = "firstname";
-        let fun = |s| Some(format!("{}-changed", s));
-        database.derive_column(col.to_string(), fun).unwrap();
-        let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
-            .get(4)
-            .unwrap()
-            .to_string();
-        assert_eq!(first, "henrik-changed");
-        let n = database.count_headers().unwrap();
-        assert_eq!(n, 5);
+        // let fun = |s| Some(format!("{}-changed", s));
+        // database.derive_column(col.to_string(), fun).unwrap();
+        // let first: String = database.get(1, 0, "data".to_string()).unwrap().1[0]
+        //     .get(4)
+        //     .unwrap()
+        //     .to_string();
+        // assert_eq!(first, "henrik-changed");
+        // let n = database.count_headers().unwrap();
+        // assert_eq!(n, 5);
     }
 
     #[test]

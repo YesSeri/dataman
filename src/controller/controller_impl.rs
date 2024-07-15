@@ -443,13 +443,13 @@ mod test {
 
         database.move_cursor(Direction::Right).unwrap();
         let column_name = database.get_current_header().unwrap();
-        database.derive_column(column_name, copy_fun).unwrap();
-        let (_, res) = database.get(20, 100, "data".to_string()).unwrap();
-        for row in res.iter() {
-            let original = row.get(1);
-            let copy = row.get(4);
-            assert_eq!(original, copy);
-        }
+        // database.derive_column(column_name, copy_fun).unwrap();
+        // let (_, res) = database.get(20, 100, "data".to_string()).unwrap();
+        // for row in res.iter() {
+        //     let original = row.get(1);
+        //     let copy = row.get(4);
+        //     assert_eq!(original, copy);
+        // }
     }
 
     #[test]
@@ -460,13 +460,13 @@ mod test {
         let copy_fun = |s: String| Some(s.to_string());
         database.move_cursor(Direction::Right).unwrap();
         let column_name = database.get_current_header().unwrap();
-        database.derive_column(column_name, copy_fun).unwrap();
-        let table_name = database.get_current_table_name().unwrap();
-        let (_, res) = database.get(20, 0, table_name).unwrap();
-        for row in res.iter() {
-            let original = row.get(1);
-            let copy = row.get(4);
-            assert_eq!(original, copy);
-        }
+        // database.derive_column(column_name, copy_fun).unwrap();
+        // let table_name = database.get_current_table_name().unwrap();
+        // let (_, res) = database.get(20, 0, table_name).unwrap();
+        // for row in res.iter() {
+        //     let original = row.get(1);
+        //     let copy = row.get(4);
+        //     assert_eq!(original, copy);
+        // }
     }
 }
