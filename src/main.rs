@@ -17,19 +17,10 @@ fn main() -> Result<(), AppError> {
     // if not release mode, print logs
     // if release mode, logs are not printed
     std::env::set_var("RUST_BACKTRACE", "1");
-    setup_panic_hook();
+    TUI::install_panic_hook();
     setup_logging();
     let (mut controller, tui) = setup_application()?;
     controller.run(tui)
-}
-
-fn setup_panic_hook() {
-    std::panic::set_hook(Box::new(|_| {
-        match disable_raw_mode() {
-            Ok(()) => println!("disabled raw mode"),
-            Err(err) => println!("could not disable raw mode due to {err}"),
-        };
-    }));
 }
 
 fn setup_application() -> Result<(Controller, TUI), AppError> {
@@ -42,7 +33,7 @@ fn setup_application() -> Result<(Controller, TUI), AppError> {
         "Time taken to setup application: {:?}",
         time_end - time_start
     );
-    let tui = TUI::new();
+    let tui = TUI::default();
     Ok((Controller::new(database), tui))
 }
 

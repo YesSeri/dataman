@@ -15,27 +15,15 @@ use super::input::StateMachine;
 #[derive(Debug)]
 pub struct Controller {
     pub(crate) database: Database,
-    pub(crate) last_command: PreviousCommand,
-    pub(crate) queued_command: Option<QueuedCommand>,
-    pub(crate) input_mode_state_machine: StateMachine,
-    finished_taking_inputs: bool,
-    is_running: bool,
 }
 
 impl Controller {
     pub fn new(database: Database) -> Self {
-        Self {
-            database,
-            last_command: PreviousCommand::new(Command::None, None),
-            queued_command: None,
-            input_mode_state_machine: StateMachine::new(),
-            finished_taking_inputs: true,
-            is_running: true,
-        }
+        Self { database }
     }
 
     pub(crate) fn save_to_sqlite_file(&self) -> AppResult<()> {
-        if let Some(queued_command) = &self.queued_command {
+        if let Some(queued_command) = &self.database.queued_command {
             let filename = queued_command.inputs.first();
             if let Some(filename) = filename {
                 let path = PathBuf::from(filename);
@@ -77,10 +65,11 @@ impl Controller {
     }
 
     fn submit_message(&mut self) {
-        if let Some(queued_command) = &mut self.queued_command {
+        if let Some(queued_command) = &mut self.database.queued_command {
             if queued_command.command != Command::RegexTransform || queued_command.inputs.len() == 1
             {
-                self.input_mode_state_machine
+                self.database
+                    .input_mode_state_machine
                     .transition(input::Event::FinishEditing)
                     .unwrap();
             }
@@ -123,7 +112,8 @@ impl Controller {
         if let Event::Key(key) = event::read()? {
             if key.modifiers.contains(KeyModifiers::CONTROL) {
                 if let KeyCode::Char('c') = key.code {
-                    self.input_mode_state_machine
+                    self.database
+                        .input_mode_state_machine
                         .transition(input::Event::AbortEditing)?;
                     self.reset_input();
                     return Ok(());
@@ -145,19 +135,22 @@ impl Controller {
                         self.move_cursor_right();
                     }
                     KeyCode::Esc => {
-                        self.input_mode_state_machine
+                        self.database
+                            .input_mode_state_machine
                             .transition(input::Event::AbortEditing)?;
                         self.reset_input();
                     }
                     KeyCode::Tab => {
-                        self.input_mode_state_machine
+                        self.database
+                            .input_mode_state_machine
                             .transition(input::Event::UseExternalEditor)?;
                         let res = self.get_external_data();
                         if let Ok(data) = res {
                             self.database.character_index = data.len();
                             self.database.input = data;
                         }
-                        self.input_mode_state_machine
+                        self.database
+                            .input_mode_state_machine
                             .transition(input::Event::ExitExternalEditor)?;
                     }
                     _ => {}
@@ -175,7 +168,7 @@ impl Controller {
                 Err(app_error_other!("Could not poll"))
             } {
                 Ok(command) => {
-                    self.last_command = PreviousCommand::new(command.clone(), None);
+                    self.database.last_command = PreviousCommand::new(command.clone(), None);
                     let result = match command {
                         Command::RegexTransform
                         | Command::Save
@@ -185,8 +178,10 @@ impl Controller {
                         | Command::SqlQuery
                         | Command::RenameColumn
                         | Command::RenameTable => {
-                            self.queued_command = Some(QueuedCommand::new(command.clone()));
-                            self.input_mode_state_machine
+                            self.database.queued_command =
+                                Some(QueuedCommand::new(command.clone()));
+                            self.database
+                                .input_mode_state_machine
                                 .transition(input::Event::StartEditing)?;
                             Ok(())
                         }
@@ -225,14 +220,14 @@ impl Controller {
                 Err(result) => {
                     self.database.slice.has_changed();
 
-                    self.last_command =
+                    self.database.last_command =
                         PreviousCommand::new(Command::IllegalOperation, Some(result.to_string()));
                     Ok(())
                 }
             };
             if let Err(e) = res {
                 self.database.slice.has_changed();
-                self.last_command =
+                self.database.last_command =
                     PreviousCommand::new(Command::IllegalOperation, Some(format!(": {}", e)));
             }
         }
@@ -241,34 +236,37 @@ impl Controller {
     pub fn run(&mut self, mut tui: TUI) -> AppResult<()> {
         loop {
             tui.draw(self)?;
-            match self.input_mode_state_machine.get_state() {
+            match self.database.input_mode_state_machine.get_state() {
                 InputMode::Finish => {
-                    if let Some(queued_command) = self.queued_command.clone() {
+                    if let Some(queued_command) = self.database.queued_command.clone() {
                         self.execute_queued_command()?;
-                        self.queued_command = None;
-                        self.last_command = PreviousCommand::new(queued_command.command, None);
-                        self.input_mode_state_machine
+                        self.database.queued_command = None;
+                        self.database.last_command =
+                            PreviousCommand::new(queued_command.command, None);
+                        self.database
+                            .input_mode_state_machine
                             .transition(input::Event::Reset)?;
                     } else {
                         return Err(app_error_other!("No queued command, but in finish state"));
                     }
                 }
-                InputMode::Editing if (self.queued_command.is_some()) => {
+                InputMode::Editing if (self.database.queued_command.is_some()) => {
                     let res = self.user_input_mode();
                 }
                 InputMode::Normal => {
                     let res = self.normal_mode();
-                    if self.last_command.command == Command::Quit {
+                    if self.database.last_command.command == Command::Quit {
                         tui.shutdown()?;
                         break Ok(());
                     }
                 }
                 InputMode::Abort => {
-                    self.last_command =
+                    self.database.last_command =
                         PreviousCommand::new(Command::None, Some("Aborted input".to_string()));
 
-                    self.queued_command = None;
-                    self.input_mode_state_machine
+                    self.database.queued_command = None;
+                    self.database
+                        .input_mode_state_machine
                         .transition(input::Event::Reset)?;
                 }
                 InputMode::ExternalEditor => todo!(),
@@ -320,7 +318,7 @@ impl Controller {
 
     pub fn copy(&mut self) -> AppResult<()> {
         self.database.copy()?;
-        self.last_command = PreviousCommand::new(Command::Copy, None);
+        self.database.last_command = PreviousCommand::new(Command::Copy, None);
         Ok(())
     }
 
@@ -343,11 +341,11 @@ impl Controller {
         let header = self.database.get_current_header()?;
         match self.database.exact_search(&header, &pattern) {
             Ok(_) => {
-                self.last_command =
+                self.database.last_command =
                     PreviousCommand::new(Command::ExactSearch, Some("Match found".to_string()));
             }
             Err(_) => {
-                self.last_command =
+                self.database.last_command =
                     PreviousCommand::new(Command::ExactSearch, Some("No match found".to_string()));
             }
         }
@@ -355,30 +353,30 @@ impl Controller {
     }
 
     fn text_to_int(&mut self) -> AppResult<()> {
-        self.last_command = PreviousCommand::new(Command::TextToInt, None);
+        self.database.last_command = PreviousCommand::new(Command::TextToInt, None);
         self.database.text_to_int()
     }
 
     fn int_to_text(&mut self) -> AppResult<()> {
-        self.last_command = PreviousCommand::new(Command::IntToText, None);
+        self.database.last_command = PreviousCommand::new(Command::IntToText, None);
         self.database.int_to_text()
     }
 
     fn delete_column(&mut self) -> Result<(), AppError> {
         let text = self.database.delete_column()?;
-        self.last_command = PreviousCommand::new(Command::DeleteColumn, text);
+        self.database.last_command = PreviousCommand::new(Command::DeleteColumn, text);
         Ok(())
     }
 
     fn rename_column(&mut self, inputs: Vec<String>) -> Result<(), AppError> {
         let new_column = inputs[0].to_owned();
         self.database.rename_column(&new_column)?;
-        self.last_command = PreviousCommand::new(Command::RenameColumn, None);
+        self.database.last_command = PreviousCommand::new(Command::RenameColumn, None);
         Ok(())
     }
 
     fn execute_queued_command(&mut self) -> AppResult<()> {
-        if let Some(queued_command) = &self.queued_command {
+        if let Some(queued_command) = &self.database.queued_command {
             // TODO: this is not good, but makes it a bit easier to read
             let inputs = queued_command.inputs.clone();
             let result: AppResult<()> = match queued_command.command {
@@ -413,7 +411,7 @@ impl Controller {
                   // Command::RenameColumn => self.rename_column(),
                   // Command::Join(_) => todo!(),
             };
-            if let Some(queued_command) = self.queued_command.as_ref() {
+            if let Some(queued_command) = self.database.queued_command.as_ref() {
                 if queued_command.command.requires_updating_view() {
                     self.database.slice.has_changed();
                 }
@@ -425,7 +423,7 @@ impl Controller {
     fn rename_table(&mut self, inputs: Vec<String>) -> Result<(), AppError> {
         let new_table_name = inputs[0].to_owned();
         self.database.rename_table(&new_table_name)?;
-        self.last_command = PreviousCommand::new(Command::RenameColumn, None);
+        self.database.last_command = PreviousCommand::new(Command::RenameColumn, None);
         Ok(())
     }
     // Other methods from the Controller struct

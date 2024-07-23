@@ -1,4 +1,6 @@
 use crate::controller;
+use crate::controller::command::{Command, PreviousCommand, QueuedCommand};
+use crate::controller::input::StateMachine;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::hash::Hash;
@@ -33,7 +35,10 @@ pub struct Database {
     pub(crate) slice: DatabaseSlice,
     pub(crate) input: String,
     pub(crate) character_index: usize,
-    regex_map: HashMap<String, Regex>,
+    pub(crate) last_command: PreviousCommand,
+    pub(crate) queued_command: Option<QueuedCommand>,
+    pub(crate) input_mode_state_machine: StateMachine,
+    // regex_map: HashMap<String, Regex>,
 }
 
 impl Database {
@@ -55,7 +60,9 @@ impl Database {
             slice,
             input: String::new(),
             character_index: 0,
-            regex_map: HashMap::new(),
+            last_command: PreviousCommand::new(Command::None, None),
+            queued_command: None,
+            input_mode_state_machine: StateMachine::new(),
         };
         if let Err(err) = regexping::custom_functions::add_custom_functions(&database.connection) {
             log::info!("Error adding custom functions, e.g. REGEXP: {}", err);

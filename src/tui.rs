@@ -1,13 +1,15 @@
 use std::{
     fmt::{Debug, Display},
-    io::{Read, Stdout, Write},
+    io::{stdout, Read, Stdout, Write},
     iter::Sum,
+    panic,
 };
 
 use crossterm::{
     event::{self, Event},
     execute,
-    terminal::{self, enable_raw_mode},
+    terminal::{self, disable_raw_mode, enable_raw_mode, LeaveAlternateScreen},
+    ExecutableCommand,
 };
 use log::info;
 use ratatui::{
@@ -58,12 +60,13 @@ impl TUI {
         &mut self,
         controller: &mut controller::controller_impl::Controller,
     ) -> AppResult<()> {
-        self.terminal.draw(|f| match TUI::update(f, controller) {
-            Ok(_) => (),
-            Err(err) => {
-                log::error!("Error updating TUI: {:?}", err);
-            }
-        })?;
+        self.terminal
+            .draw(|f| match TUI::update(f, &mut controller.database) {
+                Ok(_) => (),
+                Err(err) => {
+                    log::error!("Error updating TUI: {:?}", err);
+                }
+            })?;
         Ok(())
     }
 
@@ -100,8 +103,8 @@ impl TUI {
         Ok(trimmed)
     }
 
-    fn update(f: &mut Frame, controller: &mut Controller) -> AppResult<()> {
-        let constraints: Vec<Constraint> = match controller.input_mode_state_machine.get_state() {
+    fn update(f: &mut Frame, database: &mut Database) -> AppResult<()> {
+        let constraints: Vec<Constraint> = match database.input_mode_state_machine.get_state() {
             InputMode::Editing => {
                 vec![
                     Constraint::Max(1000),
@@ -119,12 +122,10 @@ impl TUI {
             .constraints(constraints.as_slice())
             .split(f.size());
 
-        let table_name = controller.database.get_current_table_name()?;
+        let table_name = database.get_current_table_name()?;
 
         let (headers, rows): DataTable =
-            controller
-                .database
-                .get(100, controller.database.slice.row_offset, table_name)?;
+            database.get(100, database.slice.row_offset, table_name)?;
         let id_space: u16 = rows.iter().fold(0, |acc, row| {
             let id = row.first().unwrap().to_string().len() as u16;
             if id > acc {
@@ -134,13 +135,13 @@ impl TUI {
             }
         });
 
-        let widths: Vec<u16> = controller.database.slice.column_widths();
+        let widths: Vec<u16> = database.slice.column_widths();
         let sum: u16 = widths.iter().sum();
         let constraints = widths
             .iter()
             .map(|w| Constraint::Min(*w))
             .collect::<Vec<_>>();
-        let current_header = controller.database.header_idx;
+        let current_header = database.header_idx;
         // mark current header
 
         let header = Row::new(headers.iter().enumerate().map(|(i, h)| {
@@ -164,29 +165,24 @@ impl TUI {
             Row::new(data_row).height(1)
         });
         let selected_style = Style::default().add_modifier(Modifier::UNDERLINED);
-        let table_name = controller.database.get_current_table_name()?;
+        let table_name = database.get_current_table_name()?;
         let t = Table::new(tui_rows, constraints)
             .header(header)
             .block(Block::default().borders(Borders::ALL).title(table_name))
             .highlight_style(selected_style)
             // .highlight_symbol(">> ")
             .bg(Color::Black);
-        f.render_stateful_widget(t, rects[0], &mut controller.database.slice.table_state);
+        f.render_stateful_widget(t, rects[0], &mut database.slice.table_state);
 
-        let a = controller.database.header_idx;
-        let row = controller
-            .database
-            .slice
-            .table_state
-            .selected()
-            .unwrap_or(0);
-        let total_rows = controller.database.count_rows().unwrap_or(0);
+        let a = database.header_idx;
+        let row = database.slice.table_state.selected().unwrap_or(0);
+        let total_rows = database.count_rows().unwrap_or(0);
         let rowid = rows
             .get(row)
             .map(|el| el.first().unwrap().to_string())
             .unwrap_or("xxx".to_owned());
-        let offset = controller.database.slice.table_state.offset();
-        let last_command = controller.last_command.command.to_string();
+        let offset = database.slice.table_state.offset();
+        let last_command = database.last_command.command.to_string();
         let table_height = rects[0].height;
         let text = vec![Line::from(vec![Span::raw(format!(
             // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
@@ -196,9 +192,9 @@ impl TUI {
 
         f.render_widget(paragraph, rects[1]);
 
-        if controller.input_mode_state_machine.get_state() == InputMode::Editing {
-            let title = controller.last_command.command.to_string();
-            let paragraph = Paragraph::new(controller.database.input.as_str())
+        if database.input_mode_state_machine.get_state() == InputMode::Editing {
+            let title = database.last_command.command.to_string();
+            let paragraph = Paragraph::new(database.input.as_str())
                 .style(Style::default().fg(Color::Yellow))
                 .block(
                     Block::default()
@@ -207,7 +203,7 @@ impl TUI {
                 );
 
             f.set_cursor(
-                rects[2].x + controller.database.character_index as u16 + 1,
+                rects[2].x + database.character_index as u16 + 1,
                 rects[2].y + 1,
             );
             f.render_widget(paragraph, rects[2]);
@@ -231,6 +227,15 @@ impl TUI {
             // }
         }
         Ok(())
+    }
+
+    pub fn install_panic_hook() {
+        let original_hook = panic::take_hook();
+        panic::set_hook(Box::new(move |panic_info| {
+            stdout().execute(LeaveAlternateScreen).unwrap();
+            disable_raw_mode().unwrap();
+            original_hook(panic_info);
+        }));
     }
 }
 
