@@ -288,13 +288,12 @@ impl Database {
         // log everything
         Ok(new_header_name)
     }
-    pub fn regex_filter(&mut self, header: &str, pattern: &str) -> AppResult<()> {
+    pub fn regex_filter(&mut self) -> AppResult<()> {
         // create new table with filter applied using create table as sqlite statement.
 
         let inputs = self.queued_command.as_ref().unwrap().inputs.clone();
         let pattern = inputs[0].to_owned();
         let header = self.get_current_header()?;
-        self.regex_filter(&header, &pattern)?;
         let old_table_name = self.get_current_table_name()?;
         let temp_table_name = format!("{}_filt", old_table_name);
         let new_table_name = self.find_unused_table_name(&temp_table_name)?;
@@ -309,27 +308,42 @@ impl Database {
     }
 
     // go to first match
-    pub(crate) fn exact_search(&mut self, search_header: &str, pattern: &str) -> AppResult<()> {
-        let table_name = self.get_current_table_name()?;
-        let current_row =
-            self.slice.row_offset + self.slice.table_state.selected().unwrap_or(0) as u32;
-        let query = sql_queries::build::exact_search_query(
-            &self.get_ordering(),
-            search_header,
-            current_row,
-            &table_name,
-        );
+    pub(crate) fn exact_search(&mut self) -> AppResult<()> {
+        todo!();
+        // let inputs = self.queued_command.as_ref().unwrap().inputs.clone();
+        // let pattern = inputs[0].to_owned();
+        // let header = self.get_current_header()?;
+        // let table_name = self.get_current_table_name()?;
+        // let current_row =
+        //     self.slice.row_offset + self.slice.table_state.selected().unwrap_or(0) as u32;
+        // let query = sql_queries::build::exact_search_query(
+        //     &self.get_ordering(),
+        //     search_header,
+        //     current_row,
+        //     &table_name,
+        // );
 
-        let row_number: u32 = self
-            .connection
-            .query_row(&query, [pattern], |row| row.get(0))?;
-        let row_number = row_number - 1;
-        let height = TUI::get_table_height()?;
-        let row_idx = row_number % height;
-        let row_offset = row_number - row_idx;
+        // let row_number: u32 = self
+        //     .connection
+        //     .query_row(&query, [&pattern], |row| row.get(0))?;
+        // let row_number = row_number - 1;
+        // let height = TUI::get_table_height()?;
+        // let row_idx = row_number % height;
+        // let row_offset = row_number - row_idx;
 
-        self.slice.update(row_idx, row_offset);
-        Ok(())
+        // self.slice.update(row_idx, row_offset);
+
+        // match self.exact_search(&header, &pattern) {
+        //     Ok(_) => {
+        //         self.last_command =
+        //             PreviousCommand::new(Command::ExactSearch, Some("Match found".to_string()));
+        //     }
+        //     Err(_) => {
+        //         self.last_command =
+        //             PreviousCommand::new(Command::ExactSearch, Some("No match found".to_string()));
+        //     }
+        // }
+        // Ok(())
     }
 
     /// This is a regex capture without capture groups e.g. [g-k].*n.
@@ -530,17 +544,19 @@ impl Database {
         Ok(())
     }
 
-    pub(crate) fn text_to_int(&self) -> AppResult<()> {
+    pub(crate) fn text_to_int(&mut self) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
         let column = self.get_current_header()?;
         let queries = sql_queries::build::text_to_int(&table_name, &column);
+        self.last_command = PreviousCommand::new(Command::TextToInt, None);
         self.execute_batch(&queries)
     }
 
-    pub(crate) fn int_to_text(&self) -> AppResult<()> {
+    pub(crate) fn int_to_text(&mut self) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
         let column = self.get_current_header()?;
         let queries = sql_queries::build::int_to_text_query(&table_name, &column);
+        self.last_command = PreviousCommand::new(Command::IntToText, None);
         self.execute_batch(&queries)
     }
 
@@ -561,7 +577,15 @@ impl Database {
         Ok(())
     }
 
-    pub(crate) fn rename_column(&mut self, new_column: &str) -> AppResult<()> {
+    pub(crate) fn rename_column(&mut self) -> AppResult<()> {
+        let new_column = self
+            .queued_command
+            .as_ref()
+            .unwrap()
+            .inputs
+            .first()
+            .unwrap();
+        self.last_command = PreviousCommand::new(Command::RenameColumn, None);
         let table_name = self.get_current_table_name()?;
         let order_column = &self.order_column;
         let column = self.get_current_header()?;
@@ -569,7 +593,8 @@ impl Database {
             self.order_column = Some(new_column.to_string());
         }
         let queries = sql_queries::build::rename_column_query(&table_name, &column, new_column);
-        self.execute_batch(&queries)
+        self.execute_batch(&queries)?;
+        Ok(())
     }
 
     pub(crate) fn delete_table(&mut self) -> AppResult<()> {
@@ -581,10 +606,13 @@ impl Database {
         Ok(())
     }
 
-    pub(crate) fn rename_table(&self, new_table_name: &str) -> AppResult<()> {
+    pub(crate) fn rename_table(&mut self) -> AppResult<()> {
+        let inputs = self.queued_command.as_ref().unwrap().inputs.clone();
+        let new_table_name = inputs[0].to_owned();
         let old_table_name = &self.get_current_table_name()?;
-        let query = sql_queries::build::rename_table_query(old_table_name, new_table_name);
+        let query = sql_queries::build::rename_table_query(old_table_name, &new_table_name);
         self.execute(&query, [])?;
+        self.last_command = PreviousCommand::new(Command::RenameColumn, None);
         Ok(())
     }
 
@@ -866,48 +894,6 @@ impl Database {
         Ok(())
     }
 
-    pub(crate) fn sort(&mut self) -> AppResult<()> {
-        self.sort()
-    }
-    fn exact_search(&mut self, inputs: Vec<String>) -> AppResult<()> {
-        let pattern = inputs[0].to_owned();
-        let header = self.get_current_header()?;
-        match self.exact_search(&header, &pattern) {
-            Ok(_) => {
-                self.last_command =
-                    PreviousCommand::new(Command::ExactSearch, Some("Match found".to_string()));
-            }
-            Err(_) => {
-                self.last_command =
-                    PreviousCommand::new(Command::ExactSearch, Some("No match found".to_string()));
-            }
-        }
-        Ok(())
-    }
-
-    fn text_to_int(&mut self) -> AppResult<()> {
-        self.last_command = PreviousCommand::new(Command::TextToInt, None);
-        self.text_to_int()
-    }
-
-    fn int_to_text(&mut self) -> AppResult<()> {
-        self.last_command = PreviousCommand::new(Command::IntToText, None);
-        self.int_to_text()
-    }
-
-    // fn delete_column(&mut self) -> Result<(), AppError> {
-    //     let text = self.delete_column()?;
-    //     self.last_command = PreviousCommand::new(Command::DeleteColumn, text);
-    //     Ok(())
-    // }
-
-    fn rename_column(&mut self, inputs: Vec<String>) -> Result<(), AppError> {
-        let new_column = inputs[0].to_owned();
-        self.rename_column(&new_column)?;
-        self.last_command = PreviousCommand::new(Command::RenameColumn, None);
-        Ok(())
-    }
-
     fn execute_queued_command(&mut self) -> AppResult<()> {
         if let Some(queued_command) = &self.queued_command {
             // TODO: this is not good, but makes it a bit easier to read
@@ -916,11 +902,10 @@ impl Database {
                 Command::RegexTransform => self.regex_transform(inputs),
                 Command::Edit => self.edit_cell(inputs),
                 // CREATE TABLE data2 AS SELECT firstname FROM data WHERE lastname = 'zenkert';
-                Command::SqlQuery => self.sql_query(inputs),
-                Command::RegexFilter => self.regex_filter(inputs),
-                Command::RenameColumn => self.rename_column(inputs),
-                Command::RenameTable => self.rename_table(inputs),
-                Command::ExactSearch => self.exact_search(inputs),
+                Command::RegexFilter => self.regex_filter(),
+                Command::RenameColumn => self.rename_column(),
+                Command::RenameTable => self.rename_table(),
+                Command::ExactSearch => self.exact_search(),
                 _ => {
                     log::error!("Command not implemented: {:?}", queued_command.command);
                     Err(AppError::from("Command not implemented"))
@@ -952,14 +937,6 @@ impl Database {
         }
         Ok(())
     }
-
-    fn rename_table(&mut self, inputs: Vec<String>) -> Result<(), AppError> {
-        let new_table_name = inputs[0].to_owned();
-        self.rename_table(&new_table_name)?;
-        self.last_command = PreviousCommand::new(Command::RenameColumn, None);
-        Ok(())
-    }
-    // Other methods from the Controller struct
 }
 
 impl TryFrom<Vec<PathBuf>> for Database {

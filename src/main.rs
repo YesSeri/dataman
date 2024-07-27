@@ -8,10 +8,7 @@ use std::io::Write;
 use crossterm::terminal::disable_raw_mode;
 use env_logger::{Builder, Env};
 
-use dataman::{
-    controller::controller_impl::Controller, error::AppError, model::database::Database, tui::TUI,
-    Cli,
-};
+use dataman::{error::AppError, model::database::Database, tui::TUI, Cli};
 
 fn main() -> Result<(), AppError> {
     // if not release mode, print logs
@@ -23,7 +20,7 @@ fn main() -> Result<(), AppError> {
     controller.run(tui)
 }
 
-fn setup_application() -> Result<(Controller, TUI), AppError> {
+fn setup_application() -> Result<(Database, TUI), AppError> {
     let time_start = std::time::Instant::now();
     let cli = <Cli as clap::Parser>::parse();
     let paths = cli.paths;

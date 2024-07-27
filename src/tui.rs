@@ -20,10 +20,7 @@ use ratatui::{
     Frame, Terminal,
 };
 
-use crate::{
-    app_error_other,
-    controller::{self, controller_impl::Controller},
-};
+use crate::{app_error_other, controller};
 use crate::{controller::input::InputMode, model::datarow::DataTable};
 use crate::{
     error::{AppError, AppResult},
@@ -56,17 +53,13 @@ impl TUI {
         terminal::disable_raw_mode()?;
         Ok(())
     }
-    pub fn draw(
-        &mut self,
-        controller: &mut controller::controller_impl::Controller,
-    ) -> AppResult<()> {
-        self.terminal
-            .draw(|f| match TUI::update(f, &mut controller.database) {
-                Ok(_) => (),
-                Err(err) => {
-                    log::error!("Error updating TUI: {:?}", err);
-                }
-            })?;
+    pub fn draw(&mut self, model: &mut crate::model::database::Database) -> AppResult<()> {
+        self.terminal.draw(|f| match TUI::update(f, model) {
+            Ok(_) => (),
+            Err(err) => {
+                log::error!("Error updating TUI: {:?}", err);
+            }
+        })?;
         Ok(())
     }
 
