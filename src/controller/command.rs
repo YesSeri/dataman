@@ -4,8 +4,8 @@ use super::direction::Direction;
 
 #[derive(Debug, Clone)]
 pub(crate) struct QueuedCommand {
-    pub(super) command: Command,
-    pub(super) inputs: Vec<String>,
+    pub(crate) command: Command,
+    pub(crate) inputs: Vec<String>,
 }
 
 impl QueuedCommand {
