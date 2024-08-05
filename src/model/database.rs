@@ -71,13 +71,15 @@ impl Database {
             })
         }
     }
-    pub(crate) fn backup_db<P: AsRef<Path>>(&self, dst: P) -> rusqlite::Result<()> {
+    pub(crate) fn backup_db<P: AsRef<Path>>(&self, dst: P) -> AppResult<()> {
         let mut stmt = self.connection.prepare("PRAGMA page_count")?;
         let page_count: i32 = stmt.query_row([], |row| row.get(0)).unwrap_or(i32::MAX);
 
         let mut dst = Connection::open(dst)?;
         let backup = backup::Backup::new(&self.connection, &mut dst)?;
-        backup.run_to_completion(page_count, time::Duration::from_millis(250), None)
+        backup
+            .run_to_completion(page_count, time::Duration::from_millis(250), None)
+            .map_err(AppError::from)
     }
     pub fn get_current_header(&self) -> AppResult<String> {
         let table_name = self.get_current_table_name()?;

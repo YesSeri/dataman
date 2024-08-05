@@ -3,6 +3,7 @@ use crate::controller::command::{Command, PreviousCommand};
 use crate::controller::direction::Direction;
 use crate::controller::input::{self, InputMode};
 use crate::error::{AppError, AppResult};
+use crate::model::converter::save_to_csv_file;
 use crate::model::database::Database;
 use crate::model::datarow::DataTable;
 use crate::tui::TUI;
@@ -395,6 +396,19 @@ impl Controller {
                 Command::RenameColumn => self.rename_column(inputs),
                 Command::RenameTable => self.rename_table(inputs),
                 Command::ExactSearch => self.exact_search(inputs),
+                Command::Save => {
+                    let filename = inputs[0].as_str();
+                    let path = PathBuf::from(filename);
+                    match path.extension().unwrap().to_str().unwrap() {
+                        "csv" => save_to_csv_file(
+                            &self.database.connection,
+                            &self.database.get_current_table_name()?,
+                            &path,
+                        ),
+                        "sqlite" | "db" | "sql" | "sqlite3" => self.database.backup_db(path),
+                        _ => Err(AppError::from("Unsupported file format")),
+                    }
+                }
                 Command::MathOperation => self.database.math_operation(inputs),
                 // _ => {
                 //     log::error!("Command not implemented: {:?}", queued_command.command);
@@ -406,7 +420,6 @@ impl Controller {
                 | Command::IllegalOperation
                 | Command::None
                 | Command::Sort
-                | Command::Save
                 | Command::NextTable
                 | Command::PrevTable
                 | Command::TextToInt

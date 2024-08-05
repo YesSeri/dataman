@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::{error::Error, fs::File, path, path::Path};
 
 use csv::{Reader, StringRecord, Writer};
+use rusqlite::types::ValueRef;
 use rusqlite::{Connection, Rows};
 use serde::Serialize;
 
@@ -193,6 +194,36 @@ fn create_insert_stmt_record(record: StringRecord, items: &mut Vec<String>) {
     items.push(result);
 }
 
+pub(crate) fn save_to_csv_file(
+    connection: &Connection,
+    table_name: &str,
+    save_file: &PathBuf,
+) -> AppResult<()> {
+    let query = &format!(r#"SELECT * FROM "{}";"#, table_name);
+    let mut stmt = connection.prepare(query).unwrap();
+    let headers: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
+
+    // Collect all rows into a vector to avoid borrowing issues
+    let rows: Vec<Vec<DataItem>> = stmt
+        .query_map([], |row| {
+            let mut items = Vec::new();
+            for i in 0..headers.len() {
+                let item = row.get_ref(i).unwrap();
+                items.push(DataItem::from(item));
+            }
+            Ok(items)
+        })
+        .unwrap()
+        .map(|row| row.unwrap())
+        .collect();
+
+    let mut wtr = Writer::from_path(save_file).unwrap();
+    wtr.write_record(&headers).unwrap();
+    for row in rows {
+        wtr.serialize(row).unwrap();
+    }
+    Ok(())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
