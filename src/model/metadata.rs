@@ -6,7 +6,7 @@ use rusqlite::{params, Connection};
 
 use crate::error::AppResult;
 
-fn create_table_of_tables(conn: &Connection) -> AppResult<()> {
+pub(crate) fn create_table_of_tables(conn: &Connection) -> AppResult<()> {
     conn.execute("DROP TABLE IF EXISTS table_of_tables;", [])?;
     conn.execute(
         "CREATE TABLE IF NOT EXISTS table_of_tables (
@@ -51,7 +51,7 @@ impl fmt::Display for ColumnKind {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ColumnKind::Text => write!(f, "TEXT"),
-            ColumnKind::Int => write!(f, "INT"),
+            ColumnKind::Int => write!(f, "INTEGER"),
         }
     }
 }
@@ -67,11 +67,14 @@ fn get_table_kind_col_count(
             let type_name: String = row.get(2)?;
             Ok(type_name)
         })?
-        .filter(|x| x.as_ref() == Ok(&kind.to_string()))
+        .filter(|x| {
+            log::info!("x: {:?}", x);
+            x.as_ref() == Ok(&kind.to_string())
+        })
         .count();
     Ok(col_count)
 }
-fn populate_table_of_tables(conn: &Connection) -> AppResult<()> {
+pub(crate) fn populate_table_of_tables(conn: &Connection) -> AppResult<()> {
     let tables = get_tables(conn)?;
     for table in tables {
         let row_count = get_table_row_count(conn, &table)?;
@@ -80,7 +83,7 @@ fn populate_table_of_tables(conn: &Connection) -> AppResult<()> {
         let text_col_count = get_table_kind_col_count(conn, &table, ColumnKind::Text)?;
 
         conn.execute(
-            r#"INSERT INTO table_of_tables (table_name, row_count, col_count, text_col_count, int_col_count) VALUES (?1, ?2, ?3, ?4, ?5)"#,
+            r#"REPLACE INTO table_of_tables (table_name, row_count, col_count, text_col_count, int_col_count) VALUES (?1, ?2, ?3, ?4, ?5)"#,
             params![table, row_count, col_count,text_col_count, int_col_count],
         )?;
     }
@@ -103,7 +106,7 @@ mod tests {
             [],
         )?;
         conn.execute(
-            "CREATE TABLE t3 (id INTEGER PRIMARY KEY, c1 TEXT, c2 TEXT, c3 TEXT, c4 INT);",
+            "CREATE TABLE t3 (id INTEGER PRIMARY KEY, c1 TEXT, c2 TEXT, c3 TEXT, c4 INTEGER);",
             [],
         )?;
 
@@ -167,10 +170,10 @@ mod tests {
         };
         let mut stmt = conn.prepare(&num_tables_fun("t2")).unwrap();
         let count: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
-        assert_eq!(count, 0);
+        assert_eq!(count, 1);
         let mut stmt = conn.prepare(&num_tables_fun("t3")).unwrap();
         let count: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, 2);
         write_db_to_disk(&conn);
     }
 

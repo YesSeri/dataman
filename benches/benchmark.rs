@@ -4,7 +4,7 @@ use rusqlite::Result;
 
 fn setup_large_database(conn: &Connection, num_rows: usize) -> Result<()> {
     conn.execute(
-        "CREATE TABLE test (id INTEGER PRIMARY KEY, val INT, transformed_val INT)",
+        "CREATE TABLE test (id INTEGER PRIMARY KEY, val INTEGER, transformed_val INTEGER)",
         [],
     )?;
     let mut stmt = conn.prepare("INSERT INTO test (val) VALUES (?)")?;

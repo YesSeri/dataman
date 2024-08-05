@@ -16,7 +16,7 @@ pub(super) mod build {
     }
 
     pub(crate) fn text_to_int(table_name: &str, column: &str) -> String {
-        convert_into(table_name, column, "INT")
+        convert_into(table_name, column, "INTEGER")
     }
 
     pub(crate) fn int_to_text_query(table_name: &str, column: &str) -> String {
@@ -30,7 +30,7 @@ pub(super) mod build {
         let kind = if math_expr.contains('.') {
             "REAL"
         } else {
-            "INT"
+            "INTEGER"
         };
         let create_column_query = create_column_query(column_name, table_name, kind);
         let update_query = format!(r#"UPDATE "{table_name}" SET "{column_name}" = {math_expr};"#);

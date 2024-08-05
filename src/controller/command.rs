@@ -55,6 +55,7 @@ pub enum Command {
     DeleteTable,
     MathOperation,
     RenameTable,
+    ToggleMetadataTable,
     RenameColumn,
 }
 
@@ -74,6 +75,7 @@ impl Command {
             | Command::RenameTable
             | Command::RenameColumn
             | Command::ExactSearch
+            | Command::ToggleMetadataTable
             | Command::DeleteTable
             | Command::MathOperation
             | Command::RegexFilter => true,
@@ -107,6 +109,7 @@ impl Command {
             Command::DeleteTable => "Delete Table".to_string(),
             Command::RenameTable => "Rename Table".to_string(),
             Command::RenameColumn => "Rename Column".to_string(),
+            Command::ToggleMetadataTable => "Showing table of tables(metadata)".to_string(),
         }
     }
 }
@@ -152,6 +155,7 @@ impl From<KeyEvent> for Command {
             KeyCode::Char('r') => Command::RenameColumn,
             KeyCode::Char('R') => Command::RenameTable,
             KeyCode::Char('m') => Command::MathOperation,
+            KeyCode::Char('M') => Command::ToggleMetadataTable,
             KeyCode::Char(c) => {
                 log::info!("clicked: {c}");
                 Command::None

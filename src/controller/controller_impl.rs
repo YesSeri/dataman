@@ -200,6 +200,7 @@ impl Controller {
                         Command::IntToText => self.int_to_text(),
                         Command::DeleteColumn => self.delete_column(),
                         Command::DeleteTable => self.database.delete_table(),
+                        Command::ToggleMetadataTable => self.database.view_metadata_table(),
                         // Command::Join(_) => todo!(),
                     };
                     match command {
@@ -217,6 +218,9 @@ impl Controller {
 
                     if command.requires_updating_view() {
                         self.database.slice.has_changed();
+                    }
+                    if let Err(err) = &result {
+                        log::info!("Error: {:?}", err);
                     }
                     result
                 }
@@ -408,6 +412,7 @@ impl Controller {
                 | Command::TextToInt
                 | Command::IntToText
                 | Command::DeleteTable
+                | Command::ToggleMetadataTable
                 | Command::DeleteColumn => {
                     log::error!(
                         "Non-queueable command executed as queued: {:?}",

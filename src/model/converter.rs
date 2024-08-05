@@ -87,8 +87,7 @@ pub(crate) fn get_headers_for_query(
 
 pub(crate) fn sqlite_to_out(connection: &Connection, path: PathBuf) -> AppResult<()> {
     let mut stmt = connection
-        .prepare(r#"SELECT "name" FROM sqlite_master WHERE type='table' ORDER BY "name";"#)?;
-
+        .prepare(r#"SELECT "name" FROM sqlite_master WHERE type='table' AND name != 'table_of_tables' ORDER BY "name";"#)?;
     let tables: Vec<String> = stmt
         .query_map([], |row| row.get(0))?
         .collect::<Result<_, _>>()?;
@@ -106,6 +105,7 @@ pub(crate) fn sqlite_to_out(connection: &Connection, path: PathBuf) -> AppResult
 
             for i in 0..headers.len() {
                 let header = headers.get(i).unwrap();
+                dbg!(header);
                 if header == "id" {
                     continue;
                 }

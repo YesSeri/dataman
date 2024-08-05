@@ -22,6 +22,7 @@ use crate::tui::TUI;
 
 use super::datarow::DataTable;
 use super::db_slice::DatabaseSlice;
+use super::metadata::{create_table_of_tables, populate_table_of_tables};
 use super::regexping;
 use super::{converter, sql_queries};
 
@@ -50,25 +51,24 @@ impl Database {
         let mut table_state = TableState::new();
         table_state.select(Some(0));
         let slice = DatabaseSlice::new(vec![], vec![], table_state, 0, 0);
-
-        let database = Database {
-            connection,
-            header_idx: 0,
-            order_column: Some("id".to_string()),
-            is_asc_order: true,
-            current_table_idx: rowid,
-            slice,
-            input: String::new(),
-            character_index: 0,
-            last_command: PreviousCommand::new(Command::None, None),
-            queued_command: None,
-            input_mode_state_machine: StateMachine::new(),
-        };
-        if let Err(err) = regexping::custom_functions::add_custom_functions(&database.connection) {
+        create_table_of_tables(&connection)?;
+        if let Err(err) = regexping::custom_functions::add_custom_functions(&connection) {
             log::info!("Error adding custom functions, e.g. REGEXP: {}", err);
             Err(AppError::Sqlite(err))
         } else {
-            Ok(database)
+            Ok(Database {
+                connection,
+                header_idx: 0,
+                order_column: Some("id".to_string()),
+                is_asc_order: true,
+                current_table_idx: rowid,
+                slice,
+                input: String::new(),
+                character_index: 0,
+                last_command: PreviousCommand::new(Command::None, None),
+                queued_command: None,
+                input_mode_state_machine: StateMachine::new(),
+            })
         }
     }
     pub(crate) fn backup_db<P: AsRef<Path>>(&self, dst: P) -> rusqlite::Result<()> {
@@ -294,7 +294,6 @@ impl Database {
             regexping::regex_filter_query(header, pattern, &old_table_name, &new_table_name)?;
 
         let res = self.execute(&query, []);
-        dbg!(&res);
         res?;
         self.select_table(&new_table_name)?;
         Ok(())
@@ -583,6 +582,18 @@ impl Database {
         );
         self.execute_batch(&query)
     }
+
+    pub(crate) fn view_metadata_table(&mut self) -> Result<(), AppError> {
+        let current_tbl_name = self.get_current_table_name()?;
+        if current_tbl_name == "table_of_tables" {
+            let prev_tbl_res = self.prev_table();
+            let next_tbl_res = self.next_table();
+            prev_tbl_res.and(next_tbl_res)
+        } else {
+            populate_table_of_tables(&self.connection)?;
+            self.select_table("table_of_tables")
+        }
+    }
 }
 
 impl TryFrom<Vec<PathBuf>> for Database {
@@ -595,7 +606,7 @@ impl TryFrom<Vec<PathBuf>> for Database {
                 "No file paths provided",
             )));
         }
-        if paths.len() == 1 {
+        let database_result = if paths.len() == 1 {
             let path = paths
                 .first()
                 .ok_or(AppError::Io(std::io::Error::new(
@@ -648,63 +659,13 @@ impl TryFrom<Vec<PathBuf>> for Database {
             Err(AppError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "Invalid file extension. One or several csv files or a single sqlite3 database can be provided.")))
-        }
+        };
+        let database = database_result?;
+        // populate_table_of_tables(&database.connection)?;
+        Ok(database)
     }
 }
 
-mod table_of_tables {
-    use rusqlite::{params, Connection};
-
-    use crate::error::AppResult;
-
-    fn create_table_of_tables(conn: &Connection) -> AppResult<()> {
-        conn.execute("DROP TABLE IF EXISTS table_of_tables;", [])?;
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS table_of_tables (
-            table_name TEXT PRIMARY KEY,
-            row_count INTEGER,
-            column_count INTEGER
-        )",
-            [],
-        )?;
-        Ok(())
-    }
-
-    fn get_tables(conn: &Connection) -> AppResult<Vec<String>> {
-        let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != 'table_of_tables'")?;
-        let table_names = stmt
-            .query_map([], |row| row.get(0))?
-            .collect::<Result<Vec<String>, rusqlite::Error>>()?;
-        Ok(table_names)
-    }
-
-    fn get_table_row_count(conn: &Connection, table_name: &str) -> AppResult<i64> {
-        let mut stmt = conn.prepare(&format!(r#"SELECT COUNT(*) FROM "{}""#, table_name))?;
-        let row_count: i64 = stmt.query_row([], |row| row.get(0))?;
-        Ok(row_count)
-    }
-
-    fn get_table_column_count(conn: &Connection, table_name: &str) -> AppResult<usize> {
-        let mut stmt = conn.prepare(&format!(r#"PRAGMA table_info("{}")"#, table_name))?;
-        let column_count = stmt.query_map([], |_row| Ok(()))?.count();
-        Ok(column_count)
-    }
-
-    fn populate_table_table_of_tables(conn: &Connection) -> AppResult<()> {
-        let tables = get_tables(conn)?;
-
-        for table in tables {
-            let row_count = get_table_row_count(conn, &table)?;
-            let column_count = get_table_column_count(conn, &table)?;
-
-            conn.execute(
-            r#"INSERT INTO table_of_tables (table_name, row_count, column_count) VALUES (?1, ?2, ?3)"#,
-            params![table, row_count, column_count],
-        )?;
-        }
-        Ok(())
-    }
-}
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
