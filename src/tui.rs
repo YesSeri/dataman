@@ -23,6 +23,7 @@ use ratatui::{
 use crate::{
     app_error_other,
     controller::{self, controller_impl::Controller},
+    model::datarow::DataItem,
 };
 use crate::{controller::input::InputMode, model::datarow::DataTable};
 use crate::{
@@ -116,6 +117,7 @@ impl TUI {
                 vec![Constraint::Max(1000), Constraint::Length(1)]
             }
             InputMode::ExternalEditor => todo!(),
+            InputMode::MetadataTable => todo!(),
         };
         let rects = Layout::default()
             .direction(ratatui::prelude::Direction::Vertical)
@@ -157,13 +159,14 @@ impl TUI {
         .height(1);
 
         // draw border under header
-        let tui_rows = rows.iter().map(|data_row| {
-            let data_row = data_row
-                .iter()
-                .map(|item| Cell::from(item.clone()))
-                .collect::<Vec<_>>();
-            Row::new(data_row).height(1)
-        });
+        let tui_rows = TUI::create_tui_rows(&rows, database);
+        // let tui_rows = rows.iter().map(|data_row| {
+        //     let data_row = data_row
+        //         .iter()
+        //         .map(|item| Cell::from(item.clone()))
+        //         .collect::<Vec<_>>();
+        //     Row::new(data_row).height(1)
+        // });
         let selected_style = Style::default().add_modifier(Modifier::UNDERLINED);
         let table_name = database.get_current_table_name()?;
         let t = Table::new(tui_rows, constraints)
@@ -227,6 +230,23 @@ impl TUI {
             // }
         }
         Ok(())
+    }
+    fn create_tui_rows(rows: &Vec<Vec<DataItem>>, database: &Database) -> Vec<Row> {
+        let tui_rows = rows
+            .iter()
+            .map(|data_row| {
+                let data_row = data_row
+                    .iter()
+                    .map(|item| Cell::from(item.clone()))
+                    .collect::<Vec<_>>();
+                Row::new(data_row).height(1)
+            })
+            .collect();
+        if database.input_mode_state_machine.get_state() == InputMode::MetadataTable {
+            let mut tui_rows = tui_rows;
+            let mut metadata_rows = vec![];
+        }
+        return tui_rows;
     }
 
     pub fn install_panic_hook() {

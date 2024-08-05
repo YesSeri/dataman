@@ -39,6 +39,7 @@ pub struct Database {
     pub(crate) last_command: PreviousCommand,
     pub(crate) queued_command: Option<QueuedCommand>,
     pub(crate) input_mode_state_machine: StateMachine,
+    pub(crate) metadata_marked_join_columns: Option<Vec<String>>,
     // regex_map: HashMap<String, Regex>,
 }
 
@@ -68,6 +69,7 @@ impl Database {
                 last_command: PreviousCommand::new(Command::None, None),
                 queued_command: None,
                 input_mode_state_machine: StateMachine::new(),
+                metadata_marked_join_columns: None,
             })
         }
     }
@@ -588,10 +590,14 @@ impl Database {
     pub(crate) fn view_metadata_table(&mut self) -> Result<(), AppError> {
         let current_tbl_name = self.get_current_table_name()?;
         if current_tbl_name == "table_of_tables" {
+            self.input_mode_state_machine
+                .transition(controller::input::Event::LeaveMetadataTable)?;
             let prev_tbl_res = self.prev_table();
             let next_tbl_res = self.next_table();
             prev_tbl_res.and(next_tbl_res)
         } else {
+            self.input_mode_state_machine
+                .transition(controller::input::Event::EnterMetadataTable)?;
             populate_table_of_tables(&self.connection)?;
             self.select_table("table_of_tables")
         }

@@ -6,7 +6,7 @@ use ratatui::widgets::TableState;
 #[derive(Debug)]
 pub(crate) struct DatabaseSlice {
     pub(super) headers: Vec<String>,
-    pub(super) data_rows: Vec<Vec<DataItem>>,
+    pub(crate) data_rows: Vec<Vec<DataItem>>,
     pub(crate) table_state: TableState,
     pub(crate) row_offset: u32,
     pub(crate) is_unchanged: bool,
@@ -75,5 +75,8 @@ impl DatabaseSlice {
 
     pub(crate) fn has_changed(&mut self) {
         self.is_unchanged = false;
+    }
+    pub(crate) fn get_current_row(&self) -> Vec<DataItem> {
+        self.data_rows[self.table_state.selected().unwrap()].clone()
     }
 }

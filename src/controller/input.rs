@@ -1,6 +1,7 @@
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum InputMode {
     Normal,
+    MetadataTable,
     Editing,
     Abort,
     Finish,
@@ -8,13 +9,15 @@ pub enum InputMode {
 }
 
 #[derive(Debug)]
-pub(super) enum Event {
+pub(crate) enum Event {
     StartEditing,
     AbortEditing,
     FinishEditing,
     UseExternalEditor,
     ExitExternalEditor,
     Reset,
+    LeaveMetadataTable,
+    EnterMetadataTable,
 }
 #[derive(Debug)]
 pub(crate) struct StateMachine {
@@ -28,19 +31,20 @@ impl StateMachine {
         }
     }
 
-    pub(super) fn transition(&mut self, event: Event) -> Result<(), &str> {
+    pub(crate) fn transition(&mut self, event: Event) -> Result<(), &str> {
         self.state = match (&self.state, event) {
             (InputMode::Normal, Event::StartEditing) => InputMode::Editing,
             (InputMode::Editing, Event::AbortEditing) => InputMode::Abort,
             (InputMode::Editing, Event::FinishEditing) => InputMode::Finish,
             (InputMode::Editing, Event::UseExternalEditor) => InputMode::ExternalEditor,
+            (InputMode::Normal, Event::EnterMetadataTable) => InputMode::MetadataTable,
+            (InputMode::MetadataTable, Event::LeaveMetadataTable) => InputMode::Normal,
             (InputMode::ExternalEditor, Event::ExitExternalEditor) => InputMode::Editing,
             (InputMode::Abort | InputMode::Finish, Event::Reset) => InputMode::Normal,
-            (state, _) => return Err("Invalid state change"), // No state change
+            _ => return Err("Invalid state change"),
         };
         Ok(())
     }
-    // get state
     pub fn get_state(&self) -> InputMode {
         self.state
     }

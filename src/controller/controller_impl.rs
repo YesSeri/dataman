@@ -7,7 +7,7 @@ use crate::model::converter::save_to_csv_file;
 use crate::model::database::Database;
 use crate::model::datarow::DataTable;
 use crate::tui::TUI;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use std::path::PathBuf;
 
 use super::command::QueuedCommand;
@@ -201,8 +201,10 @@ impl Controller {
                         Command::IntToText => self.int_to_text(),
                         Command::DeleteColumn => self.delete_column(),
                         Command::DeleteTable => self.database.delete_table(),
-                        Command::ToggleMetadataTable => self.database.view_metadata_table(),
-                        // Command::Join(_) => todo!(),
+                        Command::ToggleMetadataTable => {
+                            self.database.metadata_marked_join_columns = Some(vec![]);
+                            self.database.view_metadata_table()
+                        } // Command::Join(_) => todo!(),
                     };
                     match command {
                         Command::RenameTable => {
@@ -276,6 +278,9 @@ impl Controller {
                     self.database
                         .input_mode_state_machine
                         .transition(input::Event::Reset)?;
+                }
+                InputMode::MetadataTable => {
+                    self.metadata_table_mode();
                 }
                 InputMode::ExternalEditor => todo!(),
                 InputMode::Editing => unreachable!(),
@@ -447,6 +452,37 @@ impl Controller {
         let new_table_name = inputs[0].to_owned();
         self.database.rename_table(&new_table_name)?;
         self.database.last_command = PreviousCommand::new(Command::RenameColumn, None);
+        Ok(())
+    }
+
+    fn metadata_table_mode(&mut self) -> AppResult<()> {
+        if event::poll(POLL_TIMEOUT)? {
+            if let Event::Key(key) = event::read()? {
+                let key_code = key.code;
+
+                match key_code {
+                    KeyCode::Char('M') => {
+                        self.database
+                            .input_mode_state_machine
+                            .transition(input::Event::LeaveMetadataTable)?;
+                    }
+                    KeyCode::Char('t') => {
+                        // let rows = self.database.slice.data_rows;
+                        let curr_row = self.database.slice.get_current_row();
+                        let tbl_name = curr_row[0].to_string();
+                        let marked_cols =
+                            self.database.metadata_marked_join_columns.as_mut().unwrap();
+                        if marked_cols.contains(&tbl_name) {
+                            // remove it
+                            marked_cols.retain(|x| *x != tbl_name);
+                        } else {
+                            marked_cols.push(tbl_name.clone());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
         Ok(())
     }
     // Other methods from the Controller struct
