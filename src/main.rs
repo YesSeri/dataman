@@ -12,11 +12,11 @@ use dataman::{
     controller::controller_impl::Controller, error::AppError, model::database::Database, tui::TUI,
     Cli,
 };
+use rusqlite::Connection;
 
 fn main() -> Result<(), AppError> {
     // if not release mode, print logs
     // if release mode, logs are not printed
-    std::env::set_var("RUST_BACKTRACE", "1");
     TUI::install_panic_hook();
     setup_logging();
     let (mut controller, tui) = setup_application()?;

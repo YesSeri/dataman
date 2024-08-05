@@ -53,6 +53,7 @@ pub enum Command {
     IntToText,
     DeleteColumn,
     DeleteTable,
+    MathOperation,
     RenameTable,
     RenameColumn,
 }
@@ -74,12 +75,38 @@ impl Command {
             | Command::RenameColumn
             | Command::ExactSearch
             | Command::DeleteTable
+            | Command::MathOperation
             | Command::RegexFilter => true,
             Command::None
             | Command::IllegalOperation
             | Command::Save
             | Command::Quit
             | Command::Move(_) => false,
+        }
+    }
+    fn as_str(&self) -> String {
+        match self {
+            Command::None => "None".to_string(),
+            Command::Copy => "Copy".to_string(),
+            Command::RegexTransform => "Regex Transform".to_string(),
+            Command::RegexFilter => "Regex Filter".to_string(),
+            Command::Edit => "Edit".to_string(),
+            Command::SqlQuery => "Sql Query".to_string(),
+            Command::IllegalOperation => "Illegal Operation".to_string(),
+            Command::Quit => "Quit".to_string(),
+            Command::Sort => "Sort".to_string(),
+            Command::Save => "Save".to_string(),
+            Command::Move(dir) => format!("Move {}", dir),
+            Command::NextTable => "Next Table".to_string(),
+            Command::PrevTable => "Prev Table".to_string(),
+            Command::ExactSearch => "Exact Search".to_string(),
+            Command::TextToInt => "Text to Int".to_string(),
+            Command::IntToText => "Int to Text".to_string(),
+            Command::DeleteColumn => "Delete Column".to_string(),
+            Command::MathOperation => "Math Operation".to_string(),
+            Command::DeleteTable => "Delete Table".to_string(),
+            Command::RenameTable => "Rename Table".to_string(),
+            Command::RenameColumn => "Rename Column".to_string(),
         }
     }
 }
@@ -124,6 +151,7 @@ impl From<KeyEvent> for Command {
             KeyCode::Char('D') => Command::DeleteTable,
             KeyCode::Char('r') => Command::RenameColumn,
             KeyCode::Char('R') => Command::RenameTable,
+            KeyCode::Char('m') => Command::MathOperation,
             KeyCode::Char(c) => {
                 log::info!("clicked: {c}");
                 Command::None
@@ -133,30 +161,11 @@ impl From<KeyEvent> for Command {
     }
 }
 
-use std::fmt;
+use std::fmt::{self, write};
+impl Command {}
+
 impl fmt::Display for Command {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Command::None => write!(f, "None"),
-            Command::Copy => write!(f, "Copy"),
-            Command::RegexTransform => write!(f, "Regex Transform"),
-            Command::RegexFilter => write!(f, "Regex Filter"),
-            Command::Edit => write!(f, "Edit"),
-            Command::SqlQuery => write!(f, "Sql Query"),
-            Command::IllegalOperation => write!(f, "Illegal Operation"),
-            Command::Quit => write!(f, "Quit"),
-            Command::Sort => write!(f, "Sort"),
-            Command::Save => write!(f, "Save"),
-            Command::Move(dir) => write!(f, "Move {}", dir),
-            Command::NextTable => write!(f, "Next Table"),
-            Command::PrevTable => write!(f, "Prev Table"),
-            Command::ExactSearch => write!(f, "Exact Search"),
-            Command::TextToInt => write!(f, "Text to Int"),
-            Command::IntToText => write!(f, "Int to Text"),
-            Command::DeleteColumn => write!(f, "Delete Column"),
-            Command::DeleteTable => write!(f, "Delete Table"),
-            Command::RenameTable => write!(f, "Rename Table"),
-            Command::RenameColumn => write!(f, "Rename Column"),
-        }
+        write!(f, "{}", self.as_str())
     }
 }

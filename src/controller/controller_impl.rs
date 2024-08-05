@@ -12,6 +12,8 @@ use std::path::PathBuf;
 use super::command::QueuedCommand;
 use super::input::StateMachine;
 
+const POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(3000);
+
 #[derive(Debug)]
 pub struct Controller {
     pub(crate) database: Database,
@@ -161,7 +163,7 @@ impl Controller {
     }
 
     fn normal_mode(&mut self) -> AppResult<()> {
-        if event::poll(std::time::Duration::from_millis(3000))? {
+        if event::poll(POLL_TIMEOUT)? {
             let res = match if let Event::Key(key) = event::read()? {
                 Ok(Command::from(key))
             } else {
@@ -177,6 +179,7 @@ impl Controller {
                         | Command::ExactSearch
                         | Command::SqlQuery
                         | Command::RenameColumn
+                        | Command::MathOperation
                         | Command::RenameTable => {
                             self.database.queued_command =
                                 Some(QueuedCommand::new(command.clone()));
@@ -388,28 +391,30 @@ impl Controller {
                 Command::RenameColumn => self.rename_column(inputs),
                 Command::RenameTable => self.rename_table(inputs),
                 Command::ExactSearch => self.exact_search(inputs),
-                _ => {
-                    log::error!("Command not implemented: {:?}", queued_command.command);
-                    Err(AppError::from("Command not implemented"))
-                } // Command::Quit => Ok(()),
-                  // Command::Copy => self.copy(),
-                  // Command::Edit => self.edit_cell(),
-                  // Command::SqlQuery => self.sql_query(),
-                  // Command::IllegalOperation => Ok(()),
-                  // Command::None => Ok(()),
-                  // Command::Sort => self.sort(),
-                  // Command::Save => self.save_to_sqlite_file(),
-                  // Command::Move(direction) => self.database.move_cursor(direction),
-                  // Command::RegexFilter => self.regex_filter(),
-                  // Command::NextTable => self.database.next_table(),
-                  // Command::PrevTable => self.database.prev_table(),
-                  // Command::ExactSearch => self.exact_search(),
-
-                  // Command::TextToInt => self.text_to_int(),
-                  // Command::IntToText => self.int_to_text(),
-                  // Command::DeleteColumn => self.delete_column(),
-                  // Command::RenameColumn => self.rename_column(),
-                  // Command::Join(_) => todo!(),
+                Command::MathOperation => self.database.math_operation(inputs),
+                // _ => {
+                //     log::error!("Command not implemented: {:?}", queued_command.command);
+                //     Err(AppError::from("Command not implemented"))
+                // }
+                Command::Move(_)
+                | Command::Quit
+                | Command::Copy
+                | Command::IllegalOperation
+                | Command::None
+                | Command::Sort
+                | Command::Save
+                | Command::NextTable
+                | Command::PrevTable
+                | Command::TextToInt
+                | Command::IntToText
+                | Command::DeleteTable
+                | Command::DeleteColumn => {
+                    log::error!(
+                        "Non-queueable command executed as queued: {:?}",
+                        queued_command.command
+                    );
+                    unreachable!("This command should not be queueable!!!");
+                }
             };
             if let Some(queued_command) = self.database.queued_command.as_ref() {
                 if queued_command.command.requires_updating_view() {

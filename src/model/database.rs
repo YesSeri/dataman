@@ -157,9 +157,7 @@ impl Database {
         self.connection.prepare(sql)
     }
     fn execute<P: rusqlite::Params>(&self, sql: &str, params: P) -> AppResult<()> {
-        if cfg!(debug_assertions) {
-            log::info!("{sql}");
-        }
+        log::info!("{sql}");
         self.connection.execute(sql, params)?;
         Ok(())
     }
@@ -571,6 +569,19 @@ impl Database {
         let query = sql_queries::build::rename_table_query(old_table_name, new_table_name);
         self.execute(&query, [])?;
         Ok(())
+    }
+
+    // TODO if the column contains a float, 3.0, then ensure that ALL intermediary calculations are done with floats.
+    // currently (3/2)*2.0 = 2.0, but it should be 3.0.
+    pub(crate) fn math_operation(&self, inputs: Vec<String>) -> AppResult<()> {
+        let math_expr = inputs[0].clone();
+        let new_math_expr_col = self.find_unused_header_name("math_expr")?;
+        let query = sql_queries::build::math_expression_query(
+            &new_math_expr_col,
+            &self.get_current_table_name()?,
+            &math_expr,
+        );
+        self.execute_batch(&query)
     }
 }
 

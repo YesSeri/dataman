@@ -22,18 +22,36 @@ pub(super) mod build {
     pub(crate) fn int_to_text_query(table_name: &str, column: &str) -> String {
         convert_into(table_name, column, "TEXT")
     }
+    pub(crate) fn math_expression_query(
+        column_name: &str,
+        table_name: &str,
+        math_expr: &str,
+    ) -> String {
+        let kind = if math_expr.contains('.') {
+            "REAL"
+        } else {
+            "INT"
+        };
+        let create_column_query = create_column_query(column_name, table_name, kind);
+        let update_query = format!(r#"UPDATE "{table_name}" SET "{column_name}" = {math_expr};"#);
+        let mut queries = String::new();
+        queries.push_str(&create_column_query);
+        queries.push_str(&update_query);
+        queries
+    }
+
+    pub(crate) fn create_column_query(column_name: &str, table_name: &str, kind: &str) -> String {
+        format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{column_name}" {kind};"#)
+    }
 
     fn convert_into(table_name: &str, column: &str, kind: &str) -> String {
         let derived_column = format!("{kind}_{column}");
-        let create_header_query = format!(
-            r#"ALTER TABLE "{table_name}" ADD COLUMN "{derived_column}" {kind};
-		"#
-        );
+        let create_column_query = create_column_query(&derived_column, table_name, kind);
         let update_query = format!(
             r#"UPDATE "{table_name}" SET "{derived_column}" = CAST("{column}" as {kind});"#
         );
         let mut queries = String::new();
-        queries.push_str(&create_header_query);
+        queries.push_str(&create_column_query);
         queries.push_str(&update_query);
         queries
     }
