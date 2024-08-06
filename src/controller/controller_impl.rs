@@ -201,7 +201,7 @@ impl Controller {
                         Command::IntToText => self.int_to_text(),
                         Command::DeleteColumn => self.delete_column(),
                         Command::DeleteTable => self.database.delete_table(),
-                        Command::ToggleMetadataTable => {
+                        Command::EnterMetadataTable => {
                             self.database.metadata_marked_join_columns = Some(vec![]);
                             self.database.view_metadata_table()
                         } // Command::Join(_) => todo!(),
@@ -280,7 +280,7 @@ impl Controller {
                         .transition(input::Event::Reset)?;
                 }
                 InputMode::MetadataTable => {
-                    self.metadata_table_mode();
+                    self.metadata_table_mode()?;
                 }
                 InputMode::ExternalEditor => todo!(),
                 InputMode::Editing => unreachable!(),
@@ -430,7 +430,7 @@ impl Controller {
                 | Command::TextToInt
                 | Command::IntToText
                 | Command::DeleteTable
-                | Command::ToggleMetadataTable
+                | Command::EnterMetadataTable
                 | Command::DeleteColumn => {
                     log::error!(
                         "Non-queueable command executed as queued: {:?}",
@@ -458,30 +458,33 @@ impl Controller {
     fn metadata_table_mode(&mut self) -> AppResult<()> {
         if event::poll(POLL_TIMEOUT)? {
             if let Event::Key(key) = event::read()? {
-                let key_code = key.code;
-
-                match key_code {
-                    KeyCode::Char('M') => {
-                        self.database
-                            .input_mode_state_machine
-                            .transition(input::Event::LeaveMetadataTable)?;
-                    }
-                    KeyCode::Char('t') => {
-                        // let rows = self.database.slice.data_rows;
-                        let curr_row = self.database.slice.get_current_row();
-                        let tbl_name = curr_row[0].to_string();
-                        let marked_cols =
-                            self.database.metadata_marked_join_columns.as_mut().unwrap();
-                        if marked_cols.contains(&tbl_name) {
-                            // remove it
-                            marked_cols.retain(|x| *x != tbl_name);
-                        } else {
-                            marked_cols.push(tbl_name.clone());
-                        }
-                    }
-                    _ => {}
-                }
+                let command = Command::from(key);
             }
+            // if let Event::Key(key) = event::read()? {
+            //     let key_code = key.code;
+
+            //     match key_code {
+            //         KeyCode::Char('M') => {
+            //             self.database
+            //                 .input_mode_state_machine
+            //                 .transition(input::Event::LeaveMetadataTable)?;
+            //         }
+            //         KeyCode::Char('t') => {
+            //             // let rows = self.database.slice.data_rows;
+            //             let curr_row = self.database.slice.get_current_row();
+            //             let tbl_name = curr_row[0].to_string();
+            //             let marked_cols =
+            //                 self.database.metadata_marked_join_columns.as_mut().unwrap();
+            //             if marked_cols.contains(&tbl_name) {
+            //                 // remove it
+            //                 marked_cols.retain(|x| *x != tbl_name);
+            //             } else {
+            //                 marked_cols.push(tbl_name.clone());
+            //             }
+            //         }
+            //         _ => {}
+            //     }
+            // }
         }
         Ok(())
     }

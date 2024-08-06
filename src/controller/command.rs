@@ -55,8 +55,32 @@ pub enum Command {
     DeleteTable,
     MathOperation,
     RenameTable,
-    ToggleMetadataTable,
+    EnterMetadataTable,
     RenameColumn,
+}
+pub enum MetadataTblCommand {
+    None,
+    Copy,
+    // RegexTransform,
+    // RegexFilter,
+    // Edit,
+    // SqlQuery,
+    IllegalOperation,
+    // Quit,
+    // Sort,
+    // Save,
+    Move(Direction),
+    // NextTable,
+    // PrevTable,
+    // ExactSearch,
+    // TextToInt,
+    // IntToText,
+    // DeleteColumn,
+    // DeleteTable,
+    // MathOperation,
+    // RenameTable,
+    LeaveMetadataTable,
+    // RenameColumn,
 }
 
 impl Command {
@@ -75,7 +99,7 @@ impl Command {
             | Command::RenameTable
             | Command::RenameColumn
             | Command::ExactSearch
-            | Command::ToggleMetadataTable
+            | Command::EnterMetadataTable
             | Command::DeleteTable
             | Command::MathOperation
             | Command::RegexFilter => true,
@@ -109,7 +133,7 @@ impl Command {
             Command::DeleteTable => "Delete Table".to_string(),
             Command::RenameTable => "Rename Table".to_string(),
             Command::RenameColumn => "Rename Column".to_string(),
-            Command::ToggleMetadataTable => "Showing table of tables(metadata)".to_string(),
+            Command::EnterMetadataTable => "Showing table of tables(metadata)".to_string(),
         }
     }
 }
@@ -155,7 +179,7 @@ impl From<KeyEvent> for Command {
             KeyCode::Char('r') => Command::RenameColumn,
             KeyCode::Char('R') => Command::RenameTable,
             KeyCode::Char('m') => Command::MathOperation,
-            KeyCode::Char('M') => Command::ToggleMetadataTable,
+            KeyCode::Char('M') => Command::EnterMetadataTable,
             KeyCode::Char(c) => {
                 log::info!("clicked: {c}");
                 Command::None

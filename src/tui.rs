@@ -113,11 +113,10 @@ impl TUI {
                     Constraint::Length(3),
                 ]
             }
-            InputMode::Normal | InputMode::Abort | InputMode::Finish => {
+            InputMode::MetadataTable | InputMode::Normal | InputMode::Abort | InputMode::Finish => {
                 vec![Constraint::Max(1000), Constraint::Length(1)]
             }
             InputMode::ExternalEditor => todo!(),
-            InputMode::MetadataTable => todo!(),
         };
         let rects = Layout::default()
             .direction(ratatui::prelude::Direction::Vertical)
@@ -159,7 +158,14 @@ impl TUI {
         .height(1);
 
         // draw border under header
-        let tui_rows = TUI::create_tui_rows(&rows, database);
+
+        let tui_rows = if database.input_mode_state_machine.get_state() == InputMode::MetadataTable
+        {
+            let cols = database.metadata_marked_join_columns.clone();
+            TUI::create_tui_rows_marked(&rows, cols.unwrap())
+        } else {
+            TUI::create_tui_rows(&rows)
+        };
         // let tui_rows = rows.iter().map(|data_row| {
         //     let data_row = data_row
         //         .iter()
@@ -231,7 +237,7 @@ impl TUI {
         }
         Ok(())
     }
-    fn create_tui_rows(rows: &Vec<Vec<DataItem>>, database: &Database) -> Vec<Row> {
+    fn create_tui_rows(rows: &[Vec<DataItem>]) -> Vec<Row> {
         let tui_rows = rows
             .iter()
             .map(|data_row| {
@@ -242,11 +248,22 @@ impl TUI {
                 Row::new(data_row).height(1)
             })
             .collect();
-        if database.input_mode_state_machine.get_state() == InputMode::MetadataTable {
-            let mut tui_rows = tui_rows;
-            let mut metadata_rows = vec![];
-        }
-        return tui_rows;
+        tui_rows
+    }
+    fn create_tui_rows_marked(rows: &[Vec<DataItem>], marked_idxs: Vec<String>) -> Vec<Row> {
+        let tui_rows = rows
+            .iter()
+            .map(|data_row| {
+                let data_row = data_row
+                    .iter()
+                    .map(|item| Cell::from(item.clone()))
+                    .collect::<Vec<_>>();
+                Row::new(data_row)
+                    .height(1)
+                    .style(Style::default().fg(Color::Red))
+            })
+            .collect();
+        tui_rows
     }
 
     pub fn install_panic_hook() {
