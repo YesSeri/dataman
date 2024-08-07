@@ -60,27 +60,12 @@ pub enum Command {
 }
 pub enum MetadataTblCommand {
     None,
-    Copy,
-    // RegexTransform,
-    // RegexFilter,
-    // Edit,
-    // SqlQuery,
     IllegalOperation,
-    // Quit,
-    // Sort,
-    // Save,
     Move(Direction),
-    // NextTable,
-    // PrevTable,
-    // ExactSearch,
-    // TextToInt,
-    // IntToText,
-    // DeleteColumn,
-    // DeleteTable,
-    // MathOperation,
-    // RenameTable,
     LeaveMetadataTable,
-    // RenameColumn,
+    JoinMark,
+    Join,
+    Quit,
 }
 
 impl Command {
@@ -189,6 +174,27 @@ impl From<KeyEvent> for Command {
     }
 }
 
+impl From<KeyEvent> for MetadataTblCommand {
+    fn from(key_event: KeyEvent) -> Self {
+        match key_event.code {
+            KeyCode::Right | KeyCode::Left | KeyCode::Up | KeyCode::Down => {
+                MetadataTblCommand::Move(Direction::from(key_event.code))
+            }
+            KeyCode::Char('c') => {
+                if key_event.modifiers.contains(KeyModifiers::CONTROL) {
+                    MetadataTblCommand::Quit
+                } else {
+                    MetadataTblCommand::None
+                }
+            }
+            KeyCode::Char(c) => {
+                log::info!("clicked: {c}");
+                MetadataTblCommand::None
+            }
+            _ => MetadataTblCommand::None,
+        }
+    }
+}
 use std::fmt::{self, write};
 impl Command {}
 
