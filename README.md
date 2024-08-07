@@ -1,6 +1,6 @@
-# Rust TUI Data Wrangler
+# Dataman
 
-An Excel-like data wrangler in the terminal, inspired by [VisiData](https://www.visidata.org/). This application allows you to manipulate and transform data using regex, logic or SQL. It reads files into an in-memory SQLite database, which we then query with dataman as a wrapper around sqlite.
+`dam` is an Excel-like data wrangler in the terminal, inspired by [VisiData](https://www.visidata.org/). This application allows you to manipulate and transform data using regex, logic or SQL. It reads files into an in-memory SQLite database, which we then query with dataman as a wrapper around sqlite.
 
 ## Installation
 
