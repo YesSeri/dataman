@@ -1,10 +1,2 @@
-c.csv
-c5.csv
-customers-1000000.csv
-customers-1000000.zip
-customers-2000000.csv
-customers-2000000.zip
-data1000.csv
-dataMid.csv
-out-data.csv
+*.zip
 *csv
