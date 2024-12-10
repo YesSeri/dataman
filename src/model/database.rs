@@ -1,30 +1,18 @@
-use crate::controller;
-use crate::controller::command::{Command, PreviousCommand, QueuedCommand};
-use crate::controller::input::StateMachine;
-use std::collections::HashMap;
-use std::ffi::OsStr;
-use std::hash::Hash;
+use crate::navigation::Direction;
 use std::path::{Path, PathBuf};
-use std::process::id;
-use std::{slice, time};
+use std::time;
 
-use crossterm::ExecutableCommand;
-use ratatui::widgets::TableState;
-use regex::Regex;
-use rusqlite::types::ValueRef;
-use rusqlite::{backup, params, Connection, Error, Statement};
+use rusqlite::{backup, params, Connection, Statement};
 
 use crate::app_error_other;
 use crate::error::{AppError, AppResult};
-use crate::model::converter::insert_csv_data_database;
 use crate::model::datarow::DataItem;
-use crate::tui::TUI;
 
 use super::datarow::DataTable;
 use super::db_slice::DatabaseSlice;
 use super::metadata::{create_table_of_tables, populate_table_of_tables};
 use super::regexping;
-use super::{converter, sql_queries};
+use super::sql_queries;
 
 #[derive(Debug)]
 pub struct Database {
@@ -34,12 +22,6 @@ pub struct Database {
     pub(crate) is_asc_order: bool,
     pub(crate) current_table_idx: u16,
     pub(crate) slice: DatabaseSlice,
-    pub(crate) input: String,
-    pub(crate) character_index: usize,
-    pub(crate) last_command: PreviousCommand,
-    pub(crate) queued_command: Option<QueuedCommand>,
-    pub(crate) input_mode_state_machine: StateMachine,
-    // regex_map: HashMap<String, Regex>,
 }
 
 impl Database {
@@ -48,9 +30,7 @@ impl Database {
             .to_string();
         let rowid: u16 = connection.query_row(&query, [], |row| row.get(0))?;
 
-        let mut table_state = TableState::new();
-        table_state.select(Some(0));
-        let slice = DatabaseSlice::new(vec![], vec![], table_state, 0, 0);
+        let slice = DatabaseSlice::new(vec![], vec![], 0, 0);
         create_table_of_tables(&connection)?;
         if let Err(err) = regexping::custom_functions::add_custom_functions(&connection) {
             log::info!("Error adding custom functions, e.g. REGEXP: {}", err);
@@ -63,11 +43,6 @@ impl Database {
                 is_asc_order: true,
                 current_table_idx: rowid,
                 slice,
-                input: String::new(),
-                character_index: 0,
-                last_command: PreviousCommand::new(Command::None, None),
-                queued_command: None,
-                input_mode_state_machine: StateMachine::new(),
             })
         }
     }
@@ -81,6 +56,7 @@ impl Database {
             .run_to_completion(page_count, time::Duration::from_millis(250), None)
             .map_err(AppError::from)
     }
+
     pub fn get_current_header(&self) -> AppResult<String> {
         let table_name = self.get_current_table_name()?;
         self.get_headers(&table_name)?
@@ -154,7 +130,7 @@ impl Database {
 
         Ok(cell)
     }
-    fn prepare(&self, sql: &str) -> rusqlite::Result<Statement> {
+    fn prepare(&self, sql: &str) -> rusqlite::Result<Statement<'_>> {
         log::info!("{sql}");
         self.connection.prepare(sql)
     }
@@ -219,7 +195,7 @@ impl Database {
     }
 
     pub(crate) fn get_current_id(&self) -> AppResult<i32> {
-        let i = self.slice.table_state.selected().unwrap_or(0);
+        let i = self.slice.selected_row;
         let query = format!(
             r#"SELECT rowid FROM "{}" LIMIT 1 OFFSET {};"#,
             self.get_current_table_name()?,
@@ -232,7 +208,7 @@ impl Database {
     pub(crate) fn sort(&mut self) -> AppResult<()> {
         // sort by current header
         let header = self.get_current_header()?;
-        self.slice.table_state.select(Some(0));
+        self.slice.selected_row = 0;
         if self.order_column == Some(header.clone())
         //|| (self.order_column.is_none() && (header == "id"))
         {
@@ -302,10 +278,14 @@ impl Database {
     }
 
     // go to first match
-    pub(crate) fn exact_search(&mut self, search_header: &str, pattern: &str) -> AppResult<()> {
+    pub(crate) fn exact_search(
+        &mut self,
+        search_header: &str,
+        pattern: &str,
+        page_height: u32,
+    ) -> AppResult<()> {
         let table_name = self.get_current_table_name()?;
-        let current_row =
-            self.slice.row_offset + self.slice.table_state.selected().unwrap_or(0) as u32;
+        let current_row = self.slice.row_offset + self.slice.selected_row as u32;
         let query = sql_queries::build::exact_search_query(
             &self.get_ordering(),
             search_header,
@@ -317,7 +297,7 @@ impl Database {
             .connection
             .query_row(&query, [pattern], |row| row.get(0))?;
         let row_number = row_number - 1;
-        let height = TUI::get_table_height()?;
+        let height = page_height;
         let row_idx = row_number % height;
         let row_offset = row_number - row_idx;
 
@@ -407,15 +387,12 @@ impl Database {
         Ok(self.get_headers(&table_name)?.len() as u16)
     }
 
-    pub(crate) fn move_cursor(
-        &mut self,
-        direction: controller::direction::Direction,
-    ) -> AppResult<()> {
+    pub(crate) fn move_cursor(&mut self, direction: Direction, page_height: u32) -> AppResult<()> {
         match direction {
-            controller::direction::Direction::Left => self.previous_header()?,
-            controller::direction::Direction::Right => self.next_header()?,
-            controller::direction::Direction::Up => self.previous_row()?,
-            controller::direction::Direction::Down => self.next_row()?,
+            Direction::Left => self.previous_header()?,
+            Direction::Right => self.next_header()?,
+            Direction::Up => self.previous_row(page_height)?,
+            Direction::Down => self.next_row(page_height)?,
         }
         Ok(())
     }
@@ -431,11 +408,10 @@ impl Database {
         Ok(())
     }
 
-    fn next_row(&mut self) -> AppResult<()> {
+    fn next_row(&mut self, height: u32) -> AppResult<()> {
         let slice = &mut self.slice;
-        let row_idx = slice.table_state.selected().unwrap_or(0) as u32;
+        let row_idx = slice.selected_row as u32;
         let row_offset = slice.row_offset;
-        let height = TUI::get_table_height()?;
         let l = self.slice.data_rows.len();
         let val = row_idx + row_offset;
         let is_last_page = height > l as u32;
@@ -443,7 +419,7 @@ impl Database {
         if is_last_page && row_idx + 2 > l as u32 {
             return Ok(());
         }
-        let i = match self.slice.table_state.selected() {
+        let i = match Some(self.slice.selected_row) {
             Some(i) if i < (height - 1) as usize => i + 1,
             Some(i) if i >= (height - 1) as usize => {
                 let max = self.count_rows().unwrap_or(u32::MAX);
@@ -458,17 +434,16 @@ impl Database {
             _ => 0,
         };
 
-        self.slice.table_state.select(Some(i));
+        self.slice.selected_row = i;
         Ok(())
     }
 
     fn set_current_row(&mut self, value: usize) {
-        self.slice.table_state.select(Some(value));
+        self.slice.selected_row = value;
     }
-    fn previous_row(&mut self) -> AppResult<()> {
-        let i = match self.slice.table_state.selected() {
+    fn previous_row(&mut self, height: u32) -> AppResult<()> {
+        let i = match Some(self.slice.selected_row) {
             Some(i) if i == 0 && self.slice.row_offset != 0 => {
-                let height = TUI::get_table_height()?;
                 self.slice.row_offset = self.slice.row_offset.saturating_sub(height);
                 self.slice.has_changed();
                 height as usize - 1
@@ -477,7 +452,7 @@ impl Database {
             Some(i) => i.saturating_sub(1),
             None => 0,
         };
-        self.slice.table_state.select(Some(i));
+        self.slice.selected_row = i;
         Ok(())
     }
     pub fn update_cell(&self, header: &str, id: i32, content: &str) -> AppResult<()> {
@@ -494,7 +469,7 @@ impl Database {
         );
         self.current_table_idx = self.connection.query_row(&query, [], |row| row.get(0))?;
         self.slice.row_offset = 0;
-        self.slice.table_state.select(Some(0));
+        self.slice.selected_row = 0;
         Ok(())
     }
     pub fn select_table(&mut self, table_name: &str) -> AppResult<()> {
@@ -503,7 +478,7 @@ impl Database {
         );
         self.current_table_idx = self.connection.query_row(&query, [], |row| row.get(0))?;
         self.slice.row_offset = 0;
-        self.slice.table_state.select(Some(0));
+        self.slice.selected_row = 0;
         Ok(())
     }
 
@@ -514,7 +489,7 @@ impl Database {
         );
         self.current_table_idx = self.connection.query_row(&query, [], |row| row.get(0))?;
         self.slice.row_offset = 0;
-        self.slice.table_state.select(Some(0));
+        self.slice.selected_row = 0;
         Ok(())
     }
 
@@ -598,81 +573,11 @@ impl Database {
     }
 }
 
-impl TryFrom<Vec<PathBuf>> for Database {
-    type Error = AppError;
-
-    fn try_from(paths: Vec<PathBuf>) -> Result<Self, AppError> {
-        if paths.is_empty() {
-            return Err(AppError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "No file paths provided",
-            )));
-        }
-        let database_result = if paths.len() == 1 {
-            let path = paths
-                .first()
-                .ok_or(AppError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "There is no first path",
-                )))?
-                .clone();
-            match path.extension().and_then(|s| s.to_str()) {
-                Some("csv") => {
-                    let connection = if cfg!(debug_assertions) {
-                        log::info!("Debug mode, opening in memory db.");
-                        Connection::open_in_memory()?
-                    } else {
-                        log::info!("Release mode, saving to file 'db.sqlite'.");
-                        let _ = std::fs::remove_file("db.sqlite");
-                        Connection::open("db.sqlite")?
-                    };
-                    let database = converter::database_from_csv(path, connection)?;
-                    Ok(database)
-                }
-                Some("sqlite") | Some("sqlite3") => {
-                    let connection = Connection::open(path)?;
-                    let database = converter::database_from_sqlite(connection)?;
-                    Ok(database)
-                }
-                _ => Err(AppError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "Invalid file extension",
-                ))),
-            }
-        } else if paths
-            .iter()
-            .map(|p| p.extension())
-            .all(|el| el.is_some_and(|el| el == "csv"))
-        {
-            let _ = std::fs::remove_file("db.sqlite");
-            let connection = Connection::open("db.sqlite")?;
-            let database = converter::database_from_csv(
-                paths
-                    .first()
-                    .ok_or(app_error_other!("There is no path"))?
-                    .clone(),
-                connection,
-            )?;
-            for path in paths.iter().skip(1) {
-                insert_csv_data_database(path.clone(), &database.connection)?;
-            }
-            Ok(database)
-        } else {
-            Err(AppError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "Invalid file extension. One or several csv files or a single sqlite3 database can be provided.")))
-        };
-        let database = database_result?;
-        // populate_table_of_tables(&database.connection)?;
-        Ok(database)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Instant;
 
-    use controller::direction::Direction;
+    use crate::navigation::Direction;
 
     use super::*;
 
@@ -837,7 +742,7 @@ mod tests {
         let mut database = Database::try_from(p).unwrap();
 
         let copy_fun = |s: String| Some(s.to_string());
-        database.move_cursor(Direction::Right).unwrap();
+        database.move_cursor(Direction::Right, 50).unwrap();
 
         let column_name = database.get_current_header().unwrap();
         let new_column_name = database.find_unused_header_name(&column_name).unwrap();
@@ -862,7 +767,7 @@ mod tests {
         let mut database = Database::try_from(p).unwrap();
         let copy_fun = |s: String| Some(s.to_string());
 
-        database.move_cursor(Direction::Right).unwrap();
+        database.move_cursor(Direction::Right, 50).unwrap();
         let column_name = database.get_current_header().unwrap();
         let new_column_name = database.find_unused_header_name(&column_name).unwrap();
         database

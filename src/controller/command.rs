@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
-use super::direction::Direction;
+use crate::navigation::Direction;
 
 #[derive(Debug, Clone)]
 pub(crate) struct QueuedCommand {
@@ -116,52 +116,55 @@ impl Command {
 
 impl From<KeyEvent> for Command {
     fn from(key_event: KeyEvent) -> Self {
-        match key_event.code {
-            KeyCode::Char('t') => Command::RegexTransform,
-            KeyCode::Char('e') => Command::Edit,
-            KeyCode::Right | KeyCode::Left | KeyCode::Up | KeyCode::Down => {
-                if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                    match key_event.code {
-                        KeyCode::Right => return Command::NextTable,
-                        KeyCode::Left => return Command::PrevTable,
-                        _ => (),
-                    }
-                }
-                Command::Move(Direction::from(key_event.code))
-            }
-            KeyCode::Char('w') => Command::Sort,
-            KeyCode::Char('a') => Command::Save,
-            KeyCode::Char('q') => Command::SqlQuery,
-            KeyCode::Char('f') => Command::RegexFilter,
-            KeyCode::Char('c') => {
-                if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                    Command::Quit
-                } else {
-                    Command::Copy
-                }
-            }
-            KeyCode::Char('s') => {
-                if key_event.modifiers.contains(KeyModifiers::CONTROL) {
-                    Command::Save
-                } else {
-                    Command::Sort
-                }
-            }
-            KeyCode::Char('/') => Command::ExactSearch,
-            KeyCode::Char('#') => Command::TextToInt,
-            KeyCode::Char('$') => Command::IntToText,
-            KeyCode::Char('X') => Command::DeleteColumn,
-            KeyCode::Char('D') => Command::DeleteTable,
-            KeyCode::Char('r') => Command::RenameColumn,
-            KeyCode::Char('R') => Command::RenameTable,
-            KeyCode::Char('m') => Command::MathOperation,
-            KeyCode::Char('M') => Command::ToggleMetadataTable,
-            KeyCode::Char(c) => {
-                log::info!("clicked: {c}");
-                Command::None
-            }
+        let key = normalized_key(&key_event);
+        let command_name = crate::KEYBINDINGS.bindings.get(&key);
+        let Some(command_name) = command_name else {
+            return Command::None;
+        };
+        match command_name.as_str() {
+            "quit" => Command::Quit,
+            "copy" => Command::Copy,
+            "regex_transform" => Command::RegexTransform,
+            "regex_filter" => Command::RegexFilter,
+            "edit" => Command::Edit,
+            "sql_query" => Command::SqlQuery,
+            "sort" => Command::Sort,
+            "save" => Command::Save,
+            "next_table" => Command::NextTable,
+            "previous_table" => Command::PrevTable,
+            "exact_search" => Command::ExactSearch,
+            "text_to_int" => Command::TextToInt,
+            "int_to_text" => Command::IntToText,
+            "delete_column" => Command::DeleteColumn,
+            "delete_table" => Command::DeleteTable,
+            "math_operation" => Command::MathOperation,
+            "rename_table" => Command::RenameTable,
+            "rename_column" => Command::RenameColumn,
+            "metadata" => Command::ToggleMetadataTable,
+            "move_left" => Command::Move(Direction::Left),
+            "move_right" => Command::Move(Direction::Right),
+            "move_up" => Command::Move(Direction::Up),
+            "move_down" => Command::Move(Direction::Down),
             _ => Command::None,
         }
+    }
+}
+
+fn normalized_key(key: &KeyEvent) -> String {
+    let key_name = match key.code {
+        KeyCode::Char(c) => c.to_string(),
+        KeyCode::Right => "right".to_owned(),
+        KeyCode::Left => "left".to_owned(),
+        KeyCode::Up => "up".to_owned(),
+        KeyCode::Down => "down".to_owned(),
+        KeyCode::Enter => "enter".to_owned(),
+        KeyCode::Esc => "esc".to_owned(),
+        _ => return String::new(),
+    };
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        format!("ctrl+{key_name}")
+    } else {
+        key_name
     }
 }
 
@@ -171,5 +174,26 @@ impl Command {}
 impl fmt::Display for Command {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_str())
+    }
+}
+
+#[cfg(test)]
+mod keybinding_tests {
+    use super::*;
+
+    #[test]
+    fn configured_keys_preserve_current_runtime_commands() {
+        assert_eq!(
+            Command::from(KeyEvent::new(KeyCode::Char('q'), KeyModifiers::NONE)),
+            Command::SqlQuery
+        );
+        assert_eq!(
+            Command::from(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            Command::Quit
+        );
+        assert_eq!(
+            Command::from(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)),
+            Command::NextTable
+        );
     }
 }

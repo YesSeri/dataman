@@ -1,7 +1,5 @@
 use std::fmt;
 
-use ratatui::text;
-
 use rusqlite::{params, Connection};
 
 use crate::error::AppResult;

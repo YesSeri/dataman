@@ -1,13 +1,12 @@
 use std::vec;
 
 use crate::model::datarow::DataItem;
-use ratatui::widgets::TableState;
 
 #[derive(Debug)]
 pub(crate) struct DatabaseSlice {
     pub(super) headers: Vec<String>,
     pub(super) data_rows: Vec<Vec<DataItem>>,
-    pub(crate) table_state: TableState,
+    pub(crate) selected_row: usize,
     pub(crate) row_offset: u32,
     pub(crate) is_unchanged: bool,
 }
@@ -16,14 +15,13 @@ impl DatabaseSlice {
     pub(crate) fn new(
         headers: Vec<String>,
         data_rows: Vec<Vec<DataItem>>,
-        table_state: TableState,
-        row_idx: u32,
+        selected_row: usize,
         row_offset: u32,
     ) -> Self {
         Self {
             headers,
             data_rows,
-            table_state,
+            selected_row,
             row_offset,
             is_unchanged: false,
         }
@@ -65,7 +63,7 @@ impl DatabaseSlice {
     }
 
     pub(crate) fn update(&mut self, row_idx: u32, row_offset: u32) {
-        self.table_state.select(Some(row_idx as usize));
+        self.selected_row = row_idx as usize;
         self.row_offset = row_offset;
         self.is_unchanged = false;
     }

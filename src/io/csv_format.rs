@@ -10,7 +10,7 @@ use crate::app_error_other;
 use crate::error::{AppError, AppResult};
 use crate::model::datarow::DataItem;
 
-use super::database::Database;
+use crate::model::database::Database;
 
 pub(crate) fn database_from_csv(path: PathBuf, connection: Connection) -> AppResult<Database> {
     insert_csv_data_database(path, &connection)?;

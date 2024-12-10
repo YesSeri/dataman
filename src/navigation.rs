@@ -1,5 +1,6 @@
-use crossterm::event::KeyCode;
+use std::fmt;
 
+/// Logical movement direction shared by command handling and dataset navigation.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub enum Direction {
@@ -8,20 +9,6 @@ pub enum Direction {
     Left,
     Right,
 }
-
-impl From<KeyCode> for Direction {
-    fn from(value: KeyCode) -> Self {
-        match value {
-            KeyCode::Right => Direction::Right,
-            KeyCode::Left => Direction::Left,
-            KeyCode::Up => Direction::Up,
-            KeyCode::Down => Direction::Down,
-            _ => unreachable!(),
-        }
-    }
-}
-
-use std::fmt;
 
 impl fmt::Display for Direction {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

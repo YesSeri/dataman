@@ -1,4 +1,3 @@
-pub mod converter;
 pub mod database;
 pub mod datarow;
 pub mod db_slice;

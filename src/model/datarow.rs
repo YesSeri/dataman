@@ -1,4 +1,3 @@
-use ratatui::widgets::Cell;
 use std::collections::VecDeque;
 use std::fmt::Display;
 
@@ -36,17 +35,6 @@ impl DataItem {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0 || self == &DataItem::Null
-    }
-}
-
-impl<'a> From<DataItem> for Cell<'a> {
-    fn from(value: DataItem) -> Self {
-        match value {
-            DataItem::Text(text) => Cell::from(text.clone()),
-            DataItem::Integer(int) => Cell::from(int.to_string()),
-            DataItem::Float(float) => Cell::from(float.to_string()),
-            DataItem::Null => Cell::from("NULL"),
-        }
     }
 }
 

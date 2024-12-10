@@ -16,7 +16,7 @@ use ratatui::{
     prelude::{Backend, Constraint, CrosstermBackend, Layout},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
     Frame, Terminal,
 };
 
@@ -24,7 +24,19 @@ use crate::{
     app_error_other,
     controller::{self, controller_impl::Controller},
 };
-use crate::{controller::input::InputMode, model::datarow::DataTable};
+
+fn data_item_cell(item: &DataItem) -> Cell<'static> {
+    match item {
+        DataItem::Text(value) => Cell::from(value.clone()),
+        DataItem::Integer(value) => Cell::from(value.to_string()),
+        DataItem::Float(value) => Cell::from(value.to_string()),
+        DataItem::Null => Cell::from("NULL"),
+    }
+}
+use crate::{
+    controller::input::InputMode,
+    model::datarow::{DataItem, DataTable},
+};
 use crate::{
     error::{AppError, AppResult},
     model::database::Database,
@@ -60,13 +72,12 @@ impl TUI {
         &mut self,
         controller: &mut controller::controller_impl::Controller,
     ) -> AppResult<()> {
-        self.terminal
-            .draw(|f| match TUI::update(f, &mut controller.database) {
-                Ok(_) => (),
-                Err(err) => {
-                    log::error!("Error updating TUI: {:?}", err);
-                }
-            })?;
+        self.terminal.draw(|f| match TUI::update(f, controller) {
+            Ok(_) => (),
+            Err(err) => {
+                log::error!("Error updating TUI: {:?}", err);
+            }
+        })?;
         Ok(())
     }
 
@@ -103,8 +114,9 @@ impl TUI {
         Ok(trimmed)
     }
 
-    fn update(f: &mut Frame, database: &mut Database) -> AppResult<()> {
-        let constraints: Vec<Constraint> = match database.input_mode_state_machine.get_state() {
+    fn update(f: &mut Frame, controller: &mut Controller) -> AppResult<()> {
+        let (database, ui) = (&mut controller.database, &mut controller.ui);
+        let constraints: Vec<Constraint> = match ui.input_mode_state_machine.get_state() {
             InputMode::Editing => {
                 vec![
                     Constraint::Max(1000),
@@ -160,7 +172,7 @@ impl TUI {
         let tui_rows = rows.iter().map(|data_row| {
             let data_row = data_row
                 .iter()
-                .map(|item| Cell::from(item.clone()))
+                .map(|item| data_item_cell(item))
                 .collect::<Vec<_>>();
             Row::new(data_row).height(1)
         });
@@ -172,17 +184,19 @@ impl TUI {
             .highlight_style(selected_style)
             // .highlight_symbol(">> ")
             .bg(Color::Black);
-        f.render_stateful_widget(t, rects[0], &mut database.slice.table_state);
+        let row = database.slice.selected_row;
+        let mut table_state = TableState::default();
+        table_state.select(Some(row));
+        f.render_stateful_widget(t, rects[0], &mut table_state);
 
         let a = database.header_idx;
-        let row = database.slice.table_state.selected().unwrap_or(0);
         let total_rows = database.count_rows().unwrap_or(0);
         let rowid = rows
             .get(row)
             .map(|el| el.first().unwrap().to_string())
             .unwrap_or("xxx".to_owned());
-        let offset = database.slice.table_state.offset();
-        let last_command = database.last_command.command.to_string();
+        let offset = table_state.offset();
+        let last_command = ui.last_command.command.to_string();
         let table_height = rects[0].height;
         let text = vec![Line::from(vec![Span::raw(format!(
             // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
@@ -192,9 +206,9 @@ impl TUI {
 
         f.render_widget(paragraph, rects[1]);
 
-        if database.input_mode_state_machine.get_state() == InputMode::Editing {
-            let title = database.last_command.command.to_string();
-            let paragraph = Paragraph::new(database.input.as_str())
+        if ui.input_mode_state_machine.get_state() == InputMode::Editing {
+            let title = ui.last_command.command.to_string();
+            let paragraph = Paragraph::new(ui.input.as_str())
                 .style(Style::default().fg(Color::Yellow))
                 .block(
                     Block::default()
@@ -202,10 +216,7 @@ impl TUI {
                         .title(format!("{title} input")),
                 );
 
-            f.set_cursor(
-                rects[2].x + database.character_index as u16 + 1,
-                rects[2].y + 1,
-            );
+            f.set_cursor(rects[2].x + ui.character_index as u16 + 1, rects[2].y + 1);
             f.render_widget(paragraph, rects[2]);
             // match app.input_mode {
             //     InputMode::Normal =>
