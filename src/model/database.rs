@@ -492,14 +492,15 @@ mod tests {
         let database = Database::try_from(p).unwrap();
 
         let copy_fun = |s: String| Some(s.to_string());
-        let column_name = "firstname";
+        let table_name = "data-long";
+        let column_name = "first-name";
         let new_column_name = database
-            .find_unused_header_name("data", column_name)
+            .find_unused_header_name(table_name, column_name)
             .unwrap();
         database
-            .derive_column("data", column_name, &new_column_name, copy_fun)
+            .derive_column(table_name, column_name, &new_column_name, copy_fun)
             .unwrap();
-        let (_, res) = database.get(20, 0, "data", "").unwrap();
+        let (_, res) = database.get(20, 0, table_name, "").unwrap();
         for row in res.iter() {
             let original = row.get(1);
             let copy = row.get(4);
