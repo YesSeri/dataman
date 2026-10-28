@@ -157,7 +157,24 @@ pub(crate) fn insert_csv_data_database(
     path: PathBuf,
     connection: &Connection,
 ) -> Result<(), AppError> {
-    let mut csv = csv::ReaderBuilder::new().from_path(&path)?;
+    insert_delimited_data_database(path, connection, b',')
+}
+
+pub(crate) fn insert_tsv_data_database(
+    path: PathBuf,
+    connection: &Connection,
+) -> Result<(), AppError> {
+    insert_delimited_data_database(path, connection, b'\t')
+}
+
+fn insert_delimited_data_database(
+    path: PathBuf,
+    connection: &Connection,
+    delimiter: u8,
+) -> Result<(), AppError> {
+    let mut csv = csv::ReaderBuilder::new()
+        .delimiter(delimiter)
+        .from_path(&path)?;
     let table_name =
         Database::get_table_name(path).ok_or(app_error_other!("could not get table name."))?;
     let table_names = [table_name.to_string()];
@@ -218,6 +235,23 @@ pub(crate) fn save_to_csv_file(
     table_name: &str,
     save_file: &PathBuf,
 ) -> AppResult<()> {
+    save_delimited_file(connection, table_name, save_file, b',')
+}
+
+pub(crate) fn save_to_tsv_file(
+    connection: &Connection,
+    table_name: &str,
+    save_file: &PathBuf,
+) -> AppResult<()> {
+    save_delimited_file(connection, table_name, save_file, b'\t')
+}
+
+fn save_delimited_file(
+    connection: &Connection,
+    table_name: &str,
+    save_file: &PathBuf,
+    delimiter: u8,
+) -> AppResult<()> {
     let mut info = connection.prepare(&format!(
         "PRAGMA table_info(\"{}\")",
         table_name.replace('"', "\"\"")
@@ -226,7 +260,7 @@ pub(crate) fn save_to_csv_file(
         .query_map([], |row| row.get::<_, String>(1))?
         .collect::<Result<Vec<_>, _>>()?
         .into_iter()
-        .filter(|header| !header.starts_with(INTERNAL_PREFIX))
+        .filter(|header| header != "id" && !header.starts_with(INTERNAL_PREFIX))
         .collect::<Vec<_>>();
     let select = headers
         .iter()
@@ -253,7 +287,9 @@ pub(crate) fn save_to_csv_file(
         .map(|row| row.unwrap())
         .collect();
 
-    let mut wtr = Writer::from_path(save_file).unwrap();
+    let mut wtr = csv::WriterBuilder::new()
+        .delimiter(delimiter)
+        .from_path(save_file)?;
     wtr.write_record(&headers).unwrap();
     for row in rows {
         wtr.serialize(row).unwrap();
@@ -284,6 +320,33 @@ mod tests {
             vec!["id", "name \"quoted\""]
         );
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn tsv_import_export_round_trip() {
+        let stem = format!("dataman-tsv-{}", std::process::id());
+        let input = std::env::temp_dir().join(format!("{stem}.tsv"));
+        let output = std::env::temp_dir().join(format!("{stem}-out.tsv"));
+        std::fs::write(&input, b"name\tcount\nAda\t42\nGrace\t7\n").unwrap();
+
+        let database = Database::try_from(vec![input.clone()]).unwrap();
+        super::save_to_tsv_file(&database.connection, &stem, &output).unwrap();
+        let reopened = Database::try_from(vec![output.clone()]).unwrap();
+        assert_eq!(
+            reopened
+                .get_cell(&format!("{stem}-out"), 1, "name")
+                .unwrap(),
+            "Ada"
+        );
+        assert_eq!(
+            reopened
+                .get_cell(&format!("{stem}-out"), 2, "count")
+                .unwrap(),
+            "7"
+        );
+
+        std::fs::remove_file(input).unwrap();
+        std::fs::remove_file(output).unwrap();
     }
 
     #[test]

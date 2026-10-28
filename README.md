@@ -23,6 +23,22 @@ To install and run the data manager, dataman, follow these steps:
 
 ## Commonly Used Key Commands
 
+## Supported workflow checklist
+
+This checklist defines Dataman's current common-workflow parity target. CSV and SQLite remain supported; TSV is supported for delimited input and output.
+
+- [x] Open one CSV, TSV, or SQLite/DB file; open multiple CSV/TSV files as separate tables.
+- [x] Navigate rows, columns, and tables; sort, search, filter, and inspect metadata.
+- [x] Edit cells, derive columns, rename or delete columns/tables, and undo/redo built-in mutations.
+- [x] Save the current table as CSV/TSV or the complete dataset as SQLite.
+- [ ] Navigate wide tables with horizontal scrolling and manage column visibility/order.
+- [ ] Select rows and apply bulk operations.
+- [ ] Inspect column summaries and value frequency tables, including nulls.
+- [ ] Join selected tables into a result while preserving the source tables.
+- [ ] Review and replay command history.
+
+The unchecked items are the remaining parity work and are intended as acceptance gates for future releases.
+
 The following are some of the more commonly used key commands in the TUI application:
 
 ### Table Navigation

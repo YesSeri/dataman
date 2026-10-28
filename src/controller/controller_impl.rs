@@ -580,10 +580,14 @@ impl Controller {
                                 ),
                             );
                         } else if self.ui.last_command.command != Command::IllegalOperation {
-                            let message = self.ui.last_command.message.clone().or_else(|| {
-                                Some("Completed".to_owned())
-                            });
-                            self.ui.last_command = PreviousCommand::new(queued_command.command, message);
+                            let message = self
+                                .ui
+                                .last_command
+                                .message
+                                .clone()
+                                .or_else(|| Some("Completed".to_owned()));
+                            self.ui.last_command =
+                                PreviousCommand::new(queued_command.command, message);
                         }
                         self.ui
                             .input_mode_state_machine
@@ -905,8 +909,9 @@ impl Controller {
                 Command::Save => {
                     let filename = inputs[0].as_str();
                     let path = PathBuf::from(filename);
-                    match path.extension().unwrap().to_str().unwrap() {
+                    match path.extension().and_then(|ext| ext.to_str()).unwrap_or("") {
                         "csv" => savers::csv(&self.database, &self.view.table_name, &path),
+                        "tsv" => savers::tsv(&self.database, &self.view.table_name, &path),
                         "sqlite" | "db" | "sql" | "sqlite3" => {
                             savers::sqlite(&self.database, &path)
                         }
