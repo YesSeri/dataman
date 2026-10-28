@@ -1,19 +1,24 @@
 # TODO
-## Prio 1
-- [ ] UNDO/REDO
-    - <https://www.sqlite.org/undoredo.html>
-    - <https://github.com/Ocead/sqlite-undo>
-- [ ] joins
-	-  table of tables.
 
-## Less prio
+## Priority: VisiData workflow
 
-- [ ] `TryFrom<Path>` amd `TryFrom<String>` is only two inputs. Within these two we can decide which file to use, .csv, .sqlite3, .tsv.
-- [ ] rwlock for regex?
-- [ ] input types, multiple or one.
-- [ ] use different pattern, remove controller, see ratatui docs.
+- [ ] Add undo and redo for data-changing commands (edits, transforms, deletes, and renames).
+- [ ] Add a command history that records operations and their inputs; make history reviewable and replayable.
+- [ ] Add row selection and bulk operations for selected rows.
+- [ ] Add horizontal scrolling for tables wider than the terminal.
+- [ ] Add commands to hide, show, and reorder columns.
+- [ ] Improve status and error messages so command results and failures are visible in the TUI.
+- [ ] Add a column summary view with useful statistics for each column.
+- [ ] Add frequency tables that group rows by column values and summarize groups.
+- [ ] Add support for opening and saving TSV and SQLite files through a common path-based input workflow.
+- [ ] Add joins between tables, starting with a table-of-tables workflow.
 
-from regex docs
-this is better I think than arc mutex stuff I am doing onw.
+## Less priority
 
-- [x] make it so you can view more than the ca 50 you view when you open app. Use offset and each time we go past height increase `CurrentView` offset by height.
+- [ ] Consider whether regex execution needs an `RwLock`.
+- [ ] Simplify the controller/input pattern using Ratatui guidance.
+- [ ] Clarify and support single versus multiple input files.
+
+## Completed
+
+- [x] Allow viewing more than the initial ~50 rows by paging with an offset as the cursor moves past the visible height.
