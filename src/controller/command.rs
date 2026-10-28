@@ -24,7 +24,7 @@ impl Default for QueuedCommand {
 #[derive(Debug, Clone)]
 pub(crate) struct PreviousCommand {
     pub(crate) command: Command,
-    pub(super) message: Option<String>,
+    pub(crate) message: Option<String>,
 }
 
 impl PreviousCommand {

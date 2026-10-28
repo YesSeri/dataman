@@ -235,10 +235,11 @@ impl TUI {
             .unwrap_or("xxx".to_owned());
         let offset = table_state.offset();
         let last_command = ui.last_command.command.to_string();
+        let status = ui.last_command.message.as_deref().unwrap_or("");
         let table_height = rects[0].height;
         let text = vec![Line::from(vec![Span::raw(format!(
             // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
-            "row: {row}, total rows: {total_rows},  last command: {last_command}, height: {table_height}",
+            "row: {row}, total rows: {total_rows},  last command: {last_command} {status}, height: {table_height}",
         ))])];
         let paragraph = Paragraph::new(text);
 

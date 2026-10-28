@@ -580,8 +580,10 @@ impl Controller {
                                 ),
                             );
                         } else if self.ui.last_command.command != Command::IllegalOperation {
-                            self.ui.last_command =
-                                PreviousCommand::new(queued_command.command, None);
+                            let message = self.ui.last_command.message.clone().or_else(|| {
+                                Some("Completed".to_owned())
+                            });
+                            self.ui.last_command = PreviousCommand::new(queued_command.command, message);
                         }
                         self.ui
                             .input_mode_state_machine
