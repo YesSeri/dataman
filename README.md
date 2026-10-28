@@ -33,8 +33,8 @@ This checklist defines Dataman's current common-workflow parity target. CSV and 
 - [x] Save the current table as CSV/TSV or the complete dataset as SQLite.
 - [x] Create a summary or value frequency result table for the selected column.
 - [x] Join using the selected column and a typed `table.column` target; sources remain available.
+- [x] Select rows with Space and bulk edit the current column with `B`.
 - [ ] Navigate wide tables with horizontal scrolling and manage column visibility/order.
-- [ ] Select rows and apply bulk operations.
 - [ ] Review and replay command history.
 
 The unchecked items are the remaining parity work and are intended as acceptance gates for future releases.
@@ -55,6 +55,8 @@ The following are some of the more commonly used key commands in the TUI applica
 | `V`                  | Column Summary     |
 | `v`                  | Value Frequencies  |
 | `J`                  | Join Tables        |
+| `Space`              | Toggle row selection |
+| `B`                  | Bulk edit selected rows in current column |
 
 ### Data Transformation
 

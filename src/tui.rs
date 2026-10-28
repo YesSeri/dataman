@@ -204,12 +204,23 @@ impl TUI {
         .height(1);
 
         // draw border under header
+        let selected_ids = &controller.selected_rows;
         let tui_rows = rows.iter().map(|data_row| {
+            let row_id = data_row
+                .first()
+                .and_then(|item| item.to_string().parse::<i32>().ok());
+            let selected_style = if row_id.is_some_and(|id| selected_ids.contains(&id)) {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
             let data_row = data_row
                 .iter()
                 .map(|item| data_item_cell(item))
                 .collect::<Vec<_>>();
-            Row::new(data_row).height(1)
+            Row::new(data_row).height(1).style(selected_style)
         });
         let selected_style = Style::default().add_modifier(Modifier::UNDERLINED);
         let t = Table::new(tui_rows, constraints)

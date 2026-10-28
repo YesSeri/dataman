@@ -37,6 +37,12 @@ pub(crate) enum UndoRecord {
         after: DataItem,
         is_after: bool,
     },
+    BulkCellEdit {
+        table: String,
+        column: String,
+        cells: Vec<(i32, DataItem, DataItem)>,
+        is_after: bool,
+    },
     RenameTable {
         before: String,
         after: String,
@@ -175,6 +181,22 @@ impl Database {
             } => {
                 let value = if *is_after { before } else { after };
                 self.update_cell_value(table, column, *id, value)?;
+                *is_after = !*is_after;
+            }
+            UndoRecord::BulkCellEdit {
+                table,
+                column,
+                cells,
+                is_after,
+            } => {
+                for (id, before, after) in cells {
+                    self.update_cell_value(
+                        table,
+                        column,
+                        *id,
+                        if *is_after { before } else { after },
+                    )?;
+                }
                 *is_after = !*is_after;
             }
             UndoRecord::RenameTable {

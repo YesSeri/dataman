@@ -24,6 +24,8 @@
 "V" = "summary"
 "v" = "frequency"
 "J" = "join"
+"space" = "toggle_selection"
+"B" = "bulk_edit"
 "ctrl+right" = "next_table"
 "ctrl+left" = "previous_table"
 "left" = "move_left"

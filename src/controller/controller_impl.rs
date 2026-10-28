@@ -8,7 +8,10 @@ use crate::model::datarow::{DataItem, DataTable};
 use crate::navigation::Direction;
 use crate::tui::TUI;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
-use std::{collections::VecDeque, path::PathBuf};
+use std::{
+    collections::{HashSet, VecDeque},
+    path::PathBuf,
+};
 
 use super::command::QueuedCommand;
 use super::input::StateMachine;
@@ -22,6 +25,7 @@ pub struct Controller {
     pub(crate) ui: UiState,
     pub(crate) view: ViewState,
     history: History,
+    pub(crate) selected_rows: HashSet<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -81,6 +85,7 @@ impl Controller {
         Self {
             database,
             history: History::default(),
+            selected_rows: HashSet::new(),
             view: ViewState {
                 table_name,
                 column: 0,
@@ -368,6 +373,63 @@ impl Controller {
         Ok(())
     }
 
+    fn toggle_selection(&mut self) -> AppResult<()> {
+        let id = self
+            .view
+            .rows
+            .get(self.view.row)
+            .and_then(|row| row.first())
+            .ok_or_else(|| app_error_other!("No selected row"))?
+            .to_string()
+            .parse::<i32>()
+            .map_err(|err| app_error_other!(err.to_string()))?;
+        if !self.selected_rows.insert(id) {
+            self.selected_rows.remove(&id);
+        }
+        self.ui.last_command = PreviousCommand::new(
+            Command::ToggleSelection,
+            Some(format!("{} rows selected", self.selected_rows.len())),
+        );
+        Ok(())
+    }
+
+    fn bulk_edit(&mut self, inputs: Vec<String>) -> AppResult<()> {
+        if self.selected_rows.is_empty() {
+            return Err(app_error_other!(
+                "Select rows with Space before bulk editing"
+            ));
+        }
+        let before_view = self.view_snapshot();
+        let table = self.view.table_name.clone();
+        let column = self.selected_column()?;
+        if column == "id" {
+            return Err(app_error_other!("The id column is read-only"));
+        }
+        let value = inputs
+            .first()
+            .ok_or_else(|| app_error_other!("No value provided"))?;
+        let mut ids = self.selected_rows.iter().copied().collect::<Vec<_>>();
+        ids.sort_unstable();
+        let mut cells = Vec::with_capacity(ids.len());
+        for id in ids {
+            let old = self.database.get_cell_item(&table, id, &column)?;
+            self.database.update_cell(&table, &column, id, value)?;
+            cells.push((id, old, DataItem::Text(value.clone())));
+        }
+        self.record_history(
+            UndoRecord::BulkCellEdit {
+                table,
+                column,
+                cells,
+                is_after: true,
+            },
+            before_view,
+        );
+        self.ui.last_command =
+            PreviousCommand::new(Command::BulkEdit, Some("Updated selected rows".into()));
+        Ok(())
+    }
+
     fn delete_table(&mut self) -> AppResult<()> {
         let before = self.view_snapshot();
         let table = self.view.table_name.clone();
@@ -568,7 +630,8 @@ impl Controller {
                         | Command::RenameColumn
                         | Command::MathOperation
                         | Command::RenameTable
-                        | Command::Join => {
+                        | Command::Join
+                        | Command::BulkEdit => {
                             self.ui.queued_command = Some(QueuedCommand::new(command.clone()));
                             self.ui
                                 .input_mode_state_machine
@@ -595,6 +658,7 @@ impl Controller {
                         } // Command::Join(_) => todo!(),
                         Command::Summary => self.show_analysis(false),
                         Command::Frequency => self.show_analysis(true),
+                        Command::ToggleSelection => self.toggle_selection(),
                     };
                     match command {
                         Command::RenameTable => {
@@ -986,6 +1050,7 @@ impl Controller {
                 }
                 Command::MathOperation => self.math_operation(inputs),
                 Command::Join => self.join_table(inputs),
+                Command::BulkEdit => self.bulk_edit(inputs),
                 // _ => {
                 //     log::error!("Command not implemented: {:?}", queued_command.command);
                 //     Err(AppError::from("Command not implemented"))
@@ -1006,7 +1071,8 @@ impl Controller {
                 | Command::ToggleMetadataTable
                 | Command::DeleteColumn
                 | Command::Summary
-                | Command::Frequency => {
+                | Command::Frequency
+                | Command::ToggleSelection => {
                     log::error!("Non-queueable command executed as queued: {:?}", command);
                     unreachable!("This command should not be queueable!!!");
                 }
@@ -1103,6 +1169,29 @@ mod history_tests {
         assert_eq!(
             controller.database.get_cell("t", 1, "name").unwrap(),
             "changed"
+        );
+    }
+
+    #[test]
+    fn bulk_edit_undoes_and_redoes_selected_rows() {
+        let mut controller = controller();
+        controller.selected_rows.extend([1, 2]);
+        controller.bulk_edit(vec!["same".into()]).unwrap();
+        assert_eq!(
+            controller.database.get_cell("t", 1, "name").unwrap(),
+            "same"
+        );
+        assert_eq!(
+            controller.database.get_cell("t", 2, "name").unwrap(),
+            "same"
+        );
+        controller.undo().unwrap();
+        assert_eq!(controller.database.get_cell("t", 1, "name").unwrap(), "abc");
+        assert_eq!(controller.database.get_cell("t", 2, "name").unwrap(), "def");
+        controller.redo().unwrap();
+        assert_eq!(
+            controller.database.get_cell("t", 2, "name").unwrap(),
+            "same"
         );
     }
 

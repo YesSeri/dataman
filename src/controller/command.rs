@@ -62,6 +62,8 @@ pub enum Command {
     Summary,
     Frequency,
     Join,
+    ToggleSelection,
+    BulkEdit,
 }
 
 impl Command {
@@ -89,6 +91,7 @@ impl Command {
             | Command::Summary
             | Command::Frequency
             | Command::Join => true,
+            Command::BulkEdit | Command::ToggleSelection => true,
             Command::None
             | Command::IllegalOperation
             | Command::Save
@@ -125,6 +128,8 @@ impl Command {
             Command::Summary => "Column Summary".to_string(),
             Command::Frequency => "Value Frequencies".to_string(),
             Command::Join => "Join Tables".to_string(),
+            Command::ToggleSelection => "Toggle Row Selection".to_string(),
+            Command::BulkEdit => "Bulk Edit".to_string(),
         }
     }
 }
@@ -161,6 +166,8 @@ impl From<KeyEvent> for Command {
             "summary" => Command::Summary,
             "frequency" => Command::Frequency,
             "join" => Command::Join,
+            "toggle_selection" => Command::ToggleSelection,
+            "bulk_edit" => Command::BulkEdit,
             "move_left" => Command::Move(Direction::Left),
             "move_right" => Command::Move(Direction::Right),
             "move_up" => Command::Move(Direction::Up),
@@ -172,6 +179,7 @@ impl From<KeyEvent> for Command {
 
 fn normalized_key(key: &KeyEvent) -> String {
     let key_name = match key.code {
+        KeyCode::Char(' ') => "space".to_owned(),
         KeyCode::Char(c) => c.to_string(),
         KeyCode::Right => "right".to_owned(),
         KeyCode::Left => "left".to_owned(),
