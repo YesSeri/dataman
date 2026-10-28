@@ -64,6 +64,13 @@ pub enum Command {
     Join,
     ToggleSelection,
     BulkEdit,
+    HideColumn,
+    ShowColumns,
+    ColumnLeft,
+    ColumnRight,
+    History,
+    HistoryReplay,
+    HistoryClose,
 }
 
 impl Command {
@@ -92,6 +99,13 @@ impl Command {
             | Command::Frequency
             | Command::Join => true,
             Command::BulkEdit | Command::ToggleSelection => true,
+            Command::HideColumn
+            | Command::ShowColumns
+            | Command::ColumnLeft
+            | Command::ColumnRight
+            | Command::History
+            | Command::HistoryReplay
+            | Command::HistoryClose => true,
             Command::None
             | Command::IllegalOperation
             | Command::Save
@@ -130,6 +144,13 @@ impl Command {
             Command::Join => "Join Tables".to_string(),
             Command::ToggleSelection => "Toggle Row Selection".to_string(),
             Command::BulkEdit => "Bulk Edit".to_string(),
+            Command::HideColumn => "Hide Column".to_string(),
+            Command::ShowColumns => "Show All Columns".to_string(),
+            Command::ColumnLeft => "Move Column Left".to_string(),
+            Command::ColumnRight => "Move Column Right".to_string(),
+            Command::History => "Command History".to_string(),
+            Command::HistoryReplay => "Replay History Command".to_string(),
+            Command::HistoryClose => "Close Command History".to_string(),
         }
     }
 }
@@ -168,6 +189,13 @@ impl From<KeyEvent> for Command {
             "join" => Command::Join,
             "toggle_selection" => Command::ToggleSelection,
             "bulk_edit" => Command::BulkEdit,
+            "hide_column" => Command::HideColumn,
+            "show_columns" => Command::ShowColumns,
+            "column_left" => Command::ColumnLeft,
+            "column_right" => Command::ColumnRight,
+            "history" => Command::History,
+            "history_replay" => Command::HistoryReplay,
+            "history_close" => Command::HistoryClose,
             "move_left" => Command::Move(Direction::Left),
             "move_right" => Command::Move(Direction::Right),
             "move_up" => Command::Move(Direction::Up),

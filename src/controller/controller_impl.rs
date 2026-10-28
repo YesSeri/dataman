@@ -9,7 +9,7 @@ use crate::navigation::Direction;
 use crate::tui::TUI;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use std::{
-    collections::{HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
 };
 
@@ -26,6 +26,8 @@ pub struct Controller {
     pub(crate) view: ViewState,
     history: History,
     pub(crate) selected_rows: HashSet<i32>,
+    column_layouts: HashMap<String, ColumnLayout>,
+    pub(crate) command_history: VecDeque<LoggedCommand>,
 }
 
 #[derive(Debug, Clone)]
@@ -37,6 +39,7 @@ struct ViewSnapshot {
     order_column: Option<String>,
     ascending: bool,
     table_before_metadata: Option<String>,
+    layout: ColumnLayout,
 }
 
 #[derive(Debug)]
@@ -46,10 +49,25 @@ struct HistoryEntry {
     after: ViewSnapshot,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct LoggedCommand {
+    pub(crate) command: Command,
+    pub(crate) inputs: Vec<String>,
+    pub(crate) table: String,
+    snapshot: ViewSnapshot,
+    selected_rows: HashSet<i32>,
+}
+
 #[derive(Debug, Default)]
 struct History {
     undo: VecDeque<HistoryEntry>,
     redo: VecDeque<HistoryEntry>,
+}
+
+#[derive(Debug, Default, Clone)]
+struct ColumnLayout {
+    order: Vec<String>,
+    hidden: HashSet<String>,
 }
 
 #[derive(Debug)]
@@ -73,6 +91,8 @@ pub(crate) struct UiState {
     pub(crate) last_command: PreviousCommand,
     pub(crate) queued_command: Option<QueuedCommand>,
     pub(crate) input_mode_state_machine: StateMachine,
+    pub(crate) history_view: bool,
+    pub(crate) history_cursor: usize,
 }
 
 impl Controller {
@@ -86,6 +106,8 @@ impl Controller {
             database,
             history: History::default(),
             selected_rows: HashSet::new(),
+            column_layouts: HashMap::new(),
+            command_history: VecDeque::new(),
             view: ViewState {
                 table_name,
                 column: 0,
@@ -103,11 +125,18 @@ impl Controller {
                 last_command: PreviousCommand::new(Command::None, None),
                 queued_command: None,
                 input_mode_state_machine: StateMachine::new(),
+                history_view: false,
+                history_cursor: 0,
             },
         }
     }
 
     fn view_snapshot(&self) -> ViewSnapshot {
+        let layout = self
+            .column_layouts
+            .get(&self.view.table_name)
+            .cloned()
+            .unwrap_or_default();
         ViewSnapshot {
             table_name: self.view.table_name.clone(),
             column: self.view.column,
@@ -116,10 +145,12 @@ impl Controller {
             order_column: self.view.order_column.clone(),
             ascending: self.view.ascending,
             table_before_metadata: self.view.table_before_metadata.clone(),
+            layout,
         }
     }
 
     fn restore_view(&mut self, snapshot: ViewSnapshot) {
+        let layout = snapshot.layout.clone();
         self.view.table_name = snapshot.table_name;
         self.view.column = snapshot.column;
         self.view.row = snapshot.row;
@@ -127,6 +158,8 @@ impl Controller {
         self.view.order_column = snapshot.order_column;
         self.view.ascending = snapshot.ascending;
         self.view.table_before_metadata = snapshot.table_before_metadata;
+        self.column_layouts
+            .insert(self.view.table_name.clone(), layout);
     }
 
     fn record_history(&mut self, record: UndoRecord, before: ViewSnapshot) {
@@ -146,6 +179,90 @@ impl Controller {
                 if let Err(err) = self.database.discard_hidden_record(&entry.record) {
                     log::warn!("Could not discard expired history artifact: {err}");
                 }
+            }
+        }
+    }
+
+    fn log_command(&mut self, command: Command, inputs: Vec<String>, snapshot: ViewSnapshot) {
+        if matches!(
+            command,
+            Command::None
+                | Command::IllegalOperation
+                | Command::Quit
+                | Command::Move(_)
+                | Command::NextTable
+                | Command::PrevTable
+                | Command::Save
+                | Command::SqlQuery
+                | Command::Undo
+                | Command::Redo
+                | Command::History
+                | Command::HistoryReplay
+                | Command::HistoryClose
+                | Command::ToggleSelection
+        ) {
+            return;
+        }
+        self.command_history.push_back(LoggedCommand {
+            command,
+            inputs,
+            table: snapshot.table_name.clone(),
+            snapshot,
+            selected_rows: self.selected_rows.clone(),
+        });
+        while self.command_history.len() > HISTORY_LIMIT {
+            self.command_history.pop_front();
+        }
+        self.ui.history_cursor = self.command_history.len().saturating_sub(1);
+    }
+
+    fn replay_history(&mut self) -> AppResult<()> {
+        let entry = self
+            .command_history
+            .get(self.ui.history_cursor)
+            .cloned()
+            .ok_or_else(|| app_error_other!("No command selected"))?;
+        self.restore_view(entry.snapshot.clone());
+        self.selected_rows = entry.selected_rows.clone();
+        self.get_headers_and_rows(100)?;
+        let result = match entry.command {
+            Command::Copy => self.copy(),
+            Command::Sort => self.sort(),
+            Command::TextToInt => self.text_to_int(),
+            Command::IntToText => self.int_to_text(),
+            Command::DeleteColumn => self.delete_column(),
+            Command::DeleteTable => self.delete_table(),
+            Command::RenameColumn => self.rename_column(entry.inputs.clone()),
+            Command::RenameTable => self.rename_table(entry.inputs.clone()),
+            Command::Edit => self.edit_cell(entry.inputs.clone()),
+            Command::RegexTransform => self.regex_transform(entry.inputs.clone()),
+            Command::RegexFilter => self.regex_filter(entry.inputs.clone()),
+            Command::MathOperation => self.math_operation(entry.inputs.clone()),
+            Command::ExactSearch => self.exact_search(entry.inputs.clone()),
+            Command::Join => self.join_table(entry.inputs.clone()),
+            Command::Summary => self.show_analysis(false),
+            Command::Frequency => self.show_analysis(true),
+            Command::BulkEdit => self.bulk_edit(entry.inputs.clone()),
+            Command::HideColumn => self.hide_selected_column(),
+            Command::ShowColumns => {
+                self.show_all_columns();
+                Ok(())
+            }
+            Command::ColumnLeft => self.move_column(true),
+            Command::ColumnRight => self.move_column(false),
+            _ => Err(app_error_other!("This command cannot be replayed")),
+        };
+        match result {
+            Ok(()) => {
+                self.ui.history_view = false;
+                self.ui.last_command =
+                    PreviousCommand::new(entry.command, Some("Replayed command".into()));
+                Ok(())
+            }
+            Err(err) => {
+                self.ui.last_command =
+                    PreviousCommand::new(Command::IllegalOperation, Some(err.to_string()));
+                Err(err)
             }
         }
     }
@@ -216,8 +333,8 @@ impl Controller {
     }
 
     fn selected_column(&self) -> AppResult<String> {
-        self.database
-            .get_headers(&self.view.table_name)?
+        self.view
+            .headers
             .get(self.view.column)
             .cloned()
             .ok_or_else(|| app_error_other!("Could not get header"))
@@ -226,13 +343,13 @@ impl Controller {
     fn move_cursor(&mut self, direction: Direction, height: u32) -> AppResult<()> {
         match direction {
             Direction::Left => {
-                let count = self.database.count_headers(&self.view.table_name)? as usize;
+                let count = self.view.headers.len();
                 if count > 0 {
                     self.view.column = (self.view.column + count - 1) % count;
                 }
             }
             Direction::Right => {
-                let count = self.database.count_headers(&self.view.table_name)? as usize;
+                let count = self.view.headers.len();
                 if count > 0 {
                     self.view.column = (self.view.column + 1) % count;
                 }
@@ -261,6 +378,64 @@ impl Controller {
                 }
             }
         }
+        Ok(())
+    }
+
+    fn hide_selected_column(&mut self) -> AppResult<()> {
+        let name = self.selected_column()?;
+        if name == "id" {
+            return Err(app_error_other!(
+                "The id column is pinned and cannot be hidden"
+            ));
+        }
+        self.column_layouts
+            .entry(self.view.table_name.clone())
+            .or_default()
+            .hidden
+            .insert(name);
+        self.view.column = self.view.column.saturating_sub(1);
+        Ok(())
+    }
+
+    fn show_all_columns(&mut self) {
+        self.column_layouts
+            .entry(self.view.table_name.clone())
+            .or_default()
+            .hidden
+            .clear();
+    }
+
+    fn move_column(&mut self, left: bool) -> AppResult<()> {
+        let name = self.selected_column()?;
+        if name == "id" {
+            return Err(app_error_other!("The id column stays first"));
+        }
+        let visible = self.view.headers.clone();
+        let position = self.view.column;
+        let target = if left {
+            position.saturating_sub(1)
+        } else {
+            (position + 1).min(visible.len().saturating_sub(1))
+        };
+        if target == 0 || target == position {
+            return Ok(());
+        }
+        let layout = self
+            .column_layouts
+            .entry(self.view.table_name.clone())
+            .or_default();
+        let current_index = layout
+            .order
+            .iter()
+            .position(|header| header == &name)
+            .ok_or_else(|| app_error_other!("Column layout is out of date"))?;
+        let target_index = layout
+            .order
+            .iter()
+            .position(|header| header == &visible[target])
+            .ok_or_else(|| app_error_other!("Column layout is out of date"))?;
+        layout.order.swap(current_index, target_index);
+        self.view.column = target;
         Ok(())
     }
 
@@ -335,6 +510,7 @@ impl Controller {
             },
             before,
         );
+        self.get_headers_and_rows(100)?;
         Ok(())
     }
 
@@ -370,6 +546,7 @@ impl Controller {
             },
             before,
         );
+        self.get_headers_and_rows(100)?;
         Ok(())
     }
 
@@ -619,6 +796,31 @@ impl Controller {
                 Err(app_error_other!("Could not poll"))
             } {
                 Ok(command) => {
+                    if self.ui.history_view {
+                        match command {
+                            Command::History | Command::HistoryClose => {
+                                self.ui.history_view = false
+                            }
+                            Command::Move(Direction::Up) => {
+                                self.ui.history_cursor = self.ui.history_cursor.saturating_sub(1)
+                            }
+                            Command::Move(Direction::Down) => {
+                                self.ui.history_cursor = (self.ui.history_cursor + 1)
+                                    .min(self.command_history.len().saturating_sub(1))
+                            }
+                            Command::HistoryReplay => {
+                                if let Err(err) = self.replay_history() {
+                                    self.ui.last_command = PreviousCommand::new(
+                                        Command::IllegalOperation,
+                                        Some(err.to_string()),
+                                    );
+                                }
+                            }
+                            _ => {}
+                        }
+                        return Ok(());
+                    }
+                    let before_command = self.view_snapshot();
                     self.ui.last_command = PreviousCommand::new(command.clone(), None);
                     let result = match command {
                         Command::RegexTransform
@@ -659,6 +861,19 @@ impl Controller {
                         Command::Summary => self.show_analysis(false),
                         Command::Frequency => self.show_analysis(true),
                         Command::ToggleSelection => self.toggle_selection(),
+                        Command::HideColumn => self.hide_selected_column(),
+                        Command::ShowColumns => {
+                            self.show_all_columns();
+                            Ok(())
+                        }
+                        Command::ColumnLeft => self.move_column(true),
+                        Command::ColumnRight => self.move_column(false),
+                        Command::History => {
+                            self.ui.history_view = true;
+                            self.ui.history_cursor = self.command_history.len().saturating_sub(1);
+                            Ok(())
+                        }
+                        Command::HistoryReplay | Command::HistoryClose => Ok(()),
                     };
                     match command {
                         Command::RenameTable => {
@@ -671,6 +886,24 @@ impl Controller {
                             log::info!("testing 2");
                         }
                         _ => {}
+                    }
+
+                    let prompted = matches!(
+                        command,
+                        Command::RegexTransform
+                            | Command::Save
+                            | Command::RegexFilter
+                            | Command::Edit
+                            | Command::ExactSearch
+                            | Command::SqlQuery
+                            | Command::RenameColumn
+                            | Command::MathOperation
+                            | Command::RenameTable
+                            | Command::Join
+                            | Command::BulkEdit
+                    );
+                    if result.is_ok() && !prompted {
+                        self.log_command(command.clone(), Vec::new(), before_command);
                     }
 
                     if let Err(err) = &result {
@@ -697,6 +930,7 @@ impl Controller {
             match self.ui.input_mode_state_machine.get_state() {
                 InputMode::Finish => {
                     if let Some(queued_command) = self.ui.queued_command.clone() {
+                        let before_command = self.view_snapshot();
                         self.execute_queued_command()?;
                         self.ui.queued_command = None;
                         if self.ui.last_command.command != Command::IllegalOperation
@@ -710,6 +944,11 @@ impl Controller {
                                 ),
                             );
                         } else if self.ui.last_command.command != Command::IllegalOperation {
+                            self.log_command(
+                                queued_command.command.clone(),
+                                queued_command.inputs.clone(),
+                                before_command,
+                            );
                             let message = self
                                 .ui
                                 .last_command
@@ -759,10 +998,45 @@ impl Controller {
             &self.view.table_name,
             &ordering,
         )?;
-        self.view.headers.clone_from(&page.0);
-        self.view.rows.clone_from(&page.1);
+        let layout = self
+            .column_layouts
+            .entry(self.view.table_name.clone())
+            .or_default();
+        for header in &page.0 {
+            if !layout.order.contains(header) {
+                layout.order.push(header.clone());
+            }
+        }
+        layout.order.retain(|header| page.0.contains(header));
+        if let Some(id_index) = layout.order.iter().position(|header| header == "id") {
+            if id_index != 0 {
+                layout.order.swap(0, id_index);
+            }
+        }
+        layout.hidden.remove("id");
+        let indexes = layout
+            .order
+            .iter()
+            .filter(|header| !layout.hidden.contains(*header))
+            .filter_map(|header| page.0.iter().position(|candidate| candidate == header))
+            .collect::<Vec<_>>();
+        self.view.headers = indexes.iter().map(|index| page.0[*index].clone()).collect();
+        self.view.rows = page
+            .1
+            .iter()
+            .map(|row| {
+                indexes
+                    .iter()
+                    .filter_map(|index| row.get(*index).cloned())
+                    .collect()
+            })
+            .collect();
         self.view.row = self.view.row.min(self.view.rows.len().saturating_sub(1));
-        Ok(page)
+        self.view.column = self
+            .view
+            .column
+            .min(self.view.headers.len().saturating_sub(1));
+        Ok((self.view.headers.clone(), self.view.rows.clone()))
     }
 
     pub fn regex_filter(&mut self, inputs: Vec<String>) -> AppResult<()> {
@@ -849,6 +1123,7 @@ impl Controller {
             },
             before,
         );
+        self.get_headers_and_rows(100)?;
         Ok(())
     }
 
@@ -1072,7 +1347,14 @@ impl Controller {
                 | Command::DeleteColumn
                 | Command::Summary
                 | Command::Frequency
-                | Command::ToggleSelection => {
+                | Command::ToggleSelection
+                | Command::HideColumn
+                | Command::ShowColumns
+                | Command::ColumnLeft
+                | Command::ColumnRight
+                | Command::History
+                | Command::HistoryReplay
+                | Command::HistoryClose => {
                     log::error!("Non-queueable command executed as queued: {:?}", command);
                     unreachable!("This command should not be queueable!!!");
                 }
@@ -1103,6 +1385,9 @@ impl Controller {
         let old_table_name = self.view.table_name.clone();
         self.database
             .rename_table(&old_table_name, &new_table_name)?;
+        if let Some(layout) = self.column_layouts.remove(&old_table_name) {
+            self.column_layouts.insert(new_table_name.clone(), layout);
+        }
         self.view.table_name = new_table_name;
         self.ui.last_command = PreviousCommand::new(Command::RenameTable, None);
         self.record_history(
@@ -1193,6 +1478,47 @@ mod history_tests {
             controller.database.get_cell("t", 2, "name").unwrap(),
             "same"
         );
+    }
+
+    #[test]
+    fn column_layout_hides_restores_and_reorders_columns() {
+        let mut controller = controller();
+        controller
+            .database
+            .execute_batch("ALTER TABLE t ADD COLUMN city TEXT;")
+            .unwrap();
+        controller.get_headers_and_rows(10).unwrap();
+        controller.view.column = 1;
+        controller.move_column(false).unwrap();
+        controller.get_headers_and_rows(10).unwrap();
+        assert_eq!(controller.view.headers, vec!["id", "city", "name"]);
+        assert_eq!(controller.selected_column().unwrap(), "name");
+        controller.hide_selected_column().unwrap();
+        controller.get_headers_and_rows(10).unwrap();
+        assert_eq!(controller.view.headers, vec!["id", "city"]);
+        controller.show_all_columns();
+        controller.get_headers_and_rows(10).unwrap();
+        assert_eq!(controller.view.headers, vec!["id", "city", "name"]);
+    }
+
+    #[test]
+    fn logged_command_can_be_replayed_after_undo() {
+        let mut controller = controller();
+        let before = controller.view_snapshot();
+        controller.copy().unwrap();
+        controller.log_command(Command::Copy, vec![], before);
+        controller.undo().unwrap();
+        assert!(!controller
+            .database
+            .get_headers("t")
+            .unwrap()
+            .contains(&"name_copy".into()));
+        controller.replay_history().unwrap();
+        assert!(controller
+            .database
+            .get_headers("t")
+            .unwrap()
+            .contains(&"name_copy".into()));
     }
 
     #[test]
@@ -1367,7 +1693,7 @@ mod history_tests {
         controller.view.column = 2;
 
         controller.text_to_int().unwrap();
-        let derived_column = controller.view.headers.len();
+        let derived_column = controller.view.headers.len() - 1;
         controller.view.column = derived_column;
         controller.sort().unwrap();
 

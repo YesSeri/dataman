@@ -60,6 +60,25 @@ fn table_height_for(terminal_height: u16) -> u32 {
     u32::from(terminal_height.saturating_sub(4))
 }
 
+fn column_window(widths: &[u16], selected: usize, available: u16) -> std::ops::Range<usize> {
+    if widths.is_empty() {
+        return 0..0;
+    }
+    let selected = selected.min(widths.len() - 1);
+    let mut start = selected;
+    let mut end = selected + 1;
+    let mut used = widths[selected].max(1);
+    while end < widths.len() && used.saturating_add(widths[end].max(1)) <= available {
+        used += widths[end].max(1);
+        end += 1;
+    }
+    while start > 0 && used.saturating_add(widths[start - 1].max(1)) <= available {
+        start -= 1;
+        used += widths[start].max(1);
+    }
+    start..end
+}
+
 fn trim_external_editor_newline(editable: String) -> String {
     if let Some(content) = editable.strip_suffix("\r\n") {
         content.to_owned()
@@ -171,6 +190,34 @@ impl TUI {
             .constraints(constraints.as_slice())
             .split(f.size());
 
+        if ui.history_view {
+            let block = Block::default().borders(Borders::ALL).title(format!(
+                "Command History (↑/↓ select, Enter replay, Esc return) {}",
+                ui.last_command.message.as_deref().unwrap_or("")
+            ));
+            let first = ui
+                .history_cursor
+                .saturating_sub(29)
+                .min(controller.command_history.len().saturating_sub(30));
+            let lines = (first..controller.command_history.len())
+                .map(|index| {
+                    let entry = &controller.command_history[index];
+                    let marker = if index == ui.history_cursor {
+                        "> "
+                    } else {
+                        "  "
+                    };
+                    Line::from(format!(
+                        "{marker}{}  {}  {}",
+                        entry.command,
+                        entry.table,
+                        entry.inputs.join(" | ")
+                    ))
+                })
+                .collect::<Vec<_>>();
+            f.render_widget(Paragraph::new(lines).block(block), f.size());
+            return Ok(());
+        }
         let headers = &view.headers;
         let rows = &view.rows;
         let id_space: u16 = rows.iter().fold(0, |acc, row| {
@@ -183,16 +230,16 @@ impl TUI {
         });
 
         let widths: Vec<u16> = column_widths(headers, rows);
-        let sum: u16 = widths.iter().sum();
-        let constraints = widths
+        let window = column_window(&widths, view.column, f.size().width.saturating_sub(4));
+        let constraints = widths[window.clone()]
             .iter()
             .map(|w| Constraint::Min(*w))
             .collect::<Vec<_>>();
-        let current_header = view.column as u16;
+        let current_header = view.column;
         // mark current header
 
-        let header = Row::new(headers.iter().enumerate().map(|(i, h)| {
-            if current_header == i as u16 {
+        let header = Row::new(headers[window.clone()].iter().enumerate().map(|(i, h)| {
+            if current_header == window.start + i {
                 Cell::from(Span::styled(
                     h.clone(),
                     Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
@@ -216,7 +263,7 @@ impl TUI {
             } else {
                 Style::default()
             };
-            let data_row = data_row
+            let data_row = data_row[window.clone()]
                 .iter()
                 .map(|item| data_item_cell(item))
                 .collect::<Vec<_>>();
@@ -302,7 +349,7 @@ impl TUI {
 
 #[cfg(test)]
 mod tests {
-    use super::{table_height_for, trim_external_editor_newline};
+    use super::{column_window, table_height_for, trim_external_editor_newline};
 
     #[test]
     fn short_terminal_has_zero_table_height() {
@@ -312,6 +359,12 @@ mod tests {
     #[test]
     fn external_editor_removes_only_the_final_newline() {
         assert_eq!(trim_external_editor_newline("first\n\n".into()), "first\n");
+    }
+
+    #[test]
+    fn selected_column_is_kept_inside_horizontal_window() {
+        assert_eq!(column_window(&[10, 10, 10, 10], 3, 20), 2..4);
+        assert_eq!(column_window(&[10, 10, 10, 10], 0, 20), 0..2);
     }
 }
 

@@ -34,10 +34,12 @@ This checklist defines Dataman's current common-workflow parity target. CSV and 
 - [x] Create a summary or value frequency result table for the selected column.
 - [x] Join using the selected column and a typed `table.column` target; sources remain available.
 - [x] Select rows with Space and bulk edit the current column with `B`.
-- [ ] Navigate wide tables with horizontal scrolling and manage column visibility/order.
-- [ ] Review and replay command history.
+- [x] Navigate wide tables with horizontal scrolling and manage column visibility/order.
+- [x] Review and replay supported data and layout commands.
 
-The unchecked items are the remaining parity work and are intended as acceptance gates for future releases.
+Command history is kept for the current session. SQL and file saves are excluded from replay.
+
+This checklist is the supported workflow target and release gate.
 
 The following are some of the more commonly used key commands in the TUI application:
 
@@ -57,6 +59,9 @@ The following are some of the more commonly used key commands in the TUI applica
 | `J`                  | Join Tables        |
 | `Space`              | Toggle row selection |
 | `B`                  | Bulk edit selected rows in current column |
+| `h` / `o`            | Hide current column / show all columns |
+| `[` / `]`            | Move current column left / right |
+| `L`                  | Review history; arrows select, Enter replays |
 
 ### Data Transformation
 
