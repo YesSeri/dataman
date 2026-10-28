@@ -33,10 +33,28 @@ fn data_item_cell(item: &DataItem) -> Cell<'static> {
         DataItem::Null => Cell::from("NULL"),
     }
 }
-use crate::{
-    controller::input::InputMode,
-    model::datarow::{DataItem, DataTable},
-};
+
+fn column_widths(headers: &[String], rows: &[Vec<DataItem>]) -> Vec<u16> {
+    let mut widths: Vec<u16> = headers.iter().map(|header| header.len() as u16).collect();
+    for row in rows {
+        for (index, item) in row.iter().enumerate() {
+            if let Some(width) = widths.get_mut(index) {
+                *width = (*width).max(item.len() as u16);
+            }
+        }
+    }
+    while widths.iter().map(|width| *width as u32).sum::<u32>() > 92 {
+        if let Some(width) = widths.iter_mut().max() {
+            if *width > 1 {
+                *width -= 1;
+            } else {
+                break;
+            }
+        }
+    }
+    widths
+}
+use crate::{controller::input::InputMode, model::datarow::DataItem};
 use crate::{
     error::{AppError, AppResult},
     model::database::Database,
@@ -115,7 +133,12 @@ impl TUI {
     }
 
     fn update(f: &mut Frame, controller: &mut Controller) -> AppResult<()> {
-        let (database, ui) = (&mut controller.database, &mut controller.ui);
+        controller.get_headers_and_rows(100)?;
+        let (database, ui, view) = (
+            &mut controller.database,
+            &mut controller.ui,
+            &controller.view,
+        );
         let constraints: Vec<Constraint> = match ui.input_mode_state_machine.get_state() {
             InputMode::Editing => {
                 vec![
@@ -134,10 +157,8 @@ impl TUI {
             .constraints(constraints.as_slice())
             .split(f.size());
 
-        let table_name = database.get_current_table_name()?;
-
-        let (headers, rows): DataTable =
-            database.get(100, database.slice.row_offset, table_name)?;
+        let headers = &view.headers;
+        let rows = &view.rows;
         let id_space: u16 = rows.iter().fold(0, |acc, row| {
             let id = row.first().unwrap().to_string().len() as u16;
             if id > acc {
@@ -147,13 +168,13 @@ impl TUI {
             }
         });
 
-        let widths: Vec<u16> = database.slice.column_widths();
+        let widths: Vec<u16> = column_widths(headers, rows);
         let sum: u16 = widths.iter().sum();
         let constraints = widths
             .iter()
             .map(|w| Constraint::Min(*w))
             .collect::<Vec<_>>();
-        let current_header = database.header_idx;
+        let current_header = view.column as u16;
         // mark current header
 
         let header = Row::new(headers.iter().enumerate().map(|(i, h)| {
@@ -177,20 +198,23 @@ impl TUI {
             Row::new(data_row).height(1)
         });
         let selected_style = Style::default().add_modifier(Modifier::UNDERLINED);
-        let table_name = database.get_current_table_name()?;
         let t = Table::new(tui_rows, constraints)
             .header(header)
-            .block(Block::default().borders(Borders::ALL).title(table_name))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(view.table_name.clone()),
+            )
             .highlight_style(selected_style)
             // .highlight_symbol(">> ")
             .bg(Color::Black);
-        let row = database.slice.selected_row;
+        let row = view.row;
         let mut table_state = TableState::default();
         table_state.select(Some(row));
         f.render_stateful_widget(t, rects[0], &mut table_state);
 
-        let a = database.header_idx;
-        let total_rows = database.count_rows().unwrap_or(0);
+        let a = view.column;
+        let total_rows = database.count_rows(&view.table_name).unwrap_or(0);
         let rowid = rows
             .get(row)
             .map(|el| el.first().unwrap().to_string())

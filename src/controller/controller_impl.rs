@@ -4,7 +4,7 @@ use crate::controller::input::{self, InputMode};
 use crate::error::{AppError, AppResult};
 use crate::io::savers;
 use crate::model::database::Database;
-use crate::model::datarow::DataTable;
+use crate::model::datarow::{DataItem, DataTable};
 use crate::navigation::Direction;
 use crate::tui::TUI;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -19,6 +19,20 @@ const POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(3000)
 pub struct Controller {
     pub(crate) database: Database,
     pub(crate) ui: UiState,
+    pub(crate) view: ViewState,
+}
+
+#[derive(Debug)]
+pub(crate) struct ViewState {
+    pub(crate) table_name: String,
+    pub(crate) column: usize,
+    pub(crate) row: usize,
+    pub(crate) row_offset: u32,
+    pub(crate) order_column: Option<String>,
+    pub(crate) ascending: bool,
+    pub(crate) headers: Vec<String>,
+    pub(crate) rows: Vec<Vec<DataItem>>,
+    pub(crate) table_before_metadata: Option<String>,
 }
 
 /// Terminal interaction state kept out of the SQLite-backed data model.
@@ -33,8 +47,24 @@ pub(crate) struct UiState {
 
 impl Controller {
     pub fn new(database: Database) -> Self {
+        let table_name = database
+            .get_table_names()
+            .ok()
+            .and_then(|names| names.into_iter().find(|n| n != "table_of_tables"))
+            .unwrap_or_default();
         Self {
             database,
+            view: ViewState {
+                table_name,
+                column: 0,
+                row: 0,
+                row_offset: 0,
+                order_column: Some("id".into()),
+                ascending: true,
+                headers: vec![],
+                rows: vec![],
+                table_before_metadata: None,
+            },
             ui: UiState {
                 input: String::new(),
                 character_index: 0,
@@ -43,6 +73,142 @@ impl Controller {
                 input_mode_state_machine: StateMachine::new(),
             },
         }
+    }
+
+    pub(crate) fn ordering(&self) -> String {
+        match &self.view.order_column {
+            Some(column) => format!(
+                r#"ORDER BY "{}" {}"#,
+                column,
+                if self.view.ascending { "ASC" } else { "DESC" }
+            ),
+            None => String::new(),
+        }
+    }
+
+    fn selected_column(&self) -> AppResult<String> {
+        self.database
+            .get_headers(&self.view.table_name)?
+            .get(self.view.column)
+            .cloned()
+            .ok_or_else(|| app_error_other!("Could not get header"))
+    }
+
+    fn move_cursor(&mut self, direction: Direction, height: u32) -> AppResult<()> {
+        match direction {
+            Direction::Left => {
+                let count = self.database.count_headers(&self.view.table_name)? as usize;
+                if count > 0 {
+                    self.view.column = (self.view.column + count - 1) % count;
+                }
+            }
+            Direction::Right => {
+                let count = self.database.count_headers(&self.view.table_name)? as usize;
+                if count > 0 {
+                    self.view.column = (self.view.column + 1) % count;
+                }
+            }
+            Direction::Up => {
+                if self.view.row == 0 && self.view.row_offset > 0 {
+                    self.view.row_offset = self.view.row_offset.saturating_sub(height);
+                    self.view.row = height.saturating_sub(1) as usize;
+                } else {
+                    self.view.row = self.view.row.saturating_sub(1);
+                }
+            }
+            Direction::Down => {
+                let count = self
+                    .database
+                    .count_rows(&self.view.table_name)
+                    .unwrap_or(u32::MAX);
+                if height > 0
+                    && self.view.row + 1 >= height as usize
+                    && self.view.row_offset + self.view.row as u32 + 1 < count
+                {
+                    self.view.row_offset = self.view.row_offset.saturating_add(height);
+                    self.view.row = 0;
+                } else if self.view.row_offset + self.view.row as u32 + 1 < count {
+                    self.view.row += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn change_table(&mut self, next: bool) -> AppResult<()> {
+        let mut names = self.database.get_table_names()?;
+        names.retain(|name| name != "table_of_tables");
+        let index = names
+            .iter()
+            .position(|name| name == &self.view.table_name)
+            .unwrap_or(0);
+        if !names.is_empty() {
+            let target = if next {
+                (index + 1) % names.len()
+            } else {
+                (index + names.len() - 1) % names.len()
+            };
+            self.view.table_name = names[target].clone();
+            self.view.column = 0;
+            self.view.row = 0;
+            self.view.row_offset = 0;
+        } else if self
+            .database
+            .get_table_names()?
+            .iter()
+            .any(|name| name == "table_of_tables")
+        {
+            self.view.table_name = "table_of_tables".into();
+            self.view.column = 0;
+            self.view.row = 0;
+            self.view.row_offset = 0;
+        }
+        self.normalize_sort_column()?;
+        Ok(())
+    }
+
+    fn normalize_sort_column(&mut self) -> AppResult<()> {
+        let headers = self.database.get_headers(&self.view.table_name)?;
+        if !self
+            .view
+            .order_column
+            .as_ref()
+            .is_some_and(|column| headers.contains(column))
+        {
+            self.view.order_column = headers.iter().find(|header| *header == "id").cloned();
+            self.view.ascending = true;
+        }
+        Ok(())
+    }
+
+    fn delete_table(&mut self) -> AppResult<()> {
+        let table = self.view.table_name.clone();
+        self.database.delete_table(&table)?;
+        self.change_table(false)
+    }
+
+    fn toggle_metadata_table(&mut self) -> AppResult<()> {
+        if self.view.table_name == "table_of_tables" {
+            let names = self.database.get_table_names()?;
+            self.view.table_name = self
+                .view
+                .table_before_metadata
+                .take()
+                .filter(|name| names.contains(name))
+                .or_else(|| names.into_iter().find(|name| name != "table_of_tables"))
+                .unwrap_or_else(|| "table_of_tables".into());
+            self.view.column = 0;
+            self.view.row = 0;
+            self.view.row_offset = 0;
+            return Ok(());
+        }
+        self.database.view_metadata_table()?;
+        self.view.table_before_metadata = Some(self.view.table_name.clone());
+        self.view.table_name = "table_of_tables".into();
+        self.view.column = 0;
+        self.view.row = 0;
+        self.view.row_offset = 0;
+        Ok(())
     }
 
     pub(crate) fn save_to_sqlite_file(&self) -> AppResult<()> {
@@ -212,21 +378,21 @@ impl Controller {
                         Command::IllegalOperation => Ok(()),
                         Command::None => Ok(()),
                         Command::Sort => self.sort(),
-                        Command::Move(direction) => self
-                            .database
-                            .move_cursor(direction, TUI::get_table_height()?),
-                        Command::NextTable => self.database.next_table(),
-                        Command::PrevTable => self.database.prev_table(),
+                        Command::Move(direction) => {
+                            self.move_cursor(direction, TUI::get_table_height()?)
+                        }
+                        Command::NextTable => self.change_table(true),
+                        Command::PrevTable => self.change_table(false),
                         Command::TextToInt => self.text_to_int(),
                         Command::IntToText => self.int_to_text(),
                         Command::DeleteColumn => self.delete_column(),
-                        Command::DeleteTable => self.database.delete_table(),
-                        Command::ToggleMetadataTable => self.database.view_metadata_table(),
+                        Command::DeleteTable => self.delete_table(),
+                        Command::ToggleMetadataTable => self.toggle_metadata_table(),
                         // Command::Join(_) => todo!(),
                     };
                     match command {
                         Command::RenameTable => {
-                            let old_table_name = self.database.get_current_table_name()?;
+                            let old_table_name = self.view.table_name.clone();
                             self.ui.character_index = old_table_name.len();
                             self.ui.input = old_table_name;
                         }
@@ -237,24 +403,18 @@ impl Controller {
                         _ => {}
                     }
 
-                    if command.requires_updating_view() {
-                        self.database.slice.has_changed();
-                    }
                     if let Err(err) = &result {
                         log::info!("Error: {:?}", err);
                     }
                     result
                 }
                 Err(result) => {
-                    self.database.slice.has_changed();
-
                     self.ui.last_command =
                         PreviousCommand::new(Command::IllegalOperation, Some(result.to_string()));
                     Ok(())
                 }
             };
             if let Err(e) = res {
-                self.database.slice.has_changed();
                 self.ui.last_command =
                     PreviousCommand::new(Command::IllegalOperation, Some(format!(": {}", e)));
             }
@@ -302,15 +462,28 @@ impl Controller {
         }
     }
     pub fn get_headers_and_rows(&mut self, limit: u32) -> AppResult<DataTable> {
-        let binding = "default table name".to_string();
-        let first_table = self.database.get_current_table_name()?;
-        self.database.get(limit, 0, first_table)
+        let ordering = self.ordering();
+        let page = self.database.get(
+            limit,
+            self.view.row_offset,
+            &self.view.table_name,
+            &ordering,
+        )?;
+        self.view.headers.clone_from(&page.0);
+        self.view.rows.clone_from(&page.1);
+        self.view.row = self.view.row.min(self.view.rows.len().saturating_sub(1));
+        Ok(page)
     }
 
     pub fn regex_filter(&mut self, inputs: Vec<String>) -> AppResult<()> {
         let pattern = inputs[0].to_owned();
-        let header = self.database.get_current_header()?;
-        self.database.regex_filter(&header, &pattern)?;
+        let header = self.selected_column()?;
+        self.view.table_name =
+            self.database
+                .regex_filter(&self.view.table_name, &header, &pattern)?;
+        self.view.column = 0;
+        self.view.row = 0;
+        self.view.row_offset = 0;
         Ok(())
     }
 
@@ -321,7 +494,7 @@ impl Controller {
         let pattern = inputs[0].to_owned();
         let regex = regex::Regex::new(&pattern)?;
         let contains_capture_pattern = regex.capture_names().len() > 1;
-        let header = self.database.get_current_header()?;
+        let header = self.selected_column()?;
 
         log::error!("TODO implement capture groups again!!!");
         if let Some(transformation) = inputs.get(1) {
@@ -333,44 +506,73 @@ impl Controller {
                 //     r"Enter transformation, e.g. '${first} ${second}' or '${1} ${2}' if un-named",
                 // )?
                 // };
-                self.database
-                    .regex_capture_group_transform(&pattern, &header, transformation)?;
+                self.database.regex_capture_group_transform(
+                    &self.view.table_name,
+                    &pattern,
+                    &header,
+                    transformation,
+                )?;
                 return Ok(());
             }
         }
         self.database
-            .regex_no_capture_group_transform(&pattern, &header)?;
+            .regex_no_capture_group_transform(&self.view.table_name, &pattern, &header)?;
         Ok(())
     }
 
     pub fn copy(&mut self) -> AppResult<()> {
-        self.database.copy()?;
+        self.database
+            .copy(&self.view.table_name, &self.selected_column()?)?;
         self.ui.last_command = PreviousCommand::new(Command::Copy, None);
         Ok(())
     }
 
     pub(crate) fn edit_cell(&mut self, inputs: Vec<String>) -> AppResult<()> {
-        let header = self.database.get_current_header()?;
-        let id = self.database.get_current_id()?;
-        let data = self.database.get_cell(id, &header)?;
+        let header = self.selected_column()?;
+        let id = self
+            .view
+            .rows
+            .get(self.view.row)
+            .and_then(|r| r.first())
+            .map(|v| v.to_string())
+            .ok_or_else(|| app_error_other!("No selected row"))?
+            .parse::<i32>()
+            .map_err(|e| app_error_other!(e.to_string()))?;
+        let data = self.database.get_cell(&self.view.table_name, id, &header)?;
         let edit_result = inputs[0].to_owned();
 
         self.database
-            .update_cell(header.as_str(), id, &edit_result)?;
+            .update_cell(&self.view.table_name, header.as_str(), id, &edit_result)?;
         Ok(())
     }
 
     pub(crate) fn sort(&mut self) -> AppResult<()> {
-        self.database.sort()
+        let header = self.selected_column()?;
+        if self.view.order_column.as_deref() == Some(&header) {
+            self.view.ascending = !self.view.ascending;
+        } else {
+            self.view.order_column = Some(header);
+            self.view.ascending = true;
+        }
+        self.view.row = 0;
+        self.view.row_offset = 0;
+        Ok(())
     }
     fn exact_search(&mut self, inputs: Vec<String>) -> AppResult<()> {
         let pattern = inputs[0].to_owned();
-        let header = self.database.get_current_header()?;
-        match self
-            .database
-            .exact_search(&header, &pattern, TUI::get_table_height()?)
-        {
-            Ok(_) => {
+        let header = self.selected_column()?;
+        let current = self.view.row_offset + self.view.row as u32;
+        match self.database.exact_search(
+            &self.view.table_name,
+            &self.ordering(),
+            current,
+            &header,
+            &pattern,
+        ) {
+            Ok(position) => {
+                let height = TUI::get_table_height()?.max(1);
+                self.view.row = (position % height) as usize;
+                self.view.row_offset = position - position % height;
                 self.ui.last_command =
                     PreviousCommand::new(Command::ExactSearch, Some("Match found".to_string()));
             }
@@ -384,23 +586,38 @@ impl Controller {
 
     fn text_to_int(&mut self) -> AppResult<()> {
         self.ui.last_command = PreviousCommand::new(Command::TextToInt, None);
-        self.database.text_to_int()
+        self.database
+            .text_to_int(&self.view.table_name, &self.selected_column()?)
     }
 
     fn int_to_text(&mut self) -> AppResult<()> {
         self.ui.last_command = PreviousCommand::new(Command::IntToText, None);
-        self.database.int_to_text()
+        self.database
+            .int_to_text(&self.view.table_name, &self.selected_column()?)
     }
 
     fn delete_column(&mut self) -> Result<(), AppError> {
-        let text = self.database.delete_column()?;
-        self.ui.last_command = PreviousCommand::new(Command::DeleteColumn, text);
+        let column = self.selected_column()?;
+        let text = self
+            .database
+            .delete_column(&self.view.table_name, &column)?;
+        if self.view.order_column.as_deref() == Some(&column) {
+            self.view.order_column = None;
+        }
+        let count = self.database.count_headers(&self.view.table_name)? as usize;
+        self.view.column = self.view.column.min(count.saturating_sub(1));
+        self.ui.last_command = PreviousCommand::new(Command::DeleteColumn, Some(text));
         Ok(())
     }
 
     fn rename_column(&mut self, inputs: Vec<String>) -> Result<(), AppError> {
         let new_column = inputs[0].to_owned();
-        self.database.rename_column(&new_column)?;
+        let old_column = self.selected_column()?;
+        self.database
+            .rename_column(&self.view.table_name, &old_column, &new_column)?;
+        if self.view.order_column.as_deref() == Some(&old_column) {
+            self.view.order_column = Some(new_column);
+        }
         self.ui.last_command = PreviousCommand::new(Command::RenameColumn, None);
         Ok(())
     }
@@ -422,18 +639,16 @@ impl Controller {
                     let filename = inputs[0].as_str();
                     let path = PathBuf::from(filename);
                     match path.extension().unwrap().to_str().unwrap() {
-                        "csv" => savers::csv(
-                            &self.database,
-                            &self.database.get_current_table_name()?,
-                            &path,
-                        ),
+                        "csv" => savers::csv(&self.database, &self.view.table_name, &path),
                         "sqlite" | "db" | "sql" | "sqlite3" => {
                             savers::sqlite(&self.database, &path)
                         }
                         _ => Err(AppError::from("Unsupported file format")),
                     }
                 }
-                Command::MathOperation => self.database.math_operation(inputs),
+                Command::MathOperation => {
+                    self.database.math_operation(&self.view.table_name, inputs)
+                }
                 // _ => {
                 //     log::error!("Command not implemented: {:?}", queued_command.command);
                 //     Err(AppError::from("Command not implemented"))
@@ -458,18 +673,15 @@ impl Controller {
                     unreachable!("This command should not be queueable!!!");
                 }
             };
-            if let Some(queued_command) = self.ui.queued_command.as_ref() {
-                if queued_command.command.requires_updating_view() {
-                    self.database.slice.has_changed();
-                }
-            }
         }
         Ok(())
     }
 
     fn rename_table(&mut self, inputs: Vec<String>) -> Result<(), AppError> {
         let new_table_name = inputs[0].to_owned();
-        self.database.rename_table(&new_table_name)?;
+        self.database
+            .rename_table(&self.view.table_name, &new_table_name)?;
+        self.view.table_name = new_table_name;
         self.ui.last_command = PreviousCommand::new(Command::RenameColumn, None);
         Ok(())
     }

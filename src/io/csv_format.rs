@@ -14,15 +14,7 @@ use crate::model::database::Database;
 
 pub(crate) fn database_from_csv(path: PathBuf, connection: Connection) -> AppResult<Database> {
     insert_csv_data_database(path, &connection)?;
-    let mut database = Database::new(connection)?;
-    let query =
-        r#"SELECT rowid FROM sqlite_master WHERE type='table' ORDER BY rowid LIMIT 1;"#.to_string();
-    let table_idx: u16 = database
-        .connection
-        .query_row(&query, [], |row| row.get(0))?;
-    database.current_table_idx = table_idx;
-
-    Ok(database)
+    Database::new(connection)
 }
 
 fn value_query(record: &StringRecord) -> String {
@@ -232,11 +224,11 @@ mod tests {
 
     #[test]
     fn write_db_to_out_test() {
-        let mut database1 = Database::try_from(vec![PathBuf::from("assets/data.sqlite")]).unwrap();
+        let database1 = Database::try_from(vec![PathBuf::from("assets/data.sqlite")]).unwrap();
         sqlite_to_out(&database1.connection, PathBuf::from("assets/out-data.csv")).unwrap();
-        let mut database2 = Database::try_from(vec![PathBuf::from("assets/out-data.csv")]).unwrap();
-        let first_row_db1 = database1.get(1, 0, "data".to_string()).unwrap().1;
-        let first_row_db2 = database2.get(1, 0, "out-data".to_string()).unwrap().1;
+        let database2 = Database::try_from(vec![PathBuf::from("assets/out-data.csv")]).unwrap();
+        let first_row_db1 = database1.get(1, 0, "data", "").unwrap().1;
+        let first_row_db2 = database2.get(1, 0, "out-data", "").unwrap().1;
 
         for (i, item) in first_row_db1.iter().enumerate() {
             assert_eq!(item, first_row_db2.get(i).unwrap());
