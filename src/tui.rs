@@ -30,6 +30,7 @@ fn data_item_cell(item: &DataItem) -> Cell<'static> {
         DataItem::Text(value) => Cell::from(value.clone()),
         DataItem::Integer(value) => Cell::from(value.to_string()),
         DataItem::Float(value) => Cell::from(value.to_string()),
+        DataItem::Blob(value) => Cell::from(DataItem::Blob(value.clone()).to_string()),
         DataItem::Null => Cell::from("NULL"),
     }
 }
@@ -54,6 +55,20 @@ fn column_widths(headers: &[String], rows: &[Vec<DataItem>]) -> Vec<u16> {
     }
     widths
 }
+
+fn table_height_for(terminal_height: u16) -> u32 {
+    u32::from(terminal_height.saturating_sub(4))
+}
+
+fn trim_external_editor_newline(editable: String) -> String {
+    if let Some(content) = editable.strip_suffix("\r\n") {
+        content.to_owned()
+    } else if let Some(content) = editable.strip_suffix('\n') {
+        content.to_owned()
+    } else {
+        editable
+    }
+}
 use crate::{controller::input::InputMode, model::datarow::DataItem};
 use crate::{
     error::{AppError, AppResult},
@@ -73,8 +88,7 @@ impl TUI {
         Self { terminal }
     }
     pub fn get_table_height() -> AppResult<u32> {
-        let height = (crossterm::terminal::size()?.1 - 4) as u32;
-        Ok(height)
+        Ok(table_height_for(crossterm::terminal::size()?.1))
     }
 
     pub fn shutdown(&mut self) -> Result<(), AppError> {
@@ -128,7 +142,7 @@ impl TUI {
 
         let mut editable = String::new();
         std::fs::File::open(file_path)?.read_to_string(&mut editable)?;
-        let trimmed = editable.trim_end_matches('\n').to_string();
+        let trimmed = trim_external_editor_newline(editable);
         Ok(trimmed)
     }
 
@@ -271,6 +285,21 @@ impl TUI {
             disable_raw_mode().unwrap();
             original_hook(panic_info);
         }));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{table_height_for, trim_external_editor_newline};
+
+    #[test]
+    fn short_terminal_has_zero_table_height() {
+        assert_eq!(table_height_for(3), 0);
+    }
+
+    #[test]
+    fn external_editor_removes_only_the_final_newline() {
+        assert_eq!(trim_external_editor_newline("first\n\n".into()), "first\n");
     }
 }
 

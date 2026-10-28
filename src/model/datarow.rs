@@ -20,6 +20,7 @@ pub enum DataItem {
     Text(String),
     Integer(i64),
     Float(f64),
+    Blob(Vec<u8>),
     Null,
 }
 impl DataItem {
@@ -28,6 +29,7 @@ impl DataItem {
             DataItem::Text(s) => s.len(),
             DataItem::Integer(x) => x.to_string().len(),
             DataItem::Float(x) => x.to_string().len(),
+            DataItem::Blob(bytes) => bytes.len() * 2,
             DataItem::Null => 4,
         }
     }
@@ -44,6 +46,10 @@ impl From<DataItem> for String {
             DataItem::Text(text) => text,
             DataItem::Integer(num) => num.to_string(),
             DataItem::Float(num) => num.to_string(),
+            DataItem::Blob(bytes) => bytes
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
             DataItem::Null => String::from(""),
         }
     }
@@ -56,7 +62,19 @@ impl<'a> From<ValueRef<'a>> for DataItem {
             ValueRef::Integer(n) => DataItem::Integer(n),
             ValueRef::Real(float) => DataItem::Float(float),
             ValueRef::Text(s) => DataItem::Text(String::from_utf8_lossy(s).to_string()),
-            ValueRef::Blob(_) => unimplemented!("blob"),
+            ValueRef::Blob(bytes) => DataItem::Blob(bytes.to_vec()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn blob_values_are_supported() {
+        let item = DataItem::from(ValueRef::Blob(&[0x00, 0xab, 0xff]));
+        assert_eq!(item, DataItem::Blob(vec![0x00, 0xab, 0xff]));
+        assert_eq!(item.to_string(), "00abff");
     }
 }

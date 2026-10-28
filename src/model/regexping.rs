@@ -1,5 +1,13 @@
 use crate::error::AppResult;
 
+fn quote_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn quote_literal(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
 pub(crate) fn regex_filter_query(
     header: &str,
     pattern: &str,
@@ -8,10 +16,17 @@ pub(crate) fn regex_filter_query(
 ) -> AppResult<(String, String)> {
     // create new table with filter applied using create table as sqlite statement.
     regex::Regex::new(pattern)?;
-    let select_query =
-        format!(r#"SELECT * FROM "{old_table_name}" WHERE "{header}" REGEXP '{pattern}'"#);
+    let select_query = format!(
+        "SELECT * FROM {} WHERE {} REGEXP {}",
+        quote_identifier(old_table_name),
+        quote_identifier(header),
+        quote_literal(pattern)
+    );
 
-    let create_table_query = format!(r#"CREATE TABLE "{new_table_name}" AS {select_query};"#);
+    let create_table_query = format!(
+        "CREATE TABLE {} AS {select_query};",
+        quote_identifier(new_table_name)
+    );
     Ok((create_table_query, new_table_name.to_owned()))
 }
 
@@ -23,9 +38,18 @@ pub(crate) fn regex_with_capture_group_transform_query(
     table_name: &str,
 ) -> AppResult<String> {
     regex::Regex::new(pattern)?;
-    let mut queries = format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{new_header}" TEXT;"#);
+    let mut queries = format!(
+        "ALTER TABLE {} ADD COLUMN {} TEXT;",
+        quote_identifier(table_name),
+        quote_identifier(new_header)
+    );
     let update_query = format!(
-        r#"UPDATE "{table_name}" SET "{new_header}" = regexp_transform_with_capture_group('{pattern}', "{old_header}", '{transformation}');"#
+        "UPDATE {} SET {} = regexp_transform_with_capture_group({}, {}, {});",
+        quote_identifier(table_name),
+        quote_identifier(new_header),
+        quote_literal(pattern),
+        quote_identifier(old_header),
+        quote_literal(transformation)
     );
     queries.push_str(&update_query);
     Ok(queries)
@@ -39,9 +63,17 @@ pub(crate) fn regex_no_capture_group_transform_query(
 ) -> AppResult<String> {
     regex::Regex::new(pattern)?;
     // for each row in the table, run fun on the value of column name and insert the result into the new column
-    let mut queries = format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{new_header}" TEXT;"#);
+    let mut queries = format!(
+        "ALTER TABLE {} ADD COLUMN {} TEXT;",
+        quote_identifier(table_name),
+        quote_identifier(new_header)
+    );
     let update_query = format!(
-        r#"UPDATE "{table_name}" SET "{new_header}" = regexp_transform_no_capture_group('{pattern}', "{old_header}");"#
+        "UPDATE {} SET {} = regexp_transform_no_capture_group({}, {});",
+        quote_identifier(table_name),
+        quote_identifier(new_header),
+        quote_literal(pattern),
+        quote_identifier(old_header)
     );
     queries.push_str(&update_query);
     Ok(queries)
@@ -70,7 +102,9 @@ pub mod custom_functions {
             FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
             move |ctx| {
                 let regex_str = ctx.get::<String>(0)?;
-                let text = ctx.get::<String>(1)?;
+                let Some(text) = ctx.get::<Option<String>>(1)? else {
+                    return Ok(false);
+                };
                 let mut cached_filter_regex = cached_filter_regex.lock().unwrap();
                 if cached_filter_regex.as_str() != regex_str {
                     *cached_filter_regex = Regex::new(&regex_str).unwrap();
@@ -87,7 +121,9 @@ pub mod custom_functions {
             FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
             move |ctx| {
                 let regex_str = ctx.get::<String>(0)?;
-                let text = ctx.get::<String>(1)?;
+                let Some(text) = ctx.get::<Option<String>>(1)? else {
+                    return Ok(None);
+                };
                 let substitution_pattern = ctx.get::<String>(2)?;
                 let mut cached_with_capture_regex = cached_with_capture_regex.lock().unwrap();
                 if cached_with_capture_regex.as_str() != regex_str {
@@ -112,7 +148,9 @@ pub mod custom_functions {
             FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
             move |ctx| {
                 let regex_str = ctx.get::<String>(0)?;
-                let text = ctx.get::<String>(1)?;
+                let Some(text) = ctx.get::<Option<String>>(1)? else {
+                    return Ok(None);
+                };
                 let mut cached_no_capture_regex = cached_no_capture_regex.lock().unwrap();
                 if cached_no_capture_regex.as_str() != regex_str {
                     *cached_no_capture_regex = Regex::new(&regex_str).unwrap();

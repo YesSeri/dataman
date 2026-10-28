@@ -57,6 +57,8 @@ pub enum Command {
     RenameTable,
     ToggleMetadataTable,
     RenameColumn,
+    Undo,
+    Redo,
 }
 
 impl Command {
@@ -79,6 +81,7 @@ impl Command {
             | Command::DeleteTable
             | Command::MathOperation
             | Command::RegexFilter => true,
+            Command::Undo | Command::Redo => true,
             Command::None
             | Command::IllegalOperation
             | Command::Save
@@ -110,6 +113,8 @@ impl Command {
             Command::RenameTable => "Rename Table".to_string(),
             Command::RenameColumn => "Rename Column".to_string(),
             Command::ToggleMetadataTable => "Showing table of tables(metadata)".to_string(),
+            Command::Undo => "Undo".to_string(),
+            Command::Redo => "Redo".to_string(),
         }
     }
 }
@@ -141,6 +146,8 @@ impl From<KeyEvent> for Command {
             "rename_table" => Command::RenameTable,
             "rename_column" => Command::RenameColumn,
             "metadata" => Command::ToggleMetadataTable,
+            "undo" => Command::Undo,
+            "redo" => Command::Redo,
             "move_left" => Command::Move(Direction::Left),
             "move_right" => Command::Move(Direction::Right),
             "move_up" => Command::Move(Direction::Up),
@@ -194,6 +201,14 @@ mod keybinding_tests {
         assert_eq!(
             Command::from(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)),
             Command::NextTable
+        );
+        assert_eq!(
+            Command::from(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL)),
+            Command::Undo
+        );
+        assert_eq!(
+            Command::from(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL)),
+            Command::Redo
         );
     }
 }

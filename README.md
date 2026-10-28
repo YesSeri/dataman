@@ -33,6 +33,8 @@ The following are some of the more commonly used key commands in the TUI applica
 | `Right/Left/Up/Down` | Move cursor         |
 | `Ctrl + c`           | Quit                |
 | `Ctrl + s`           | Save                |
+| `Ctrl + z`           | Undo                |
+| `Ctrl + y`           | Redo                |
 | `M`                  | Show Metadata Table |
 
 ### Data Transformation
@@ -67,3 +69,6 @@ Creates new column unless otherwise specified.
 1. **Simple transformation**: Use key commands to perform operations such as sorting, filtering, and running SQL queries.
 
 2. **Input transformation**: Use the `t` key command to transform data using regex. For example, to extract the first word from a column, use the following regex: `^(\w+)`. Logic operations can also be performed using the `m` key command, e.g., `col1 + col2`, or `col1 > 20`. Combining logic operations with regex filter is powerful. `$` `f` `1`, allows you to filter for logic expressions. We go first to the column we have created from our logic operation then we convert it to text and then only keep the strings that contain the text "1". User friendlyness will improve with time.
+
+Undo and redo are available for built-in data operations during the current session. SQL commands are not undoable and clear the current undo history.
+Names beginning with `__dataman_undo_` are reserved for temporary undo data and are not supported for imported tables or columns.

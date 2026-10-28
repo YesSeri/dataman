@@ -3,6 +3,7 @@ use std::fmt;
 use rusqlite::{params, Connection};
 
 use crate::error::AppResult;
+use crate::model::database::INTERNAL_PREFIX;
 
 pub(crate) fn create_table_of_tables(conn: &Connection) -> AppResult<()> {
     conn.execute("DROP TABLE IF EXISTS table_of_tables;", [])?;
@@ -20,11 +21,18 @@ pub(crate) fn create_table_of_tables(conn: &Connection) -> AppResult<()> {
 }
 
 fn get_tables(conn: &Connection) -> AppResult<Vec<String>> {
-    let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name != 'table_of_tables'")?;
+    let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type='table'")?;
     let table_names = stmt
         .query_map([], |row| row.get(0))?
         .collect::<Result<Vec<String>, rusqlite::Error>>()?;
-    Ok(table_names)
+    Ok(table_names
+        .into_iter()
+        .filter(|name: &String| {
+            !name.starts_with("sqlite_")
+                && !name.starts_with(INTERNAL_PREFIX)
+                && name != "table_of_tables"
+        })
+        .collect())
 }
 
 fn get_table_row_count(conn: &Connection, table_name: &str) -> AppResult<i64> {
@@ -35,7 +43,11 @@ fn get_table_row_count(conn: &Connection, table_name: &str) -> AppResult<i64> {
 
 fn get_table_col_count(conn: &Connection, table_name: &str) -> AppResult<usize> {
     let mut stmt = conn.prepare(&format!(r#"PRAGMA table_info("{}")"#, table_name))?;
-    let col_count = stmt.query_map([], |_row| Ok(()))?.count();
+    let col_count = stmt
+        .query_map([], |row| row.get::<_, String>(1))?
+        .filter_map(Result::ok)
+        .filter(|name| !name.starts_with(INTERNAL_PREFIX))
+        .count();
     Ok(col_count)
 }
 
@@ -62,17 +74,19 @@ fn get_table_kind_col_count(
     let mut stmt = conn.prepare(&format!(r#"PRAGMA table_info("{}")"#, table_name))?;
     let col_count = stmt
         .query_map([], |row| {
+            let name: String = row.get(1)?;
             let type_name: String = row.get(2)?;
-            Ok(type_name)
+            Ok((name, type_name))
         })?
-        .filter(|x| {
-            log::info!("x: {:?}", x);
-            x.as_ref() == Ok(&kind.to_string())
+        .filter_map(Result::ok)
+        .filter(|(name, type_name)| {
+            !name.starts_with(INTERNAL_PREFIX) && type_name == &kind.to_string()
         })
         .count();
     Ok(col_count)
 }
 pub(crate) fn populate_table_of_tables(conn: &Connection) -> AppResult<()> {
+    conn.execute("DELETE FROM table_of_tables", [])?;
     let tables = get_tables(conn)?;
     for table in tables {
         let row_count = get_table_row_count(conn, &table)?;

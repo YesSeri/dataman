@@ -10,7 +10,11 @@ use crate::app_error_other;
 use crate::error::{AppError, AppResult};
 use crate::model::datarow::DataItem;
 
-use crate::model::database::Database;
+use crate::model::database::{Database, INTERNAL_PREFIX};
+
+fn quote_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
 
 pub(crate) fn database_from_csv(path: PathBuf, connection: Connection) -> AppResult<Database> {
     insert_csv_data_database(path, &connection)?;
@@ -22,7 +26,7 @@ fn value_query(record: &StringRecord) -> String {
         .iter()
         .map(|s| {
             if s.is_empty() {
-                "NULL".to_string()
+                "''".to_string()
             } else {
                 format!("'{}'", s.replace('\'', "''"))
             }
@@ -43,23 +47,28 @@ pub(crate) fn create_table_query(
     table_name: &str,
 ) -> Result<String, Box<dyn Error>> {
     let headers = csv.headers()?;
-    let columns: String = headers
-        .iter()
-        .map(|header| format!(r#""{}""#, header))
-        .collect::<Vec<String>>()
-        .join(", ");
-
+    if table_name.starts_with(INTERNAL_PREFIX)
+        || headers
+            .iter()
+            .any(|header| header.starts_with(INTERNAL_PREFIX))
+    {
+        return Err(
+            "file names and CSV headers using Dataman's reserved undo prefix are not supported"
+                .into(),
+        );
+    }
     let headers_string: String = headers
         .iter()
-        .map(|header| format!(r#""{}" TEXT"#, header))
+        .map(|header| format!("{} TEXT", quote_identifier(header)))
         .collect::<Vec<String>>()
         .join(",");
     log::info!("Creating table with headers: {}", headers_string);
     let query = format!(
-        r#"CREATE TABLE IF NOT EXISTS '{}'
+        r#"CREATE TABLE IF NOT EXISTS {}
 	(id INTEGER PRIMARY KEY, {})
 	;"#,
-        table_name, headers_string
+        quote_identifier(table_name),
+        headers_string
     );
     log::info!("Query: {}", query);
     Ok(query)
@@ -72,7 +81,7 @@ pub(crate) fn get_headers_for_query(
     let headers = csv.headers()?;
     let columns: String = headers
         .iter()
-        .map(|header| format!("'{}'", header))
+        .map(|header| quote_identifier(header))
         .collect::<Vec<String>>()
         .join(", ");
     Ok(columns)
@@ -83,10 +92,28 @@ pub(crate) fn sqlite_to_out(connection: &Connection, path: PathBuf) -> AppResult
         .prepare(r#"SELECT "name" FROM sqlite_master WHERE type='table' AND name != 'table_of_tables' ORDER BY "name";"#)?;
     let tables: Vec<String> = stmt
         .query_map([], |row| row.get(0))?
-        .collect::<Result<_, _>>()?;
+        .collect::<Result<Vec<String>, _>>()?
+        .into_iter()
+        .filter(|table| !table.starts_with(INTERNAL_PREFIX))
+        .collect();
     let mut wtr = csv::Writer::from_path(path)?;
     for table in tables {
-        let query = &format!(r#"SELECT * FROM "{}";"#, table);
+        let mut info = connection.prepare(&format!(
+            "PRAGMA table_info(\"{}\")",
+            table.replace('"', "\"\"")
+        ))?;
+        let columns = info
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|column| !column.starts_with(INTERNAL_PREFIX))
+            .collect::<Vec<_>>();
+        let select = columns
+            .iter()
+            .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let query = &format!("SELECT {select} FROM \"{}\";", table.replace('"', "\"\""));
         let mut stmt = connection.prepare(query)?;
         let headers = stmt
             .column_names()
@@ -98,7 +125,6 @@ pub(crate) fn sqlite_to_out(connection: &Connection, path: PathBuf) -> AppResult
 
             for i in 0..headers.len() {
                 let header = headers.get(i).unwrap();
-                dbg!(header);
                 if header == "id" {
                     continue;
                 }
@@ -136,7 +162,8 @@ pub(crate) fn insert_csv_data_database(
         Database::get_table_name(path).ok_or(app_error_other!("could not get table name."))?;
     let table_names = [table_name.to_string()];
     let mut queries = String::new();
-    let query = create_table_query(&mut csv, &table_name).unwrap();
+    let query = create_table_query(&mut csv, &table_name)
+        .map_err(|error| app_error_other!(error.to_string()))?;
     queries.push_str(&query);
     connection.execute_batch(&queries)?;
     queries.clear();
@@ -171,8 +198,8 @@ fn batch_exec_and_clear(
 ) -> AppResult<()> {
     queries.clear();
     *queries = format!(
-        r#"INSERT INTO '{}' ({}) VALUES {};"#,
-        table_name,
+        r#"INSERT INTO {} ({}) VALUES {};"#,
+        quote_identifier(table_name),
         columns,
         items.join(",\n")
     );
@@ -191,9 +218,26 @@ pub(crate) fn save_to_csv_file(
     table_name: &str,
     save_file: &PathBuf,
 ) -> AppResult<()> {
-    let query = &format!(r#"SELECT * FROM "{}";"#, table_name);
+    let mut info = connection.prepare(&format!(
+        "PRAGMA table_info(\"{}\")",
+        table_name.replace('"', "\"\"")
+    ))?;
+    let headers = info
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<Result<Vec<_>, _>>()?
+        .into_iter()
+        .filter(|header| !header.starts_with(INTERNAL_PREFIX))
+        .collect::<Vec<_>>();
+    let select = headers
+        .iter()
+        .map(|header| format!("\"{}\"", header.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let query = &format!(
+        "SELECT {select} FROM \"{}\";",
+        table_name.replace('"', "\"\"")
+    );
     let mut stmt = connection.prepare(query).unwrap();
-    let headers: Vec<String> = stmt.column_names().iter().map(|s| s.to_string()).collect();
 
     // Collect all rows into a vector to avoid borrowing issues
     let rows: Vec<Vec<DataItem>> = stmt
@@ -223,6 +267,26 @@ mod tests {
     use std::{assert_eq, println};
 
     #[test]
+    fn empty_csv_fields_are_preserved_as_empty_text() {
+        let mut reader = csv::ReaderBuilder::new().from_reader(b"name\n\"\"\n".as_slice());
+        let record = reader.records().next().unwrap().unwrap();
+        assert_eq!(value_query(&record), "('')");
+    }
+
+    #[test]
+    fn csv_headers_with_quotes_are_imported_as_identifiers() {
+        let table_name = format!("dataman-quoted-header-{}", std::process::id());
+        let path = std::env::temp_dir().join(format!("{table_name}.csv"));
+        std::fs::write(&path, b"\"name \"\"quoted\"\"\"\nvalue\n").unwrap();
+        let database = Database::try_from(vec![path.clone()]).unwrap();
+        assert_eq!(
+            database.get_headers(&table_name).unwrap(),
+            vec!["id", "name \"quoted\""]
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn write_db_to_out_test() {
         let database1 = Database::try_from(vec![PathBuf::from("assets/data.sqlite")]).unwrap();
         sqlite_to_out(&database1.connection, PathBuf::from("assets/out-data.csv")).unwrap();
@@ -230,8 +294,16 @@ mod tests {
         let first_row_db1 = database1.get(1, 0, "data", "").unwrap().1;
         let first_row_db2 = database2.get(1, 0, "out-data", "").unwrap().1;
 
-        for (i, item) in first_row_db1.iter().enumerate() {
-            assert_eq!(item, first_row_db2.get(i).unwrap());
+        for (source_row, exported_row) in first_row_db1.iter().zip(&first_row_db2) {
+            for (source_item, exported_item) in source_row.iter().zip(exported_row) {
+                // CSV's empty field representation cannot distinguish SQL NULL
+                // from empty text, so the importer reads it as empty text.
+                if source_item == &DataItem::Null {
+                    assert_eq!(exported_item, &DataItem::Text(String::new()));
+                } else {
+                    assert_eq!(source_item, exported_item);
+                }
+            }
         }
     }
 }

@@ -2,6 +2,8 @@
 [bindings]
 "ctrl+c" = "quit"
 "ctrl+s" = "save"
+"ctrl+z" = "undo"
+"ctrl+y" = "redo"
 "a" = "save"
 "c" = "copy"
 "t" = "regex_transform"

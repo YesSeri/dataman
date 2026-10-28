@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::time;
 
-use rusqlite::{backup, params, Connection, Statement};
+use rusqlite::{backup, params, types::Value, Connection, Statement};
 
 use crate::error::{AppError, AppResult};
 use crate::model::datarow::DataItem;
@@ -11,6 +11,52 @@ use super::metadata::{create_table_of_tables, populate_table_of_tables};
 use super::regexping;
 use super::sql_queries;
 
+pub(crate) const INTERNAL_PREFIX: &str = "__dataman_undo_";
+
+fn quote_identifier(value: &str) -> String {
+    format!("\"{}\"", value.replace('"', "\"\""))
+}
+
+fn data_item_value(value: &DataItem) -> Value {
+    match value {
+        DataItem::Text(value) => Value::Text(value.clone()),
+        DataItem::Integer(value) => Value::Integer(*value),
+        DataItem::Float(value) => Value::Real(*value),
+        DataItem::Blob(value) => Value::Blob(value.clone()),
+        DataItem::Null => Value::Null,
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum UndoRecord {
+    CellEdit {
+        table: String,
+        column: String,
+        id: i32,
+        before: DataItem,
+        after: DataItem,
+        is_after: bool,
+    },
+    RenameTable {
+        before: String,
+        after: String,
+        is_after: bool,
+    },
+    RenameColumn {
+        table: String,
+        before: String,
+        after: String,
+        is_after: bool,
+    },
+    Visibility {
+        table: Option<String>,
+        visible_name: String,
+        hidden_name: String,
+        is_visible: bool,
+    },
+    ViewChange,
+}
+
 #[derive(Debug)]
 pub struct Database {
     pub(crate) connection: Connection,
@@ -18,6 +64,7 @@ pub struct Database {
 
 impl Database {
     pub fn new(connection: Connection) -> AppResult<Self> {
+        Self::purge_internal_artifacts_from(&connection)?;
         create_table_of_tables(&connection)?;
         if let Err(err) = regexping::custom_functions::add_custom_functions(&connection) {
             log::info!("Error adding custom functions, e.g. REGEXP: {}", err);
@@ -30,11 +77,15 @@ impl Database {
         let mut stmt = self.connection.prepare("PRAGMA page_count")?;
         let page_count: i32 = stmt.query_row([], |row| row.get(0)).unwrap_or(i32::MAX);
 
-        let mut dst = Connection::open(dst)?;
+        let dst_path = dst.as_ref();
+        let mut dst = Connection::open(dst_path)?;
         let backup = backup::Backup::new(&self.connection, &mut dst)?;
         backup
             .run_to_completion(page_count, time::Duration::from_millis(250), None)
-            .map_err(AppError::from)
+            .map_err(AppError::from)?;
+        drop(backup);
+        drop(dst);
+        Self::purge_internal_artifacts(dst_path)
     }
 
     pub fn get(
@@ -44,14 +95,23 @@ impl Database {
         table_name: &str,
         ordering: &str,
     ) -> AppResult<DataTable> {
+        let headers = self.get_headers(table_name)?;
+        let columns = headers
+            .iter()
+            .map(|h| quote_identifier(h))
+            .collect::<Vec<_>>()
+            .join(", ");
         let query = format!(
-            r#"SELECT * FROM "{}" {} LIMIT {} OFFSET {};"#,
-            table_name, ordering, limit, offset
+            "SELECT {columns} FROM {} {} LIMIT {} OFFSET {};",
+            quote_identifier(table_name),
+            ordering,
+            limit,
+            offset
         );
 
         let (headers, data_rows) = {
             let mut data_rows = vec![];
-            let mut stmt = self.prepare(&query).unwrap();
+            let mut stmt = self.prepare(&query)?;
             let headers: Vec<String> = stmt
                 .column_names()
                 .into_iter()
@@ -81,14 +141,229 @@ impl Database {
             .ok()
     }
     pub fn get_cell(&self, table_name: &str, id: i32, header: &str) -> AppResult<String> {
-        let query = format!(r#"SELECT "{}" FROM "{}" WHERE id = ?;"#, header, table_name);
-        let mut stmt = self.prepare(&query)?;
-        log::info!("id: {}", id);
-        let mut rows = stmt.query(params![id])?;
-        let row = rows.next()?.unwrap();
-        let cell = row.get(0)?;
+        Ok(self.get_cell_item(table_name, id, header)?.to_string())
+    }
 
-        Ok(cell)
+    pub(crate) fn get_cell_item(
+        &self,
+        table_name: &str,
+        id: i32,
+        header: &str,
+    ) -> AppResult<DataItem> {
+        let query = format!(
+            "SELECT {} FROM {} WHERE id = ?;",
+            quote_identifier(header),
+            quote_identifier(table_name)
+        );
+        let mut stmt = self.prepare(&query)?;
+        let mut rows = stmt.query(params![id])?;
+        let row = rows
+            .next()?
+            .ok_or_else(|| AppError::from("Cell row not found"))?;
+        Ok(DataItem::from(row.get_ref(0)?))
+    }
+
+    pub(crate) fn toggle_history_record(&self, record: &mut UndoRecord) -> AppResult<()> {
+        match record {
+            UndoRecord::CellEdit {
+                table,
+                column,
+                id,
+                before,
+                after,
+                is_after,
+            } => {
+                let value = if *is_after { before } else { after };
+                self.update_cell_value(table, column, *id, value)?;
+                *is_after = !*is_after;
+            }
+            UndoRecord::RenameTable {
+                before,
+                after,
+                is_after,
+            } => {
+                let (from, to) = if *is_after {
+                    (after, before)
+                } else {
+                    (before, after)
+                };
+                self.rename_table(from, to)?;
+                *is_after = !*is_after;
+            }
+            UndoRecord::RenameColumn {
+                table,
+                before,
+                after,
+                is_after,
+            } => {
+                let (from, to) = if *is_after {
+                    (after, before)
+                } else {
+                    (before, after)
+                };
+                self.rename_column(table, from, to)?;
+                *is_after = !*is_after;
+            }
+            UndoRecord::Visibility {
+                table,
+                visible_name,
+                hidden_name,
+                is_visible,
+            } => {
+                let (from, to) = if *is_visible {
+                    (visible_name, hidden_name)
+                } else {
+                    (hidden_name, visible_name)
+                };
+                match table {
+                    Some(table) => self.rename_column(table, from, to)?,
+                    None => self.rename_table(from, to)?,
+                }
+                *is_visible = !*is_visible;
+            }
+            UndoRecord::ViewChange => {}
+        }
+        Ok(())
+    }
+
+    pub(crate) fn internal_column_name(&self, _table: &str) -> AppResult<String> {
+        let tables = self.raw_table_names()?;
+        let mut headers = Vec::new();
+        for table in tables {
+            headers.extend(self.raw_headers(&table)?);
+        }
+        let mut suffix = 0;
+        loop {
+            let candidate = format!("{INTERNAL_PREFIX}column_{suffix}");
+            if !headers.contains(&candidate) {
+                return Ok(candidate);
+            }
+            suffix += 1;
+        }
+    }
+
+    pub(crate) fn internal_table_name(&self) -> AppResult<String> {
+        let names = self.raw_table_names()?;
+        let mut suffix = 0;
+        loop {
+            let candidate = format!("{INTERNAL_PREFIX}table_{suffix}");
+            if !names.contains(&candidate) {
+                return Ok(candidate);
+            }
+            suffix += 1;
+        }
+    }
+
+    pub(crate) fn discard_hidden_record(&self, record: &UndoRecord) -> AppResult<()> {
+        if let UndoRecord::Visibility {
+            table,
+            hidden_name,
+            is_visible: false,
+            ..
+        } = record
+        {
+            match table {
+                Some(_) => {
+                    // A table containing this hidden column may itself be hidden by a later delete.
+                    // Internal column names are globally unique, so find it wherever it currently lives.
+                    for table in self.raw_table_names()? {
+                        if self.raw_headers(&table)?.contains(hidden_name) {
+                            self.execute_batch(&format!(
+                                "ALTER TABLE {} DROP COLUMN {};",
+                                quote_identifier(&table),
+                                quote_identifier(hidden_name)
+                            ))?;
+                            break;
+                        }
+                    }
+                }
+                None => self.execute_batch(&format!(
+                    "DROP TABLE IF EXISTS {};",
+                    quote_identifier(hidden_name)
+                ))?,
+            }
+        }
+        Ok(())
+    }
+
+    fn update_cell_value(
+        &self,
+        table: &str,
+        column: &str,
+        id: i32,
+        value: &DataItem,
+    ) -> AppResult<()> {
+        let sql = format!(
+            "UPDATE {} SET {} = ? WHERE id = ?;",
+            quote_identifier(table),
+            quote_identifier(column)
+        );
+        self.connection
+            .execute(&sql, params![data_item_value(value), id])?;
+        Ok(())
+    }
+
+    fn raw_table_names(&self) -> AppResult<Vec<String>> {
+        let mut stmt = self
+            .connection
+            .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY rowid")?;
+        let names = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        Ok(names)
+    }
+
+    fn raw_headers(&self, table: &str) -> AppResult<Vec<String>> {
+        let mut stmt = self
+            .connection
+            .prepare(&format!("PRAGMA table_info({})", quote_identifier(table)))?;
+        let headers = stmt
+            .query_map([], |row| row.get(1))?
+            .collect::<Result<_, _>>()?;
+        Ok(headers)
+    }
+
+    fn purge_internal_artifacts<P: AsRef<Path>>(path: P) -> AppResult<()> {
+        let conn = Connection::open(path)?;
+        Self::purge_internal_artifacts_from(&conn)
+    }
+
+    fn purge_internal_artifacts_from(conn: &Connection) -> AppResult<()> {
+        let tables = {
+            let mut stmt = conn.prepare("SELECT name FROM sqlite_master WHERE type='table'")?;
+            let values = stmt
+                .query_map([], |row| row.get::<_, String>(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+            values
+        };
+        for table in tables {
+            if table.starts_with(INTERNAL_PREFIX) {
+                conn.execute(&format!("DROP TABLE {}", quote_identifier(&table)), [])?;
+                continue;
+            }
+            let columns = {
+                let mut stmt =
+                    conn.prepare(&format!("PRAGMA table_info({})", quote_identifier(&table)))?;
+                let values = stmt
+                    .query_map([], |row| row.get::<_, String>(1))?
+                    .collect::<Result<Vec<_>, _>>()?;
+                values
+            };
+            for column in columns
+                .into_iter()
+                .filter(|column| column.starts_with(INTERNAL_PREFIX))
+            {
+                conn.execute(
+                    &format!(
+                        "ALTER TABLE {} DROP COLUMN {}",
+                        quote_identifier(&table),
+                        quote_identifier(&column)
+                    ),
+                    [],
+                )?;
+            }
+        }
+        Ok(())
     }
     fn prepare(&self, sql: &str) -> rusqlite::Result<Statement<'_>> {
         log::info!("{sql}");
@@ -132,21 +407,38 @@ impl Database {
     {
         // create a new column in the table. The new value for each row is the value string value of column name after running fun function on it.
         // for each row in the table, run fun on the value of column name and insert the result into the new column
-        let query = format!(r#"SELECT "id", "{old_column_name}" FROM "{table_name}""#);
+        let query = format!(
+            "SELECT {} , {} FROM {}",
+            quote_identifier("id"),
+            quote_identifier(old_column_name),
+            quote_identifier(table_name)
+        );
         let mut binding = self.prepare(&query)?;
         let mut rows = binding.query([])?;
-        let create_column_query =
-            format!(r#"ALTER TABLE "{table_name}" ADD COLUMN '{new_column_name}' TEXT;"#);
-        dbg!(&create_column_query);
-        // return Ok(());
+        let create_column_query = format!(
+            "ALTER TABLE {} ADD COLUMN {} TEXT;",
+            quote_identifier(table_name),
+            quote_identifier(new_column_name)
+        );
         let mut transaction = String::new();
         transaction.push_str(create_column_query.as_ref());
         while let Some(row) = rows.next()? {
             let id: i32 = row.get(0)?;
-            let value: String = row.get(1)?;
-            let derived_value = fun(value).unwrap_or("NULL".to_string()).replace('\'', "''");
+            let value = match DataItem::from(row.get_ref(1)?) {
+                DataItem::Null => None,
+                value => Some(value.to_string()),
+            };
+            let derived_value = value
+                .and_then(|value| fun(value))
+                .map(|value| format!("'{}'", value.replace('\'', "''")))
+                .unwrap_or_else(|| "NULL".to_owned());
             let update_query = format!(
-                r#"UPDATE "{table_name}" SET "{new_column_name}" = '{derived_value}' WHERE id = '{id}';"#,
+                "UPDATE {} SET {} = {} WHERE {} = {};",
+                quote_identifier(table_name),
+                quote_identifier(new_column_name),
+                derived_value,
+                quote_identifier("id"),
+                id
             );
             transaction.push_str(&update_query);
         }
@@ -161,7 +453,9 @@ impl Database {
         let mut table_names = Vec::new();
         while let Some(row) = rows.next()? {
             let name: String = row.get(0)?;
-            table_names.push(name);
+            if !name.starts_with(INTERNAL_PREFIX) && !name.starts_with("sqlite_") {
+                table_names.push(name);
+            }
         }
         Ok(table_names)
     }
@@ -294,6 +588,7 @@ impl Database {
         let column_names: Vec<String> = stmt
             .query_map([], |row| row.get(1))?
             .map(|result| result.expect("Failed to retrieve column name"))
+            .filter(|name: &String| !name.starts_with(INTERNAL_PREFIX))
             .collect();
         Ok(column_names)
     }
@@ -308,6 +603,9 @@ impl Database {
         id: i32,
         content: &str,
     ) -> AppResult<()> {
+        if header == "id" {
+            return Err(AppError::from("The id column is read-only"));
+        }
         let update_query = format!(r#"UPDATE "{table_name}" SET '{header}' = ? WHERE id = ?;"#);
         self.execute(&update_query, params![content, id])?;
         Ok(())
@@ -324,9 +622,9 @@ impl Database {
     }
 
     pub(crate) fn delete_column(&self, table_name: &str, column: &str) -> AppResult<String> {
-        let queries = sql_queries::build::delete_column_query(&table_name, &column);
-        self.execute_batch(&queries)?;
-        Ok(format!("Deleted column {column} from {table_name}"))
+        let hidden = self.internal_column_name(table_name)?;
+        self.rename_column(table_name, column, &hidden)?;
+        Ok(hidden)
     }
 
     pub(crate) fn rename_column(
@@ -339,11 +637,11 @@ impl Database {
         self.execute_batch(&queries)
     }
 
-    pub(crate) fn delete_table(&self, table_name: &str) -> AppResult<()> {
-        let query = sql_queries::build::delete_table_query(&table_name);
-        self.execute(&query, [])?;
+    pub(crate) fn delete_table(&self, table_name: &str) -> AppResult<String> {
+        let hidden = self.internal_table_name()?;
+        self.rename_table(table_name, &hidden)?;
         log::info!("Deleted table {table_name}");
-        Ok(())
+        Ok(hidden)
     }
 
     pub(crate) fn rename_table(&self, old_table_name: &str, new_table_name: &str) -> AppResult<()> {
@@ -428,6 +726,159 @@ mod tests {
         let (_, rows) = database.get(1, 0, "data", "").unwrap();
 
         // assert_eq!(first, "hank");
+    }
+
+    #[test]
+    fn update_cell_rejects_the_id_column() {
+        let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
+        assert!(database.update_cell("data", "id", 1, "10").is_err());
+        assert_eq!(database.get_cell("data", 1, "firstname").unwrap(), "henrik");
+    }
+
+    #[test]
+    fn get_cell_returns_error_for_missing_row() {
+        let database = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
+        assert!(database.get_cell("data", i32::MAX, "firstname").is_err());
+    }
+
+    #[test]
+    fn get_cell_formats_integer_values() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute(
+                "CREATE TABLE t (id INTEGER PRIMARY KEY, count INTEGER);",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute("INSERT INTO t (id, count) VALUES (1, 42);", [])
+            .unwrap();
+        let database = Database::new(connection).unwrap();
+        assert_eq!(database.get_cell("t", 1, "count").unwrap(), "42");
+    }
+
+    #[test]
+    fn get_table_names_hides_sqlite_system_tables() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute(
+                "CREATE TABLE t (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT);",
+                [],
+            )
+            .unwrap();
+        let database = Database::new(connection).unwrap();
+        assert!(!database
+            .get_table_names()
+            .unwrap()
+            .iter()
+            .any(|name| name.starts_with("sqlite_")));
+    }
+
+    #[test]
+    fn regex_filter_accepts_apostrophes_in_patterns() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT);", [])
+            .unwrap();
+        connection
+            .execute("INSERT INTO t (name) VALUES ('a''b'), ('abc');", [])
+            .unwrap();
+        let database = Database::new(connection).unwrap();
+        let filtered = database.regex_filter("t", "name", "'b").unwrap();
+        assert_eq!(database.count_rows(&filtered), Some(1));
+    }
+
+    #[test]
+    fn regex_filter_treats_null_cells_as_nonmatches() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT);", [])
+            .unwrap();
+        connection
+            .execute("INSERT INTO t (name) VALUES (NULL), ('abc');", [])
+            .unwrap();
+        let database = Database::new(connection).unwrap();
+        let filtered = database.regex_filter("t", "name", "a").unwrap();
+        assert_eq!(database.count_rows(&filtered), Some(1));
+    }
+
+    #[test]
+    fn regex_transform_accepts_apostrophes_in_patterns() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT);", [])
+            .unwrap();
+        connection
+            .execute("INSERT INTO t (name) VALUES ('a''b');", [])
+            .unwrap();
+        let database = Database::new(connection).unwrap();
+        database
+            .regex_no_capture_group_transform("t", "'", "name")
+            .unwrap();
+        assert_eq!(
+            database.get_cell_item("t", 1, "name_tform").unwrap(),
+            DataItem::Text("'".into())
+        );
+    }
+
+    #[test]
+    fn derive_column_preserves_null_source_cells() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT);", [])
+            .unwrap();
+        connection
+            .execute("INSERT INTO t (name) VALUES (NULL), ('abc');", [])
+            .unwrap();
+        let database = Database::new(connection).unwrap();
+        database
+            .derive_column("t", "name", "derived", |value| Some(value.to_uppercase()))
+            .unwrap();
+        assert_eq!(
+            database.get_cell_item("t", 1, "derived").unwrap(),
+            DataItem::Null
+        );
+    }
+
+    #[test]
+    fn derive_column_none_result_is_sql_null() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT);", [])
+            .unwrap();
+        connection
+            .execute("INSERT INTO t (name) VALUES ('abc');", [])
+            .unwrap();
+        let database = Database::new(connection).unwrap();
+        database
+            .derive_column("t", "name", "derived", |_| None)
+            .unwrap();
+        assert_eq!(
+            database.get_cell_item("t", 1, "derived").unwrap(),
+            DataItem::Null
+        );
+    }
+
+    #[test]
+    fn derive_column_accepts_numeric_source_cells() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute(
+                "CREATE TABLE t (id INTEGER PRIMARY KEY, count INTEGER);",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute("INSERT INTO t (count) VALUES (42);", [])
+            .unwrap();
+        let database = Database::new(connection).unwrap();
+        database
+            .derive_column("t", "count", "derived", |value| Some(value))
+            .unwrap();
+        assert_eq!(
+            database.get_cell_item("t", 1, "derived").unwrap(),
+            DataItem::Text("42".into())
+        );
     }
 
     #[test]
