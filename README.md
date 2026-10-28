@@ -31,10 +31,10 @@ This checklist defines Dataman's current common-workflow parity target. CSV and 
 - [x] Navigate rows, columns, and tables; sort, search, filter, and inspect metadata.
 - [x] Edit cells, derive columns, rename or delete columns/tables, and undo/redo built-in mutations.
 - [x] Save the current table as CSV/TSV or the complete dataset as SQLite.
+- [x] Create a summary or value frequency result table for the selected column.
+- [x] Join using the selected column and a typed `table.column` target; sources remain available.
 - [ ] Navigate wide tables with horizontal scrolling and manage column visibility/order.
 - [ ] Select rows and apply bulk operations.
-- [ ] Inspect column summaries and value frequency tables, including nulls.
-- [ ] Join selected tables into a result while preserving the source tables.
 - [ ] Review and replay command history.
 
 The unchecked items are the remaining parity work and are intended as acceptance gates for future releases.
@@ -52,6 +52,9 @@ The following are some of the more commonly used key commands in the TUI applica
 | `Ctrl + z`           | Undo                |
 | `Ctrl + y`           | Redo                |
 | `M`                  | Show Metadata Table |
+| `V`                  | Column Summary     |
+| `v`                  | Value Frequencies  |
+| `J`                  | Join Tables        |
 
 ### Data Transformation
 

@@ -59,6 +59,9 @@ pub enum Command {
     RenameColumn,
     Undo,
     Redo,
+    Summary,
+    Frequency,
+    Join,
 }
 
 impl Command {
@@ -81,7 +84,11 @@ impl Command {
             | Command::DeleteTable
             | Command::MathOperation
             | Command::RegexFilter => true,
-            Command::Undo | Command::Redo => true,
+            Command::Undo
+            | Command::Redo
+            | Command::Summary
+            | Command::Frequency
+            | Command::Join => true,
             Command::None
             | Command::IllegalOperation
             | Command::Save
@@ -115,6 +122,9 @@ impl Command {
             Command::ToggleMetadataTable => "Showing table of tables(metadata)".to_string(),
             Command::Undo => "Undo".to_string(),
             Command::Redo => "Redo".to_string(),
+            Command::Summary => "Column Summary".to_string(),
+            Command::Frequency => "Value Frequencies".to_string(),
+            Command::Join => "Join Tables".to_string(),
         }
     }
 }
@@ -148,6 +158,9 @@ impl From<KeyEvent> for Command {
             "metadata" => Command::ToggleMetadataTable,
             "undo" => Command::Undo,
             "redo" => Command::Redo,
+            "summary" => Command::Summary,
+            "frequency" => Command::Frequency,
+            "join" => Command::Join,
             "move_left" => Command::Move(Direction::Left),
             "move_right" => Command::Move(Direction::Right),
             "move_up" => Command::Move(Direction::Up),

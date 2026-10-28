@@ -305,6 +305,69 @@ impl Controller {
         Ok(())
     }
 
+    fn show_analysis(&mut self, frequency: bool) -> AppResult<()> {
+        let before = self.view_snapshot();
+        let source = self.view.table_name.clone();
+        let column = self.selected_column()?;
+        let result = if frequency {
+            self.database.frequency_table(&source, &column)?
+        } else {
+            self.database.summary_table(&source, &column)?
+        };
+        let hidden_name = self.database.internal_table_name()?;
+        self.view.table_name = result.clone();
+        self.view.column = 0;
+        self.view.row = 0;
+        self.view.row_offset = 0;
+        self.view.order_column = Some("id".into());
+        self.view.ascending = true;
+        self.record_history(
+            UndoRecord::Visibility {
+                table: None,
+                visible_name: result,
+                hidden_name,
+                is_visible: true,
+            },
+            before,
+        );
+        Ok(())
+    }
+
+    fn join_table(&mut self, inputs: Vec<String>) -> AppResult<()> {
+        let target = inputs
+            .first()
+            .ok_or_else(|| app_error_other!("Enter a target as table.column"))?;
+        let (right, right_column) = target
+            .split_once('.')
+            .ok_or_else(|| app_error_other!("Join target must use table.column"))?;
+        if right.is_empty() || right_column.is_empty() || right == "table_of_tables" {
+            return Err(app_error_other!("Invalid join target"));
+        }
+        let before = self.view_snapshot();
+        let left = self.view.table_name.clone();
+        let left_column = self.selected_column()?;
+        let result = self
+            .database
+            .join_tables(&left, &left_column, right, right_column)?;
+        let hidden_name = self.database.internal_table_name()?;
+        self.view.table_name = result.clone();
+        self.view.column = 0;
+        self.view.row = 0;
+        self.view.row_offset = 0;
+        self.view.order_column = Some("id".into());
+        self.view.ascending = true;
+        self.record_history(
+            UndoRecord::Visibility {
+                table: None,
+                visible_name: result,
+                hidden_name,
+                is_visible: true,
+            },
+            before,
+        );
+        Ok(())
+    }
+
     fn delete_table(&mut self) -> AppResult<()> {
         let before = self.view_snapshot();
         let table = self.view.table_name.clone();
@@ -504,7 +567,8 @@ impl Controller {
                         | Command::SqlQuery
                         | Command::RenameColumn
                         | Command::MathOperation
-                        | Command::RenameTable => {
+                        | Command::RenameTable
+                        | Command::Join => {
                             self.ui.queued_command = Some(QueuedCommand::new(command.clone()));
                             self.ui
                                 .input_mode_state_machine
@@ -529,6 +593,8 @@ impl Controller {
                         Command::Undo | Command::Redo => {
                             self.dispatch_history_command(command.clone())
                         } // Command::Join(_) => todo!(),
+                        Command::Summary => self.show_analysis(false),
+                        Command::Frequency => self.show_analysis(true),
                     };
                     match command {
                         Command::RenameTable => {
@@ -919,6 +985,7 @@ impl Controller {
                     }
                 }
                 Command::MathOperation => self.math_operation(inputs),
+                Command::Join => self.join_table(inputs),
                 // _ => {
                 //     log::error!("Command not implemented: {:?}", queued_command.command);
                 //     Err(AppError::from("Command not implemented"))
@@ -937,7 +1004,9 @@ impl Controller {
                 | Command::Undo
                 | Command::Redo
                 | Command::ToggleMetadataTable
-                | Command::DeleteColumn => {
+                | Command::DeleteColumn
+                | Command::Summary
+                | Command::Frequency => {
                     log::error!("Non-queueable command executed as queued: {:?}", command);
                     unreachable!("This command should not be queueable!!!");
                 }

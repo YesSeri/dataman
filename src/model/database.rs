@@ -470,6 +470,67 @@ impl Database {
         Ok(new_table_name)
     }
 
+    pub(crate) fn frequency_table(&self, table: &str, column: &str) -> AppResult<String> {
+        let result = self.find_unused_table_name(&format!("{table}_frequency"))?;
+        let query = format!(
+            "CREATE TABLE {} AS SELECT ROW_NUMBER() OVER () AS id, {} AS value, COUNT(*) AS count FROM {} GROUP BY {} ORDER BY count DESC;",
+            quote_identifier(&result), quote_identifier(column), quote_identifier(table), quote_identifier(column)
+        );
+        self.execute_batch(&query)?;
+        Ok(result)
+    }
+
+    pub(crate) fn summary_table(&self, table: &str, column: &str) -> AppResult<String> {
+        let result = self.find_unused_table_name(&format!("{table}_summary"))?;
+        let query = format!(
+            "CREATE TABLE {} AS SELECT 1 AS id, COUNT(*) AS count, COUNT(*) - COUNT({}) AS null_count, MIN({}) AS min, MAX({}) AS max, AVG(CAST({} AS REAL)) AS average FROM {};",
+            quote_identifier(&result), quote_identifier(column), quote_identifier(column), quote_identifier(column), quote_identifier(column), quote_identifier(table)
+        );
+        self.execute_batch(&query)?;
+        Ok(result)
+    }
+
+    pub(crate) fn join_tables(
+        &self,
+        left: &str,
+        left_column: &str,
+        right: &str,
+        right_column: &str,
+    ) -> AppResult<String> {
+        let left_headers = self.get_headers(left)?;
+        let right_headers = self.get_headers(right)?;
+        if !left_headers.iter().any(|header| header == left_column)
+            || !right_headers.iter().any(|header| header == right_column)
+        {
+            return Err(crate::app_error_other!("Join column does not exist"));
+        }
+        let result = self.find_unused_table_name(&format!("{left}_{right}_join"))?;
+        let mut columns = Vec::new();
+        for (source, alias, headers) in [
+            (left, "left", left_headers),
+            (right, "right", right_headers),
+        ] {
+            for header in headers.into_iter().filter(|header| header != "id") {
+                columns.push(format!(
+                    "{}.{} AS {}",
+                    quote_identifier(source),
+                    quote_identifier(&header),
+                    quote_identifier(&format!("{alias}_{header}"))
+                ));
+            }
+        }
+        if columns.is_empty() {
+            columns.push("1 AS value".into());
+        }
+        let query = format!(
+            "CREATE TABLE {} AS SELECT ROW_NUMBER() OVER () AS id, {} FROM {} INNER JOIN {} ON {}.{} = {}.{};",
+            quote_identifier(&result), columns.join(", "), quote_identifier(left), quote_identifier(right),
+            quote_identifier(left), quote_identifier(left_column), quote_identifier(right), quote_identifier(right_column)
+        );
+        self.execute_batch(&query)?;
+        Ok(result)
+    }
+
     fn find_unused_header_name(&self, table_name: &str, header_name: &str) -> AppResult<String> {
         let header_names = self.get_headers(&table_name)?;
         let mut new_header_name = header_name.to_string();
@@ -694,6 +755,47 @@ mod tests {
         let database = setup_database();
         let number_of_headers = database.count_headers("data").unwrap();
         assert_eq!(number_of_headers, 4)
+    }
+
+    #[test]
+    fn frequency_table_groups_nulls_and_summary_counts_them() {
+        let database = setup_database();
+        database.execute_batch("CREATE TABLE sample (id INTEGER PRIMARY KEY, value TEXT); INSERT INTO sample(value) VALUES ('a'), ('a'), (NULL), ('b');").unwrap();
+        let frequencies = database.frequency_table("sample", "value").unwrap();
+        let rows = database
+            .get(10, 0, &frequencies, "ORDER BY value")
+            .unwrap()
+            .1;
+        assert_eq!(rows.len(), 3);
+        assert!(rows
+            .iter()
+            .any(|row| row.get(1) == Some(&DataItem::Null)
+                && row.get(2) == Some(&DataItem::Integer(1))));
+
+        let summary = database.summary_table("sample", "value").unwrap();
+        let row = database.get(1, 0, &summary, "").unwrap().1.remove(0);
+        assert_eq!(row.get(1), Some(&DataItem::Integer(4)));
+        assert_eq!(row.get(2), Some(&DataItem::Integer(1)));
+    }
+
+    #[test]
+    fn joins_create_a_separate_result_table() {
+        let database = setup_database();
+        database.execute_batch("CREATE TABLE lefts (id INTEGER PRIMARY KEY, key TEXT, name TEXT); INSERT INTO lefts(key,name) VALUES ('x','Ada'), ('y','Grace'); CREATE TABLE rights (id INTEGER PRIMARY KEY, key TEXT, score INTEGER); INSERT INTO rights(key,score) VALUES ('x', 9), ('z', 4);").unwrap();
+        let result = database
+            .join_tables("lefts", "key", "rights", "key")
+            .unwrap();
+        assert_eq!(database.count_rows(&result), Some(1));
+        assert_eq!(database.get_cell(&result, 1, "left_name").unwrap(), "Ada");
+        assert_eq!(database.get_cell(&result, 1, "right_score").unwrap(), "9");
+        assert!(database
+            .get_table_names()
+            .unwrap()
+            .contains(&"lefts".into()));
+        assert!(database
+            .get_table_names()
+            .unwrap()
+            .contains(&"rights".into()));
     }
 
     #[test]
