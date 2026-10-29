@@ -71,6 +71,7 @@ pub(crate) enum UndoRecord {
         hidden_name: String,
         is_visible: bool,
     },
+    Group(Vec<UndoRecord>),
     ViewChange,
 }
 
@@ -537,6 +538,11 @@ impl Database {
                     }
                     *is_visible = !*is_visible;
                 }
+                UndoRecord::Group(records) => {
+                    for record in records {
+                        self.toggle_history_record(record)?;
+                    }
+                }
                 UndoRecord::ViewChange => {}
             }
             Ok(())
@@ -580,6 +586,12 @@ impl Database {
     }
 
     pub(crate) fn discard_hidden_record(&self, record: &UndoRecord) -> AppResult<()> {
+        if let UndoRecord::Group(records) = record {
+            for record in records {
+                self.discard_hidden_record(record)?;
+            }
+            return Ok(());
+        }
         if let UndoRecord::StoredBulkEdit { archive, .. }
         | UndoRecord::StoredDeletedRows { archive, .. } = record
         {
@@ -1147,8 +1159,18 @@ impl Database {
     }
 
     pub(crate) fn text_to_int(&self, table_name: &str, column: &str) -> AppResult<()> {
-        let queries = sql_queries::build::text_to_int(table_name, column);
-        self.execute_batch(&queries)
+        let derived = self.find_unused_header_name(table_name, &format!("INTEGER_{column}"))?;
+        self.atomic(|| {
+            self.connection.execute_batch(&format!(
+                "ALTER TABLE {} ADD COLUMN {} INTEGER; UPDATE {} SET {} = dataman_try_integer({});",
+                quote_identifier(table_name),
+                quote_identifier(&derived),
+                quote_identifier(table_name),
+                quote_identifier(&derived),
+                quote_identifier(column),
+            ))?;
+            Ok(())
+        })
     }
 
     pub(crate) fn int_to_text(&self, table_name: &str, column: &str) -> AppResult<()> {
@@ -1187,6 +1209,21 @@ impl Database {
         self.rename_table(table_name, &hidden)?;
         log::info!("Deleted table {table_name}");
         Ok(hidden)
+    }
+
+    pub(crate) fn delete_tables(&self, table_names: &[String]) -> AppResult<Vec<(String, String)>> {
+        self.atomic(|| {
+            let mut deleted = Vec::with_capacity(table_names.len());
+            for table in table_names {
+                if table == "table_of_tables" || table.starts_with(INTERNAL_PREFIX) {
+                    return Err(AppError::from("Protected tables cannot be deleted"));
+                }
+                let hidden = self.internal_table_name()?;
+                self.rename_table(table, &hidden)?;
+                deleted.push((table.clone(), hidden));
+            }
+            Ok(deleted)
+        })
     }
 
     pub(crate) fn rename_table(&self, old_table_name: &str, new_table_name: &str) -> AppResult<()> {
@@ -1268,6 +1305,44 @@ mod tests {
         let row = database.get(1, 0, &summary, "").unwrap().1.remove(0);
         assert_eq!(row.get(1), Some(&DataItem::Integer(4)));
         assert_eq!(row.get(2), Some(&DataItem::Integer(1)));
+    }
+
+    #[test]
+    fn text_to_integer_preserves_source_and_sets_invalid_values_to_null() {
+        let database = setup_database();
+        database
+            .execute_batch("CREATE TABLE typed (id INTEGER PRIMARY KEY, raw TEXT); INSERT INTO typed(raw) VALUES (' 42 '), ('bad'), (''), (NULL), ('-7');")
+            .unwrap();
+        database.text_to_int("typed", "raw").unwrap();
+        assert_eq!(
+            database.get_cell_item("typed", 1, "raw").unwrap(),
+            DataItem::Text(" 42 ".into())
+        );
+        assert_eq!(
+            database.get_cell_item("typed", 1, "INTEGER_raw").unwrap(),
+            DataItem::Integer(42)
+        );
+        assert_eq!(
+            database.get_cell_item("typed", 2, "INTEGER_raw").unwrap(),
+            DataItem::Null
+        );
+        assert_eq!(
+            database.get_cell_item("typed", 3, "INTEGER_raw").unwrap(),
+            DataItem::Null
+        );
+        assert_eq!(
+            database.get_cell_item("typed", 4, "INTEGER_raw").unwrap(),
+            DataItem::Null
+        );
+        assert_eq!(
+            database.get_cell_item("typed", 5, "INTEGER_raw").unwrap(),
+            DataItem::Integer(-7)
+        );
+        database.text_to_int("typed", "raw").unwrap();
+        assert!(database
+            .get_headers("typed")
+            .unwrap()
+            .contains(&"INTEGER_raw_1".into()));
     }
 
     #[test]

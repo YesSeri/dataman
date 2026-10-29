@@ -105,6 +105,22 @@ pub mod custom_functions {
     }
     pub fn add_custom_functions(conn: &Connection) -> rusqlite::Result<()> {
         let flags = FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC;
+        conn.create_scalar_function("dataman_try_integer", 1, flags, |ctx| {
+            let value = ctx.get::<rusqlite::types::Value>(0)?;
+            let parsed = match value {
+                rusqlite::types::Value::Null => None,
+                rusqlite::types::Value::Integer(value) => Some(value),
+                rusqlite::types::Value::Real(value)
+                    if value.is_finite() && value.fract() == 0.0 =>
+                {
+                    let text = format!("{value:.0}");
+                    text.parse::<i64>().ok()
+                }
+                rusqlite::types::Value::Text(value) => value.trim().parse::<i64>().ok(),
+                _ => None,
+            };
+            Ok(parsed)
+        })?;
         conn.create_scalar_function("regexp", 2, flags, |ctx| {
             let regex = compiled(ctx)?;
             Ok(text(ctx)?.is_some_and(|value| regex.is_match(value)))

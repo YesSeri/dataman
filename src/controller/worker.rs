@@ -39,6 +39,7 @@ pub(crate) struct RenderState {
     pub(crate) ui: UiState,
     pub(crate) view: ViewState,
     pub(crate) selected_rows: Selection,
+    pub(crate) selected_sheets: HashSet<String>,
     pub(crate) command_history: Vec<HistoryLine>,
     pub(crate) total_rows: u32,
     pub(crate) busy: bool,
@@ -74,6 +75,7 @@ impl RenderState {
                 table_before_metadata: None,
             },
             selected_rows: Selection::default(),
+            selected_sheets: HashSet::new(),
             command_history: vec![],
             total_rows: 0,
             busy: true,
@@ -87,6 +89,7 @@ impl RenderState {
             ui: controller.ui.clone(),
             view: controller.view.clone(),
             selected_rows: controller.selected_rows.clone(),
+            selected_sheets: controller.selected_sheets.clone(),
             command_history: controller
                 .command_history
                 .iter()

@@ -27,7 +27,9 @@ pub struct Controller {
     pub(crate) view: ViewState,
     history: History,
     pub(crate) selected_rows: Selection,
+    pub(crate) selected_sheets: HashSet<String>,
     column_layouts: HashMap<String, ColumnLayout>,
+    sheet_order: Vec<String>,
     sheet_views: HashMap<String, SheetView>,
     previous_sheet: Option<String>,
     page_key: Option<(String, String, u32, u32, u64, ColumnLayout)>,
@@ -58,6 +60,8 @@ struct ViewSnapshot {
     table_before_metadata: Option<String>,
     layout: ColumnLayout,
     selected_rows: Selection,
+    selected_sheets: HashSet<String>,
+    sheet_order: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -123,16 +127,16 @@ pub(crate) struct UiState {
 
 impl Controller {
     pub fn new(database: Database) -> Self {
-        let table_name = database
-            .get_table_names()
-            .ok()
-            .and_then(|names| names.into_iter().find(|n| n != "table_of_tables"))
-            .unwrap_or_default();
+        let mut sheet_order = database.get_table_names().unwrap_or_default();
+        sheet_order.retain(|name| name != "table_of_tables" && !name.starts_with(INTERNAL_PREFIX));
+        let table_name = sheet_order.first().cloned().unwrap_or_default();
         Self {
             database,
             history: History::default(),
             selected_rows: Selection::default(),
+            selected_sheets: HashSet::new(),
             column_layouts: HashMap::new(),
+            sheet_order,
             sheet_views: HashMap::new(),
             previous_sheet: None,
             page_key: None,
@@ -180,12 +184,16 @@ impl Controller {
             table_before_metadata: self.view.table_before_metadata.clone(),
             layout,
             selected_rows: self.selected_rows.clone(),
+            selected_sheets: self.selected_sheets.clone(),
+            sheet_order: self.sheet_order.clone(),
         }
     }
 
     fn restore_view(&mut self, snapshot: ViewSnapshot) {
         let layout = snapshot.layout.clone();
         self.selected_rows = snapshot.selected_rows.clone();
+        self.selected_sheets = snapshot.selected_sheets.clone();
+        self.sheet_order = snapshot.sheet_order.clone();
         self.view.table_name = snapshot.table_name;
         self.view.column = snapshot.column;
         self.view.row = snapshot.row;
@@ -367,6 +375,18 @@ impl Controller {
     }
 
     pub(crate) fn ordering(&self) -> String {
+        if self.view.table_name == "table_of_tables" {
+            let clauses = self
+                .sheet_order
+                .iter()
+                .enumerate()
+                .map(|(position, name)| {
+                    format!("WHEN '{}' THEN {position}", name.replace('\'', "''"))
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+            return format!("ORDER BY CASE \"table_name\" {clauses} ELSE 2147483647 END ASC");
+        }
         match &self.view.order_column {
             Some(column) => format!(
                 r#"ORDER BY "{}" {}"#,
@@ -487,6 +507,13 @@ impl Controller {
     fn change_table(&mut self, next: bool) -> AppResult<()> {
         let mut names = self.database.get_table_names()?;
         names.retain(|name| name != "table_of_tables");
+        self.sheet_order.retain(|name| names.contains(name));
+        for name in &names {
+            if !self.sheet_order.contains(name) {
+                self.sheet_order.push(name.clone());
+            }
+        }
+        names = self.sheet_order.clone();
         let index = names
             .iter()
             .position(|name| name == &self.view.table_name)
@@ -549,15 +576,59 @@ impl Controller {
     }
 
     fn previous_sheet(&mut self) -> AppResult<()> {
-        let Some(name) = self.previous_sheet.clone() else {
+        let names = self.database.get_table_names()?;
+        let target = self
+            .previous_sheet
+            .clone()
+            .filter(|name| names.contains(name))
+            .or_else(|| {
+                self.sheet_order
+                    .iter()
+                    .find(|name| names.contains(name))
+                    .cloned()
+            });
+        let Some(name) = target else {
             return Ok(());
         };
-        if !self.database.get_table_names()?.contains(&name) {
-            return Ok(());
-        }
         let current = self.view.table_name.clone();
         self.switch_sheet(name)?;
         self.previous_sheet = Some(current);
+        Ok(())
+    }
+
+    fn move_sheet_order(&mut self, toward_start: bool) -> AppResult<()> {
+        let name = self.highlighted_table_name()?;
+        let Some(position) = self
+            .sheet_order
+            .iter()
+            .position(|candidate| candidate == &name)
+        else {
+            return Err(app_error_other!("The highlighted sheet is not registered"));
+        };
+        let target = if toward_start {
+            position.checked_sub(1)
+        } else if position + 1 < self.sheet_order.len() {
+            Some(position + 1)
+        } else {
+            None
+        };
+        if let Some(target) = target {
+            self.sheet_order.swap(position, target);
+            self.view.row = target;
+            self.view.row_offset = 0;
+        }
+        Ok(())
+    }
+
+    fn reconcile_sheet_order(&mut self) -> AppResult<()> {
+        let mut names = self.database.get_table_names()?;
+        names.retain(|name| name != "table_of_tables");
+        self.sheet_order.retain(|name| names.contains(name));
+        for name in names {
+            if !self.sheet_order.contains(&name) {
+                self.sheet_order.push(name);
+            }
+        }
         Ok(())
     }
 
@@ -645,6 +716,17 @@ impl Controller {
     }
 
     fn toggle_selection(&mut self) -> AppResult<()> {
+        if self.view.table_name == "table_of_tables" {
+            let name = self.highlighted_table_name()?;
+            if !self.selected_sheets.insert(name.clone()) {
+                self.selected_sheets.remove(&name);
+            }
+            self.ui.last_command = PreviousCommand::new(
+                Command::ToggleSelection,
+                Some(format!("{} tables selected", self.selected_sheets.len())),
+            );
+            return Ok(());
+        }
         let id = self
             .view
             .rows
@@ -665,6 +747,14 @@ impl Controller {
     }
 
     fn clear_selection(&mut self) -> AppResult<()> {
+        if self.view.table_name == "table_of_tables" {
+            self.selected_sheets.clear();
+            self.ui.last_command = PreviousCommand::new(
+                Command::ClearSelection,
+                Some("Table selection cleared".into()),
+            );
+            return Ok(());
+        }
         self.selected_rows.clear();
         self.ui.last_command =
             PreviousCommand::new(Command::ClearSelection, Some("Selection cleared".into()));
@@ -786,28 +876,59 @@ impl Controller {
     fn delete_table(&mut self) -> AppResult<()> {
         let before = self.view_snapshot();
         let from_sheet_list = self.view.table_name == "table_of_tables";
-        let table = if from_sheet_list {
-            self.highlighted_table_name()?
-        } else {
-            self.view.table_name.clone()
-        };
+        if from_sheet_list {
+            let mut tables = self
+                .database
+                .get_table_names()?
+                .into_iter()
+                .filter(|name| self.selected_sheets.contains(name))
+                .collect::<Vec<_>>();
+            if tables.is_empty() {
+                tables.push(self.highlighted_table_name()?);
+            }
+            if tables.iter().any(|table| table == "table_of_tables") {
+                return Err(app_error_other!("The metadata table cannot be deleted"));
+            }
+            let hidden = self.database.delete_tables(&tables)?;
+            let records = hidden
+                .into_iter()
+                .map(|(visible_name, hidden_name)| UndoRecord::Visibility {
+                    table: None,
+                    visible_name,
+                    hidden_name,
+                    is_visible: false,
+                })
+                .collect();
+            self.selected_sheets.clear();
+            self.database.view_metadata_table()?;
+            self.record_history(UndoRecord::Group(records), before);
+            self.ui.last_command = PreviousCommand::new(
+                Command::DeleteTable,
+                Some(format!(
+                    "Deleted {} table(s); Ctrl+Z restores them",
+                    tables.len()
+                )),
+            );
+            return Ok(());
+        }
+        let table = self.view.table_name.clone();
         if table == "table_of_tables" {
             return Err(app_error_other!("The metadata table cannot be deleted"));
         }
         let hidden_name = self.database.delete_table(&table)?;
-        if from_sheet_list {
-            self.database.view_metadata_table()?;
-        } else {
-            self.change_table(false)?;
-        }
+        self.change_table(false)?;
         self.record_history(
             UndoRecord::Visibility {
                 table: None,
-                visible_name: table,
+                visible_name: table.clone(),
                 hidden_name,
                 is_visible: false,
             },
             before,
+        );
+        self.ui.last_command = PreviousCommand::new(
+            Command::DeleteTable,
+            Some(format!("Deleted {table}; Ctrl+Z restores it")),
         );
         Ok(())
     }
@@ -861,6 +982,7 @@ impl Controller {
             return Ok(());
         }
         self.database.view_metadata_table()?;
+        self.reconcile_sheet_order()?;
         self.view.table_before_metadata = Some(self.view.table_name.clone());
         self.view.table_name = "table_of_tables".into();
         self.view.column = 0;
@@ -1027,6 +1149,9 @@ impl Controller {
             Command::Frequency => self.show_analysis(true),
             Command::ToggleSelection => self.toggle_selection(),
             Command::ClearSelection => self.clear_selection(),
+            Command::DeleteSelected if self.view.table_name == "table_of_tables" => {
+                self.delete_table()
+            }
             Command::DeleteSelected => self.delete_selected(),
             Command::CopySelected => self.copy_selected(),
             Command::HideColumn => self.hide_selected_column(),
@@ -1034,12 +1159,21 @@ impl Controller {
                 self.show_all_columns();
                 Ok(())
             }
+            Command::ColumnLeft if self.view.table_name == "table_of_tables" => {
+                self.move_sheet_order(true)
+            }
+            Command::ColumnRight if self.view.table_name == "table_of_tables" => {
+                self.move_sheet_order(false)
+            }
             Command::ColumnLeft => self.move_column(true),
             Command::ColumnRight => self.move_column(false),
             Command::History => {
                 self.ui.history_view = true;
                 self.ui.history_cursor = self.command_history.len().saturating_sub(1);
                 Ok(())
+            }
+            Command::HistoryClose if self.view.table_name == "table_of_tables" => {
+                self.previous_sheet()
             }
             Command::HistoryReplay | Command::HistoryClose => Ok(()),
         };
@@ -1655,6 +1789,16 @@ impl Controller {
         if self.previous_sheet.as_deref() == Some(&old_table_name) {
             self.previous_sheet = Some(new_table_name.clone());
         }
+        if let Some(position) = self
+            .sheet_order
+            .iter()
+            .position(|name| name == &old_table_name)
+        {
+            self.sheet_order[position] = new_table_name.clone();
+        }
+        if self.selected_sheets.remove(&old_table_name) {
+            self.selected_sheets.insert(new_table_name.clone());
+        }
         if from_sheet_list {
             self.database.view_metadata_table()?;
         } else {
@@ -1796,6 +1940,58 @@ mod history_tests {
             .contains(&"t".into()));
         controller.refresh_page(20).unwrap();
         assert_eq!(controller.highlighted_table_name().unwrap(), "t");
+    }
+
+    #[test]
+    fn selected_tables_delete_as_one_undoable_action() {
+        let mut controller = controller();
+        controller
+            .database
+            .execute_batch("CREATE TABLE other (id INTEGER PRIMARY KEY, value TEXT);")
+            .unwrap();
+        controller.toggle_metadata_table().unwrap();
+        controller.refresh_page(20).unwrap();
+        controller.view.row = 0;
+        controller.toggle_selection().unwrap();
+        controller.view.row = 1;
+        controller.toggle_selection().unwrap();
+        assert_eq!(controller.selected_sheets.len(), 2);
+
+        controller.delete_table().unwrap();
+        let remaining = controller.database.get_table_names().unwrap();
+        assert_eq!(remaining, vec!["table_of_tables"]);
+        assert!(controller.selected_sheets.is_empty());
+        controller.undo().unwrap();
+        let restored = controller.database.get_table_names().unwrap();
+        assert!(restored.contains(&"t".into()));
+        assert!(restored.contains(&"other".into()));
+        assert_eq!(controller.selected_sheets.len(), 2);
+        controller.redo().unwrap();
+        assert_eq!(
+            controller.database.get_table_names().unwrap(),
+            vec!["table_of_tables"]
+        );
+    }
+
+    #[test]
+    fn sheet_list_reordering_changes_navigation_order_without_losing_highlight() {
+        let mut controller = controller();
+        controller
+            .database
+            .execute_batch("CREATE TABLE other (id INTEGER PRIMARY KEY, value TEXT);")
+            .unwrap();
+        controller.toggle_metadata_table().unwrap();
+        controller.refresh_page(20).unwrap();
+        let highlighted = controller.highlighted_table_name().unwrap();
+        controller.move_sheet_order(false).unwrap();
+        controller.refresh_page(20).unwrap();
+        assert_eq!(controller.highlighted_table_name().unwrap(), highlighted);
+        controller.view.row = 0;
+        controller.refresh_page(20).unwrap();
+        assert_eq!(controller.highlighted_table_name().unwrap(), "other");
+        controller.view.table_name = "t".into();
+        controller.change_table(true).unwrap();
+        assert_eq!(controller.view.table_name, "other");
     }
 
     #[test]
@@ -2064,6 +2260,46 @@ mod history_tests {
             .get_headers("t")
             .unwrap()
             .contains(&"INTEGER_count".into()));
+    }
+
+    #[test]
+    fn strict_integer_conversion_keeps_invalid_values_null_through_undo_redo() {
+        let mut controller = controller();
+        controller
+            .database
+            .execute_batch("ALTER TABLE t ADD COLUMN raw TEXT; UPDATE t SET raw = CASE id WHEN 1 THEN ' 12 ' ELSE 'bad' END;")
+            .unwrap();
+        controller.get_headers_and_rows(10).unwrap();
+        controller.view.column = 2;
+        controller.text_to_int().unwrap();
+        assert_eq!(
+            controller
+                .database
+                .get_cell_item("t", 1, "INTEGER_raw")
+                .unwrap(),
+            DataItem::Integer(12)
+        );
+        assert_eq!(
+            controller
+                .database
+                .get_cell_item("t", 2, "INTEGER_raw")
+                .unwrap(),
+            DataItem::Null
+        );
+        controller.undo().unwrap();
+        assert!(!controller
+            .database
+            .get_headers("t")
+            .unwrap()
+            .contains(&"INTEGER_raw".into()));
+        controller.redo().unwrap();
+        assert_eq!(
+            controller
+                .database
+                .get_cell_item("t", 2, "INTEGER_raw")
+                .unwrap(),
+            DataItem::Null
+        );
     }
 
     #[test]

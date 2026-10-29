@@ -262,13 +262,26 @@ impl TUI {
             let row_id = data_row
                 .get(view.column_indexes.first().copied().unwrap_or(0))
                 .and_then(|item| item.to_string().parse::<i64>().ok());
-            let selected_style = if row_id.is_some_and(|id| selected_ids.contains(&id)) {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
+            let selected_sheet = if view.table_name == "table_of_tables" {
+                let name_column = view
+                    .headers
+                    .iter()
+                    .position(|header| header == "table_name")
+                    .and_then(|position| view.column_indexes.get(position).copied());
+                name_column
+                    .and_then(|index| data_row.get(index))
+                    .is_some_and(|name| controller.selected_sheets.contains(&name.to_string()))
             } else {
-                Style::default()
+                false
             };
+            let selected_style =
+                if selected_sheet || row_id.is_some_and(|id| selected_ids.contains(&id)) {
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
             let data_row = view.column_indexes[window.clone()]
                 .iter()
                 .filter_map(|index| data_row.get(*index))
@@ -311,10 +324,15 @@ impl TUI {
             String::new()
         };
         let table_height = rects[0].height;
+        let selected_count = if view.table_name == "table_of_tables" {
+            controller.selected_sheets.len()
+        } else {
+            controller.selected_rows.len()
+        };
         let text = vec![Line::from(vec![Span::raw(format!(
             // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
             "row: {row}, total rows: {total_rows}, selected: {}, last command: {last_command} {status}{busy}, height: {table_height}",
-            controller.selected_rows.len(),
+            selected_count,
         ))])];
         let paragraph = Paragraph::new(text);
 
