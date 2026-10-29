@@ -330,6 +330,9 @@ impl Controller {
             return Err(err);
         }
         self.restore_view(entry.before.clone());
+        if self.view.table_name == "table_of_tables" {
+            self.database.view_metadata_table()?;
+        }
         self.history.redo.push_back(entry);
         self.ui.last_command =
             PreviousCommand::new(Command::Undo, Some("Undid last command".into()));
@@ -347,6 +350,9 @@ impl Controller {
             return Err(err);
         }
         self.restore_view(entry.after.clone());
+        if self.view.table_name == "table_of_tables" {
+            self.database.view_metadata_table()?;
+        }
         self.history.undo.push_back(entry);
         self.ui.last_command = PreviousCommand::new(Command::Redo, Some("Redid command".into()));
         Ok(())
@@ -779,12 +785,21 @@ impl Controller {
 
     fn delete_table(&mut self) -> AppResult<()> {
         let before = self.view_snapshot();
-        let table = self.view.table_name.clone();
+        let from_sheet_list = self.view.table_name == "table_of_tables";
+        let table = if from_sheet_list {
+            self.highlighted_table_name()?
+        } else {
+            self.view.table_name.clone()
+        };
         if table == "table_of_tables" {
             return Err(app_error_other!("The metadata table cannot be deleted"));
         }
         let hidden_name = self.database.delete_table(&table)?;
-        self.change_table(false)?;
+        if from_sheet_list {
+            self.database.view_metadata_table()?;
+        } else {
+            self.change_table(false)?;
+        }
         self.record_history(
             UndoRecord::Visibility {
                 table: None,
@@ -795,6 +810,39 @@ impl Controller {
             before,
         );
         Ok(())
+    }
+
+    fn highlighted_table_name(&self) -> AppResult<String> {
+        if self.view.table_name != "table_of_tables" {
+            return Err(app_error_other!("The sheet list is not open"));
+        }
+        let row = self.view.row.saturating_sub(self.view.row_offset as usize);
+        let display_column = self
+            .view
+            .headers
+            .iter()
+            .position(|header| header == "table_name")
+            .ok_or_else(|| app_error_other!("Sheet list has no table_name column"))?;
+        let raw_column = *self
+            .view
+            .column_indexes
+            .get(display_column)
+            .ok_or_else(|| app_error_other!("Sheet list layout is out of date"))?;
+        match self
+            .view
+            .rows
+            .get(row)
+            .and_then(|values| values.get(raw_column))
+        {
+            Some(DataItem::Text(name)) => Ok(name.clone()),
+            Some(value) => Ok(value.to_string()),
+            None => Err(app_error_other!("No table is highlighted")),
+        }
+    }
+
+    fn open_highlighted_table(&mut self) -> AppResult<()> {
+        let table = self.highlighted_table_name()?;
+        self.switch_sheet(table)
     }
 
     fn toggle_metadata_table(&mut self) -> AppResult<()> {
@@ -971,6 +1019,9 @@ impl Controller {
             Command::DeleteColumn => self.delete_column(),
             Command::DeleteTable => self.delete_table(),
             Command::ToggleMetadataTable => self.toggle_metadata_table(),
+            Command::HistoryReplay if self.view.table_name == "table_of_tables" => {
+                self.open_highlighted_table()
+            }
             Command::Undo | Command::Redo => self.dispatch_history_command(command.clone()), // Command::Join(_) => todo!(),
             Command::Summary => self.show_analysis(false),
             Command::Frequency => self.show_analysis(true),
@@ -994,7 +1045,11 @@ impl Controller {
         };
         match command {
             Command::RenameTable => {
-                let old_table_name = self.view.table_name.clone();
+                let old_table_name = if self.view.table_name == "table_of_tables" {
+                    self.highlighted_table_name().unwrap_or_default()
+                } else {
+                    self.view.table_name.clone()
+                };
                 self.ui.character_index = old_table_name.len();
                 self.ui.input = old_table_name;
             }
@@ -1574,7 +1629,13 @@ impl Controller {
     fn rename_table(&mut self, inputs: Vec<String>) -> Result<(), AppError> {
         let before = self.view_snapshot();
         let new_table_name = inputs[0].to_owned();
-        if self.view.table_name == "table_of_tables" {
+        let from_sheet_list = self.view.table_name == "table_of_tables";
+        let old_table_name = if from_sheet_list {
+            self.highlighted_table_name()?
+        } else {
+            self.view.table_name.clone()
+        };
+        if old_table_name == "table_of_tables" {
             return Err(app_error_other!("The metadata table cannot be renamed"));
         }
         if new_table_name.starts_with(INTERNAL_PREFIX) {
@@ -1582,9 +1643,9 @@ impl Controller {
                 "Table names using Dataman's reserved undo prefix are not supported"
             ));
         }
-        let old_table_name = self.view.table_name.clone();
         self.database
             .rename_table(&old_table_name, &new_table_name)?;
+        let renamed_table_name = new_table_name.clone();
         if let Some(layout) = self.column_layouts.remove(&old_table_name) {
             self.column_layouts.insert(new_table_name.clone(), layout);
         }
@@ -1594,12 +1655,20 @@ impl Controller {
         if self.previous_sheet.as_deref() == Some(&old_table_name) {
             self.previous_sheet = Some(new_table_name.clone());
         }
-        self.view.table_name = new_table_name;
+        if from_sheet_list {
+            self.database.view_metadata_table()?;
+        } else {
+            self.view.table_name = new_table_name;
+        }
         self.ui.last_command = PreviousCommand::new(Command::RenameTable, None);
         self.record_history(
             UndoRecord::RenameTable {
                 before: old_table_name,
-                after: self.view.table_name.clone(),
+                after: if from_sheet_list {
+                    renamed_table_name
+                } else {
+                    self.view.table_name.clone()
+                },
                 is_after: true,
             },
             before,
@@ -1643,6 +1712,90 @@ mod history_tests {
             .unwrap()
             .collect::<Result<Vec<String>, _>>()
             .unwrap()
+    }
+
+    #[test]
+    fn switching_sheets_restores_cursor_sort_and_row_selection() {
+        let mut controller = controller();
+        controller
+            .database
+            .execute_batch("CREATE TABLE other (id INTEGER PRIMARY KEY, value TEXT);")
+            .unwrap();
+        controller.view.row = 1;
+        controller.view.row_offset = 1;
+        controller.view.order_column = Some("name".into());
+        controller.view.ascending = false;
+        controller.selected_rows.insert(2);
+
+        controller.switch_sheet("other".into()).unwrap();
+        assert_eq!(controller.view.table_name, "other");
+        assert_eq!(controller.view.row, 0);
+        assert!(controller.selected_rows.is_empty());
+
+        controller.view.row = 3;
+        controller.selected_rows.insert(9);
+        controller.switch_sheet("t".into()).unwrap();
+        assert_eq!(controller.view.row, 1);
+        assert_eq!(controller.view.row_offset, 1);
+        assert_eq!(controller.view.order_column.as_deref(), Some("name"));
+        assert!(!controller.view.ascending);
+        assert!(controller.selected_rows.contains(&2));
+
+        controller.previous_sheet().unwrap();
+        assert_eq!(controller.view.table_name, "other");
+        assert_eq!(controller.view.row, 3);
+        assert!(controller.selected_rows.contains(&9));
+    }
+
+    #[test]
+    fn sheet_list_opens_highlighted_table_and_deletion_undo_restores_it() {
+        let mut controller = controller();
+        controller.toggle_metadata_table().unwrap();
+        controller.refresh_page(20).unwrap();
+        assert_eq!(controller.highlighted_table_name().unwrap(), "t");
+        controller.open_highlighted_table().unwrap();
+        assert_eq!(controller.view.table_name, "t");
+
+        controller.toggle_metadata_table().unwrap();
+        controller.refresh_page(20).unwrap();
+        controller.delete_table().unwrap();
+        assert!(!controller
+            .database
+            .get_table_names()
+            .unwrap()
+            .contains(&"t".into()));
+        assert_eq!(controller.view.table_name, "table_of_tables");
+
+        controller.undo().unwrap();
+        assert!(controller
+            .database
+            .get_table_names()
+            .unwrap()
+            .contains(&"t".into()));
+        controller.refresh_page(20).unwrap();
+        assert_eq!(controller.highlighted_table_name().unwrap(), "t");
+    }
+
+    #[test]
+    fn sheet_list_renames_highlighted_table_and_undoes() {
+        let mut controller = controller();
+        controller.toggle_metadata_table().unwrap();
+        controller.refresh_page(20).unwrap();
+        controller.rename_table(vec!["renamed".into()]).unwrap();
+        assert_eq!(controller.view.table_name, "table_of_tables");
+        assert!(controller
+            .database
+            .get_table_names()
+            .unwrap()
+            .contains(&"renamed".into()));
+        controller.undo().unwrap();
+        assert!(controller
+            .database
+            .get_table_names()
+            .unwrap()
+            .contains(&"t".into()));
+        controller.refresh_page(20).unwrap();
+        assert_eq!(controller.highlighted_table_name().unwrap(), "t");
     }
 
     #[test]
