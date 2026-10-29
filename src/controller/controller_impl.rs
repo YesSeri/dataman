@@ -649,11 +649,11 @@ impl Controller {
     fn show_analysis(&mut self, frequency: bool) -> AppResult<()> {
         let before = self.view_snapshot();
         let source = self.view.table_name.clone();
-        let column = self.selected_column()?;
         let result = if frequency {
+            let column = self.selected_column()?;
             self.database.frequency_table(&source, &column)?
         } else {
-            self.database.summary_table(&source, &column)?
+            self.database.describe_table(&source)?
         };
         let hidden_name = self.database.internal_table_name()?;
         self.view.table_name = result.clone();
@@ -2300,6 +2300,18 @@ mod history_tests {
                 .unwrap(),
             DataItem::Null
         );
+    }
+
+    #[test]
+    fn summary_command_opens_all_column_describe_view() {
+        let mut controller = controller();
+        controller.dispatch(Command::Summary, 10).unwrap();
+        assert!(controller.view.table_name.ends_with("_describe"));
+        assert!(controller.view.headers.contains(&"column_name".into()));
+        assert!(controller.view.headers.contains(&"null_count".into()));
+        assert!(controller.view.headers.contains(&"distinct_count".into()));
+        controller.undo().unwrap();
+        assert_eq!(controller.view.table_name, "t");
     }
 
     #[test]

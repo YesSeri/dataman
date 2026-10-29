@@ -43,14 +43,16 @@ This checklist is the supported workflow target and release gate.
 
 ### VisiData workflow roadmap status
 
-- [x] Preserve cursor, sort order, and row selection independently for each table while switching; `Ctrl+^` returns to the previously visited table.
-- [ ] Dedicated sheet-list view with stable sheet identities, selection, rename, reorder, and atomic multi-delete.
-- [ ] Logical type configuration, conversion error records, and all-column Describe statistics.
+- [x] The `M` sheet list opens the highlighted table with Enter, supports Space/`U` selection, `R` rename, `D`/`d` delete, and `[`/`]` navigation order. Batch deletion is one undoable operation.
+- [x] Preserve cursor, sort order, and row selection independently for each table while switching; `Ctrl+6` (also `Ctrl+^`) returns to the previously visited table.
+- [ ] Stable sheet IDs and dependency-aware stale state for derived sheets.
+- [ ] Logical type configuration and persistent conversion error records. `#` now makes a strict, undoable integer-derived column and leaves invalid input null.
+- [x] `V` creates an all-column Describe sheet with null, invalid, distinct, min/max, sum, and average statistics.
 - [ ] Frequency provenance, source-row drill-down, and selection propagation.
 - [ ] Grouping, aggregations, and pivots.
 - [ ] Multi-key joins and schema-aligned append.
 
-The remaining items above are planned work and are not supported by the current release.
+Unchecked items above are planned work and are not supported by the current release.
 
 The following are some of the more commonly used key commands in the TUI application:
 
@@ -60,23 +62,24 @@ The following are some of the more commonly used key commands in the TUI applica
 | `Ctrl + Right`       | Next Table          |
 | `Ctrl + Left`        | Previous Table      |
 | `Ctrl + ^`           | Return to Previous Table |
+| `Ctrl + 6`           | Return to Previous Table |
 | `Right/Left/Up/Down` | Move cursor         |
 | `Ctrl + c`           | Quit                |
 | `Ctrl + s`           | Save                |
 | `Ctrl + z`           | Undo                |
 | `Ctrl + y`           | Redo                |
-| `M`                  | Show Metadata Table |
-| `V`                  | Column Summary     |
+| `M`                  | Show Sheet List |
+| `V`                  | Describe All Columns |
 | `v`                  | Value Frequencies  |
 | `J`                  | Join Tables        |
-| `Space`              | Toggle row selection |
+| `Space`              | Toggle row/table selection |
 | `B`                  | Bulk edit selected rows in current column |
 | `|`                  | Add rows matching a SQLite `WHERE` expression (for example `amount > 20`) |
 | `\\`                 | Add rows matching a regex in the current column |
-| `d` / `C`            | Delete selected rows / open copies in a new table |
-| `U`                  | Clear row selection |
+| `d` / `C`            | Delete selected rows (or selected tables in the sheet list) / open copies |
+| `U`                  | Clear row/table selection |
 | `h` / `o`            | Hide current column / show all columns |
-| `[` / `]`            | Move current column left / right |
+| `[` / `]`            | Move current column left/right; reorder sheets in the sheet list |
 | `L`                  | Review history; arrows select, Enter replays |
 
 ### Data Transformation

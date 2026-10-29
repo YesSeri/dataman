@@ -954,6 +954,59 @@ impl Database {
         Ok(result)
     }
 
+    pub(crate) fn describe_table(&self, table: &str) -> AppResult<String> {
+        let result = self.find_unused_table_name(&format!("{table}_describe"))?;
+        let mut statement = self
+            .connection
+            .prepare(&format!("PRAGMA table_info({})", quote_identifier(table)))?;
+        let columns = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|(name, _)| !name.starts_with(INTERNAL_PREFIX))
+            .collect::<Vec<_>>();
+        if columns.is_empty() {
+            return Err(AppError::from("Cannot describe a table without columns"));
+        }
+        let total_table = quote_identifier(table);
+        let rows = columns
+            .iter()
+            .map(|(name, declared_type)| {
+                let column = quote_identifier(name);
+                let numeric = {
+                    let kind = declared_type.to_ascii_uppercase();
+                    kind.contains("INT") || kind.contains("REAL") || kind.contains("FLOA") || kind.contains("DOUB") || kind.contains("NUM") || kind.contains("DEC")
+                };
+                let invalid = if numeric {
+                    format!("SUM(CASE WHEN {column} IS NOT NULL AND typeof({column}) NOT IN ('integer','real') THEN 1 ELSE 0 END)")
+                } else {
+                    "0".into()
+                };
+                let ordered = if numeric {
+                    format!("CASE WHEN typeof({column}) IN ('integer','real') THEN {column} END")
+                } else {
+                    column.clone()
+                };
+                let sum = if numeric { format!("SUM({ordered})") } else { "NULL".into() };
+                let average = if numeric { format!("AVG({ordered})") } else { "NULL".into() };
+                let column_name = name.replace('\'', "''");
+                let kind = if declared_type.is_empty() { "BLOB" } else { declared_type.as_str() }.replace('\'', "''");
+                format!(
+                    "SELECT '{column_name}' AS column_name, '{kind}' AS storage_type, COUNT(*) AS total, COUNT(*) - COUNT({column}) AS null_count, COALESCE({invalid},0) AS invalid_count, COUNT(DISTINCT {column}) AS distinct_count, MIN({ordered}) AS min, MAX({ordered}) AS max, {sum} AS sum, {average} AS average FROM {total_table}"
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ");
+        let query = format!(
+            "CREATE TABLE {} AS SELECT ROW_NUMBER() OVER () AS id, described.* FROM ({rows}) AS described;",
+            quote_identifier(&result)
+        );
+        self.execute_batch(&query)?;
+        Ok(result)
+    }
+
     pub(crate) fn join_tables(
         &self,
         left: &str,
@@ -1343,6 +1396,38 @@ mod tests {
             .get_headers("typed")
             .unwrap()
             .contains(&"INTEGER_raw_1".into()));
+    }
+
+    #[test]
+    fn describe_uses_all_columns_and_excludes_invalid_numeric_text_from_aggregates() {
+        let database = setup_database();
+        database
+            .execute_batch("CREATE TABLE metrics (id INTEGER PRIMARY KEY, amount INTEGER, label TEXT); INSERT INTO metrics(amount,label) VALUES (4,'z'), (8,'a'), ('bad',NULL);")
+            .unwrap();
+        let described = database.describe_table("metrics").unwrap();
+        let rows = database.get(10, 0, &described, "ORDER BY id").unwrap().1;
+        assert_eq!(rows.len(), 3);
+        let amount = rows
+            .iter()
+            .find(|row| row[1] == DataItem::Text("amount".into()))
+            .unwrap();
+        assert_eq!(amount[3], DataItem::Integer(3));
+        assert_eq!(amount[4], DataItem::Integer(0));
+        assert_eq!(amount[5], DataItem::Integer(1));
+        assert_eq!(amount[6], DataItem::Integer(3));
+        assert_eq!(amount[7], DataItem::Integer(4));
+        assert_eq!(amount[8], DataItem::Integer(8));
+        assert_eq!(amount[9], DataItem::Integer(12));
+        assert_eq!(amount[10], DataItem::Float(6.0));
+        let label = rows
+            .iter()
+            .find(|row| row[1] == DataItem::Text("label".into()))
+            .unwrap();
+        assert_eq!(label[4], DataItem::Integer(1));
+        assert_eq!(label[7], DataItem::Text("a".into()));
+        assert_eq!(label[8], DataItem::Text("z".into()));
+        assert_eq!(label[9], DataItem::Null);
+        assert_eq!(label[10], DataItem::Null);
     }
 
     #[test]
