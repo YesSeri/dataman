@@ -19,22 +19,8 @@ fn main() -> Result<(), AppError> {
     // if release mode, logs are not printed
     TUI::install_panic_hook();
     setup_logging();
-    let (mut controller, tui) = setup_application()?;
-    controller.run(tui)
-}
-
-fn setup_application() -> Result<(Controller, TUI), AppError> {
-    let time_start = std::time::Instant::now();
     let cli = <Cli as clap::Parser>::parse();
-    let paths = cli.paths;
-    let database = Database::try_from(paths)?;
-    let time_end = std::time::Instant::now();
-    log::debug!(
-        "Time taken to setup application: {:?}",
-        time_end - time_start
-    );
-    let tui = TUI::default();
-    Ok((Controller::new(database), tui))
+    Controller::run_paths(cli.paths, TUI::default())
 }
 
 fn setup_logging() {

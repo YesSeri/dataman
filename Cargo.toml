@@ -22,13 +22,14 @@ log = "0.4.21"
 once_cell = "1.18.0"
 ratatui = { version = "0.26.2", features = ["all-widgets"] }
 regex = "1.10.4"
-rusqlite = { version = "0.31.0", features = ["bundled", "functions", "backup"] }
+rusqlite = { version = "0.31.0", features = ["bundled", "functions", "backup", "hooks"] }
 serde = { version = "1.0.197", features = ["derive"] }
 mlua = { version = "0.9.9", features = ["lua54", "vendored"] }
 r2d2 = "0.8.10"
 r2d2_sqlite = "0.24.0"
 color-eyre = "0.6.3"
 toml = "0.8.19"
+tempfile = "3"
 
 
 # [dependencies.pyo3]
@@ -43,3 +44,11 @@ name = "benchmark"
 harness = false
 [profile.bench]
 debug = true
+
+[[bench]]
+name = "benchmark_navigation"
+harness = false
+
+[[bench]]
+name = "benchmark_regexp"
+harness = false

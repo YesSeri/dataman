@@ -80,88 +80,56 @@ pub(crate) fn regex_no_capture_group_transform_query(
 }
 
 pub mod custom_functions {
-    use core::hash;
-    use std::{
-        collections::{hash_map, HashMap},
-        sync::{Arc, Mutex, RwLock},
-    };
-
     use regex::Regex;
-    use rusqlite::{functions::FunctionFlags, types::ValueRef, Connection};
+    use rusqlite::{
+        functions::{Context, FunctionFlags},
+        types::ValueRef,
+        Connection,
+    };
+    use std::sync::Arc;
+    type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-    use crate::model::database::Database;
-
+    fn compiled(ctx: &Context<'_>) -> rusqlite::Result<Arc<Regex>> {
+        ctx.get_or_create_aux(0, |value| -> Result<Regex, BoxError> {
+            Ok(Regex::new(value.as_str()?)?)
+        })
+    }
+    fn text<'a>(ctx: &'a Context<'_>) -> rusqlite::Result<Option<&'a str>> {
+        match ctx.get_raw(1) {
+            ValueRef::Null => Ok(None),
+            value => value
+                .as_str()
+                .map(Some)
+                .map_err(|e| rusqlite::Error::UserFunctionError(e.into())),
+        }
+    }
     pub fn add_custom_functions(conn: &Connection) -> rusqlite::Result<()> {
-        let hash_map: HashMap<String, Regex> = HashMap::new();
-        let regex_cache: Arc<Mutex<HashMap<String, Regex>>> = Arc::new(Mutex::new(HashMap::new()));
-
-        let cached_filter_regex = Arc::new(Mutex::new(Regex::new("").unwrap()));
-        conn.create_scalar_function(
-            "regexp",
-            2,
-            FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
-            move |ctx| {
-                let regex_str = ctx.get::<String>(0)?;
-                let Some(text) = ctx.get::<Option<String>>(1)? else {
-                    return Ok(false);
-                };
-                let mut cached_filter_regex = cached_filter_regex.lock().unwrap();
-                if cached_filter_regex.as_str() != regex_str {
-                    *cached_filter_regex = Regex::new(&regex_str).unwrap();
-                }
-
-                Ok(cached_filter_regex.is_match(&text))
-            },
-        )?;
-        let cached_with_capture_regex = Arc::new(Mutex::new(Regex::new("").unwrap()));
-        conn.create_scalar_function(
-            // this one is used to filter, to create new tables
-            "regexp_transform_with_capture_group",
-            3,
-            FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
-            move |ctx| {
-                let regex_str = ctx.get::<String>(0)?;
-                let Some(text) = ctx.get::<Option<String>>(1)? else {
-                    return Ok(None);
-                };
-                let substitution_pattern = ctx.get::<String>(2)?;
-                let mut cached_with_capture_regex = cached_with_capture_regex.lock().unwrap();
-                if cached_with_capture_regex.as_str() != regex_str {
-                    *cached_with_capture_regex = Regex::new(&regex_str).unwrap();
-                }
-                let is_match = cached_with_capture_regex.is_match(&text);
-                if is_match {
-                    let val = cached_with_capture_regex
-                        .replace(&text, &substitution_pattern)
-                        .to_string();
-                    Ok(Some(val))
-                } else {
-                    Ok(None)
-                }
-            },
-        )?;
-        let cached_no_capture_regex = Arc::new(Mutex::new(Regex::new("").unwrap()));
-        conn.create_scalar_function(
-            // this is used to derive a new column
-            "regexp_transform_no_capture_group",
-            2,
-            FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC,
-            move |ctx| {
-                let regex_str = ctx.get::<String>(0)?;
-                let Some(text) = ctx.get::<Option<String>>(1)? else {
-                    return Ok(None);
-                };
-                let mut cached_no_capture_regex = cached_no_capture_regex.lock().unwrap();
-                if cached_no_capture_regex.as_str() != regex_str {
-                    *cached_no_capture_regex = Regex::new(&regex_str).unwrap();
-                }
-                let result = cached_no_capture_regex.captures(&text);
-                let val = result
-                    .and_then(|c| c.get(0))
-                    .map(|v| v.as_str().to_string());
-                Ok(val)
-            },
-        )
+        let flags = FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC;
+        conn.create_scalar_function("regexp", 2, flags, |ctx| {
+            let regex = compiled(ctx)?;
+            Ok(text(ctx)?.is_some_and(|value| regex.is_match(value)))
+        })?;
+        conn.create_scalar_function("regexp_transform_with_capture_group", 3, flags, |ctx| {
+            let regex = compiled(ctx)?;
+            let Some(value) = text(ctx)? else {
+                return Ok(None);
+            };
+            let template = ctx
+                .get_raw(2)
+                .as_str()
+                .map_err(|e| rusqlite::Error::UserFunctionError(e.into()))?;
+            Ok(regex.captures(value).map(|captures| {
+                let mut result = String::new();
+                result.push_str(&value[..captures.get(0).unwrap().start()]);
+                captures.expand(template, &mut result);
+                result.push_str(&value[captures.get(0).unwrap().end()..]);
+                result
+            }))
+        })?;
+        conn.create_scalar_function("regexp_transform_no_capture_group", 2, flags, |ctx| {
+            let regex = compiled(ctx)?;
+            Ok(text(ctx)?.and_then(|value| regex.find(value).map(|m| m.as_str().to_owned())))
+        })
     }
 }
 

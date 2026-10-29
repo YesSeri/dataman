@@ -16,7 +16,7 @@ pub(super) enum Event {
     ExitExternalEditor,
     Reset,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct StateMachine {
     state: InputMode,
 }

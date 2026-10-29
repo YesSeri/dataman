@@ -157,8 +157,8 @@ mod tests {
         Ok(conn)
     }
     fn write_db_to_disk(conn: &Connection) {
-        let dst = Path::new("test.db");
-        let mut dst = Connection::open(dst).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let mut dst = Connection::open(directory.path().join("test.db")).unwrap();
         let backup = backup::Backup::new(conn, &mut dst).unwrap();
         backup
             .run_to_completion(10, time::Duration::from_millis(250), None)

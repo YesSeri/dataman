@@ -1,6 +1,6 @@
 # Dataman
 
-`dam` is an Excel-like data wrangler in the terminal, inspired by [VisiData](https://www.visidata.org/). This application allows you to manipulate and transform data using regex, logic or SQL. It reads files into an in-memory SQLite database, which we then query with dataman as a wrapper around sqlite.
+`dam` is an Excel-like data wrangler in the terminal, inspired by [VisiData](https://www.visidata.org/). This application allows you to manipulate and transform data using regex, logic or SQL. It loads CSV/TSV files into a private temporary SQLite database and uses SQLite to query and transform the data.
 
 ## Installation
 
@@ -102,3 +102,13 @@ Creates new column unless otherwise specified.
 
 Undo and redo are available for built-in data operations during the current session. SQL commands are not undoable and clear the current undo history.
 Names beginning with `__dataman_undo_` are reserved for temporary undo data and are not supported for imported tables or columns.
+
+## Session storage and responsiveness
+
+Each CSV/TSV import session uses its own temporary database, removed on normal exit. Save your imported data to keep changes. Existing SQLite files are edited in place.
+
+Database operations run on a worker while the terminal displays cached data. During an operation, you can resize the terminal, move within cached rows, or press Esc to cancel. Additional data commands are rejected while an operation runs; repeated page, table, or sort navigation keeps only the latest pending request. Edits already completed remain applied if you cancel their subsequent page refresh.
+
+Exports are streamed to a temporary output and replace the destination only after success. Saving over the currently open SQLite source is rejected; choose another output path.
+
+Developer benchmarks, architecture details, and measurement instructions are in [docs/performance.md](docs/performance.md).

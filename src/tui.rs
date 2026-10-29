@@ -25,33 +25,38 @@ use crate::{
     controller::{self, controller_impl::Controller},
 };
 
-fn data_item_cell(item: &DataItem) -> Cell<'static> {
+fn data_item_cell(item: &DataItem) -> Cell<'_> {
     match item {
-        DataItem::Text(value) => Cell::from(value.clone()),
+        DataItem::Text(value) => Cell::from(value.as_str()),
         DataItem::Integer(value) => Cell::from(value.to_string()),
         DataItem::Float(value) => Cell::from(value.to_string()),
-        DataItem::Blob(value) => Cell::from(DataItem::Blob(value.clone()).to_string()),
+        DataItem::Blob(value) => Cell::from(
+            value
+                .iter()
+                .take(40)
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>(),
+        ),
         DataItem::Null => Cell::from("NULL"),
     }
 }
 
-fn column_widths(headers: &[String], rows: &[Vec<DataItem>]) -> Vec<u16> {
+pub(crate) fn column_widths(
+    headers: &[String],
+    rows: &[Vec<DataItem>],
+    indexes: &[usize],
+) -> Vec<u16> {
     let mut widths: Vec<u16> = headers.iter().map(|header| header.len() as u16).collect();
     for row in rows {
-        for (index, item) in row.iter().enumerate() {
-            if let Some(width) = widths.get_mut(index) {
-                *width = (*width).max(item.len() as u16);
+        for (visible, source) in indexes.iter().enumerate() {
+            if let (Some(width), Some(item)) = (widths.get_mut(visible), row.get(*source)) {
+                *width = (*width).max(item.len().min(u16::MAX as usize) as u16);
             }
         }
     }
-    while widths.iter().map(|width| *width as u32).sum::<u32>() > 92 {
-        if let Some(width) = widths.iter_mut().max() {
-            if *width > 1 {
-                *width -= 1;
-            } else {
-                break;
-            }
-        }
+    // Cap individual cells in one pass; horizontal scrolling handles wide tables.
+    for width in &mut widths {
+        *width = (*width).clamp(1, 80);
     }
     widths
 }
@@ -119,9 +124,9 @@ impl TUI {
         terminal::disable_raw_mode()?;
         Ok(())
     }
-    pub fn draw(
+    pub(crate) fn draw(
         &mut self,
-        controller: &mut controller::controller_impl::Controller,
+        controller: &crate::controller::worker::RenderState,
     ) -> AppResult<()> {
         self.terminal.draw(|f| match TUI::update(f, controller) {
             Ok(_) => (),
@@ -150,28 +155,26 @@ impl TUI {
         let editor_and_args = editor_var.split_whitespace().collect::<Vec<_>>();
         let (editor, args) = editor_and_args.split_first().unwrap_or((&"nano", &[]));
         let mut args = args.to_vec();
-        let mut file_path = std::env::temp_dir();
-        file_path.push("dataman_input.txt");
-        args.push(file_path.to_str().unwrap());
-
-        let mut file = std::fs::File::create(&file_path)?;
-        file.write_all(data.as_bytes())?;
-
+        let mut temporary = tempfile::Builder::new()
+            .prefix("dataman-editor-")
+            .suffix(".txt")
+            .tempfile()?;
+        temporary.write_all(data.as_bytes())?;
+        temporary.flush()?;
+        args.push(
+            temporary
+                .path()
+                .to_str()
+                .ok_or_else(|| AppError::from("Invalid editor path"))?,
+        );
         std::process::Command::new(editor).args(args).status()?;
-
-        let mut editable = String::new();
-        std::fs::File::open(file_path)?.read_to_string(&mut editable)?;
+        let editable = std::fs::read_to_string(temporary.path())?;
         let trimmed = trim_external_editor_newline(editable);
         Ok(trimmed)
     }
 
-    fn update(f: &mut Frame, controller: &mut Controller) -> AppResult<()> {
-        controller.get_headers_and_rows(100)?;
-        let (database, ui, view) = (
-            &mut controller.database,
-            &mut controller.ui,
-            &controller.view,
-        );
+    fn update(f: &mut Frame, controller: &crate::controller::worker::RenderState) -> AppResult<()> {
+        let (ui, view) = (&controller.ui, &controller.view);
         let constraints: Vec<Constraint> = match ui.input_mode_state_machine.get_state() {
             InputMode::Editing => {
                 vec![
@@ -221,7 +224,10 @@ impl TUI {
         let headers = &view.headers;
         let rows = &view.rows;
         let id_space: u16 = rows.iter().fold(0, |acc, row| {
-            let id = row.first().unwrap().to_string().len() as u16;
+            let id = row
+                .get(view.column_indexes.first().copied().unwrap_or(0))
+                .map(|item| item.to_string().len() as u16)
+                .unwrap_or(0);
             if id > acc {
                 id
             } else {
@@ -229,8 +235,8 @@ impl TUI {
             }
         });
 
-        let widths: Vec<u16> = column_widths(headers, rows);
-        let window = column_window(&widths, view.column, f.size().width.saturating_sub(4));
+        let widths = &controller.column_widths;
+        let window = column_window(widths, view.column, f.size().width.saturating_sub(4));
         let constraints = widths[window.clone()]
             .iter()
             .map(|w| Constraint::Min(*w))
@@ -241,11 +247,11 @@ impl TUI {
         let header = Row::new(headers[window.clone()].iter().enumerate().map(|(i, h)| {
             if current_header == window.start + i {
                 Cell::from(Span::styled(
-                    h.clone(),
+                    h.as_str(),
                     Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
                 ))
             } else {
-                Cell::from(h.clone())
+                Cell::from(h.as_str())
             }
         }))
         .height(1);
@@ -254,8 +260,8 @@ impl TUI {
         let selected_ids = &controller.selected_rows;
         let tui_rows = rows.iter().map(|data_row| {
             let row_id = data_row
-                .first()
-                .and_then(|item| item.to_string().parse::<i32>().ok());
+                .get(view.column_indexes.first().copied().unwrap_or(0))
+                .and_then(|item| item.to_string().parse::<i64>().ok());
             let selected_style = if row_id.is_some_and(|id| selected_ids.contains(&id)) {
                 Style::default()
                     .fg(Color::Yellow)
@@ -263,9 +269,10 @@ impl TUI {
             } else {
                 Style::default()
             };
-            let data_row = data_row[window.clone()]
+            let data_row = view.column_indexes[window.clone()]
                 .iter()
-                .map(|item| data_item_cell(item))
+                .filter_map(|index| data_row.get(*index))
+                .map(data_item_cell)
                 .collect::<Vec<_>>();
             Row::new(data_row).height(1).style(selected_style)
         });
@@ -275,7 +282,7 @@ impl TUI {
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(view.table_name.clone()),
+                    .title(view.table_name.as_str()),
             )
             .highlight_style(selected_style)
             // .highlight_symbol(">> ")
@@ -286,7 +293,7 @@ impl TUI {
         f.render_stateful_widget(t, rects[0], &mut table_state);
 
         let a = view.column;
-        let total_rows = database.count_rows(&view.table_name).unwrap_or(0);
+        let total_rows = controller.total_rows;
         let rowid = rows
             .get(row)
             .map(|el| el.first().unwrap().to_string())
@@ -294,10 +301,19 @@ impl TUI {
         let offset = table_state.offset();
         let last_command = ui.last_command.command.to_string();
         let status = ui.last_command.message.as_deref().unwrap_or("");
+        let busy = if controller.busy {
+            format!(
+                " {} {}… Esc cancels",
+                ["◐", "◓", "◑", "◒"][controller.busy_frame % 4],
+                controller.busy_phase
+            )
+        } else {
+            String::new()
+        };
         let table_height = rects[0].height;
         let text = vec![Line::from(vec![Span::raw(format!(
             // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
-            "row: {row}, total rows: {total_rows}, selected: {}, last command: {last_command} {status}, height: {table_height}",
+            "row: {row}, total rows: {total_rows}, selected: {}, last command: {last_command} {status}{busy}, height: {table_height}",
             controller.selected_rows.len(),
         ))])];
         let paragraph = Paragraph::new(text);
@@ -348,9 +364,82 @@ impl TUI {
     }
 }
 
+impl Drop for TUI {
+    fn drop(&mut self) {
+        let _ = disable_raw_mode();
+        let _ = self.terminal.show_cursor();
+    }
+}
+
+impl Default for TUI {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{column_window, table_height_for, trim_external_editor_newline};
+
+    #[test]
+    #[ignore = "manual rendering benchmark"]
+    fn benchmark_cached_render() {
+        use crate::{
+            controller::{controller_impl::Controller, worker::RenderState},
+            model::database::Database,
+        };
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection.execute_batch("CREATE TABLE t(id INTEGER PRIMARY KEY, value TEXT, amount INTEGER);
+            WITH RECURSIVE n(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM n WHERE id<100) INSERT INTO t SELECT id,'some text',id FROM n;").unwrap();
+        let mut controller = Controller::new(Database::new(connection).unwrap());
+        controller.get_headers_and_rows(100).unwrap();
+        let state = RenderState::from_controller(&controller);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        let start = std::time::Instant::now();
+        for _ in 0..10_000 {
+            terminal
+                .draw(|frame| super::TUI::update(frame, &state).unwrap())
+                .unwrap();
+        }
+        eprintln!(
+            "cached_render_us={:.2}",
+            start.elapsed().as_secs_f64() * 1_000_000.0 / 10_000.0
+        );
+    }
+
+    #[test]
+    fn cached_render_handles_resize_typing_and_history_without_database_access() {
+        use crate::{
+            controller::{controller_impl::Controller, worker::RenderState},
+            model::database::Database,
+        };
+        use rusqlite::{
+            hooks::{AuthContext, Authorization},
+            Connection,
+        };
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch("CREATE TABLE t(id INTEGER PRIMARY KEY, value TEXT); INSERT INTO t VALUES(1,'hello');").unwrap();
+        let mut controller = Controller::new(Database::new(connection).unwrap());
+        controller.get_headers_and_rows(100).unwrap();
+        let mut state = RenderState::from_controller(&controller);
+        controller
+            .database
+            .connection
+            .authorizer(Some(|_: AuthContext<'_>| Authorization::Deny));
+        for (width, height) in [(80, 24), (20, 8), (160, 40)] {
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|frame| super::TUI::update(frame, &state).unwrap())
+                .unwrap();
+            state.ui.input.push('x');
+            state.ui.history_view = !state.ui.history_view;
+            terminal
+                .draw(|frame| super::TUI::update(frame, &state).unwrap())
+                .unwrap();
+        }
+    }
 
     #[test]
     fn short_terminal_has_zero_table_height() {
@@ -366,11 +455,5 @@ mod tests {
     fn selected_column_is_kept_inside_horizontal_window() {
         assert_eq!(column_window(&[10, 10, 10, 10], 3, 20), 2..4);
         assert_eq!(column_window(&[10, 10, 10, 10], 0, 20), 0..2);
-    }
-}
-
-impl Default for TUI {
-    fn default() -> Self {
-        Self::new()
     }
 }

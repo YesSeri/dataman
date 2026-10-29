@@ -9,8 +9,18 @@ pub type DataTable = (Vec<String>, Vec<Vec<DataItem>>);
 
 impl Display for DataItem {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s: String = self.clone().into();
-        write!(f, "{}", s)
+        match self {
+            Self::Text(value) => f.write_str(value),
+            Self::Integer(value) => write!(f, "{value}"),
+            Self::Float(value) => write!(f, "{value}"),
+            Self::Blob(bytes) => {
+                for byte in bytes {
+                    write!(f, "{byte:02x}")?;
+                }
+                Ok(())
+            }
+            Self::Null => Ok(()),
+        }
     }
 }
 

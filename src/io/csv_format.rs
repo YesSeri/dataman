@@ -21,21 +21,6 @@ pub(crate) fn database_from_csv(path: PathBuf, connection: Connection) -> AppRes
     Database::new(connection)
 }
 
-fn value_query(record: &StringRecord) -> String {
-    let row = record
-        .iter()
-        .map(|s| {
-            if s.is_empty() {
-                "''".to_string()
-            } else {
-                format!("'{}'", s.replace('\'', "''"))
-            }
-        })
-        .collect::<Vec<String>>()
-        .join(",");
-    format!("({})", row)
-}
-
 pub(crate) fn database_from_sqlite(connection: Connection) -> AppResult<Database> {
     let database = Database::new(connection)?;
 
@@ -81,7 +66,7 @@ pub(crate) fn get_headers_for_query(
     let headers = csv.headers()?;
     let columns: String = headers
         .iter()
-        .map(|header| quote_identifier(header))
+        .map(quote_identifier)
         .collect::<Vec<String>>()
         .join(", ");
     Ok(columns)
@@ -151,8 +136,6 @@ pub(crate) fn sqlite_to_out(connection: &Connection, path: PathBuf) -> AppResult
     Ok(())
 }
 
-const LIMIT: usize = 10000;
-
 pub(crate) fn insert_csv_data_database(
     path: PathBuf,
     connection: &Connection,
@@ -172,62 +155,51 @@ fn insert_delimited_data_database(
     connection: &Connection,
     delimiter: u8,
 ) -> Result<(), AppError> {
+    insert_delimited_cancellable(path, connection, delimiter, None)
+}
+
+pub(crate) fn insert_delimited_cancellable(
+    path: PathBuf,
+    connection: &Connection,
+    delimiter: u8,
+    cancellation: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<(), AppError> {
     let mut csv = csv::ReaderBuilder::new()
         .delimiter(delimiter)
         .from_path(&path)?;
     let table_name =
         Database::get_table_name(path).ok_or(app_error_other!("could not get table name."))?;
-    let table_names = [table_name.to_string()];
-    let mut queries = String::new();
+    let transaction = if connection.is_autocommit() {
+        Some(connection.unchecked_transaction()?)
+    } else {
+        None
+    };
     let query = create_table_query(&mut csv, &table_name)
         .map_err(|error| app_error_other!(error.to_string()))?;
-    queries.push_str(&query);
-    connection.execute_batch(&queries)?;
-    queries.clear();
-    let columns = get_headers_for_query(&mut csv, &table_name).unwrap();
-    let mut i = 0;
-
-    let records = csv.records();
-    let mut items: Vec<String> = Vec::with_capacity(LIMIT);
-    for record in records {
-        i += 1;
-        create_insert_stmt_record(record?, &mut items);
-        if should_batch_execute(i) {
-            i = 0;
-            batch_exec_and_clear(&mut queries, &table_name, &columns, &mut items, connection)?;
+    connection.execute_batch(&query)?;
+    let columns = get_headers_for_query(&mut csv, &table_name)
+        .map_err(|error| app_error_other!(error.to_string()))?;
+    let placeholders = (0..csv.headers()?.len())
+        .map(|_| "?")
+        .collect::<Vec<_>>()
+        .join(",");
+    {
+        let mut insert = connection.prepare(&format!(
+            "INSERT INTO {} ({columns}) VALUES ({placeholders})",
+            quote_identifier(&table_name)
+        ))?;
+        let mut record = StringRecord::new();
+        while csv.read_record(&mut record)? {
+            if cancellation.is_some_and(|token| token.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err(AppError::from("Operation cancelled"));
+            }
+            insert.execute(rusqlite::params_from_iter(record.iter()))?;
         }
     }
-    if !items.is_empty() {
-        batch_exec_and_clear(&mut queries, &table_name, &columns, &mut items, connection)?;
+    if let Some(transaction) = transaction {
+        transaction.commit()?;
     }
-
     Ok(())
-}
-fn should_batch_execute(i: usize) -> bool {
-    i == LIMIT
-}
-fn batch_exec_and_clear(
-    queries: &mut String,
-    table_name: &str,
-    columns: &str,
-    items: &mut Vec<String>,
-    connection: &Connection,
-) -> AppResult<()> {
-    queries.clear();
-    *queries = format!(
-        r#"INSERT INTO {} ({}) VALUES {};"#,
-        quote_identifier(table_name),
-        columns,
-        items.join(",\n")
-    );
-    connection.execute_batch(queries)?;
-    items.clear();
-    Ok(())
-}
-
-fn create_insert_stmt_record(record: StringRecord, items: &mut Vec<String>) {
-    let result = value_query(&record);
-    items.push(result);
 }
 
 pub(crate) fn save_to_csv_file(
@@ -252,6 +224,24 @@ fn save_delimited_file(
     save_file: &PathBuf,
     delimiter: u8,
 ) -> AppResult<()> {
+    save_delimited_cancellable(connection, table_name, save_file, delimiter, None)
+}
+
+pub(crate) fn save_delimited_cancellable(
+    connection: &Connection,
+    table_name: &str,
+    save_file: &PathBuf,
+    delimiter: u8,
+    cancellation: Option<&std::sync::atomic::AtomicBool>,
+) -> AppResult<()> {
+    let check_cancelled = || -> AppResult<()> {
+        if cancellation.is_some_and(|token| token.load(std::sync::atomic::Ordering::Relaxed)) {
+            Err(AppError::from("Operation cancelled"))
+        } else {
+            Ok(())
+        }
+    };
+    check_cancelled()?;
     let mut info = connection.prepare(&format!(
         "PRAGMA table_info(\"{}\")",
         table_name.replace('"', "\"\"")
@@ -271,29 +261,33 @@ fn save_delimited_file(
         "SELECT {select} FROM \"{}\";",
         table_name.replace('"', "\"\"")
     );
-    let mut stmt = connection.prepare(query).unwrap();
+    let mut stmt = connection.prepare(query)?;
 
-    // Collect all rows into a vector to avoid borrowing issues
-    let rows: Vec<Vec<DataItem>> = stmt
-        .query_map([], |row| {
-            let mut items = Vec::new();
-            for i in 0..headers.len() {
-                let item = row.get_ref(i).unwrap();
-                items.push(DataItem::from(item));
-            }
-            Ok(items)
-        })
-        .unwrap()
-        .map(|row| row.unwrap())
-        .collect();
-
-    let mut wtr = csv::WriterBuilder::new()
-        .delimiter(delimiter)
-        .from_path(save_file)?;
-    wtr.write_record(&headers).unwrap();
-    for row in rows {
-        wtr.serialize(row).unwrap();
+    let parent = save_file
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    {
+        let mut wtr = csv::WriterBuilder::new()
+            .delimiter(delimiter)
+            .from_writer(temporary.as_file_mut());
+        wtr.write_record(&headers)?;
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            check_cancelled()?;
+            let items = (0..headers.len())
+                .map(|i| row.get_ref(i).map(DataItem::from))
+                .collect::<Result<Vec<_>, _>>()?;
+            wtr.serialize(items)?;
+        }
+        wtr.flush()?;
     }
+    temporary.as_file().sync_all()?;
+    check_cancelled()?;
+    temporary
+        .persist(save_file)
+        .map_err(|e| AppError::Io(e.error))?;
     Ok(())
 }
 #[cfg(test)]
@@ -304,9 +298,14 @@ mod tests {
 
     #[test]
     fn empty_csv_fields_are_preserved_as_empty_text() {
-        let mut reader = csv::ReaderBuilder::new().from_reader(b"name\n\"\"\n".as_slice());
-        let record = reader.records().next().unwrap().unwrap();
-        assert_eq!(value_query(&record), "('')");
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("empty.csv");
+        std::fs::write(&path, b"name\n\"\"\n").unwrap();
+        let database = Database::try_from(vec![path]).unwrap();
+        assert_eq!(
+            database.get_cell_item("empty", 1, "name").unwrap(),
+            DataItem::Text(String::new())
+        );
     }
 
     #[test]
@@ -351,9 +350,11 @@ mod tests {
 
     #[test]
     fn write_db_to_out_test() {
-        let database1 = Database::try_from(vec![PathBuf::from("assets/data.sqlite")]).unwrap();
-        sqlite_to_out(&database1.connection, PathBuf::from("assets/out-data.csv")).unwrap();
-        let database2 = Database::try_from(vec![PathBuf::from("assets/out-data.csv")]).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("out-data.csv");
+        let database1 = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
+        sqlite_to_out(&database1.connection, output.clone()).unwrap();
+        let database2 = Database::try_from(vec![output]).unwrap();
         let first_row_db1 = database1.get(1, 0, "data", "").unwrap().1;
         let first_row_db2 = database2.get(1, 0, "out-data", "").unwrap().1;
 

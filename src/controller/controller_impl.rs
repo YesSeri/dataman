@@ -1,3 +1,4 @@
+use super::selection::Selection;
 use crate::app_error_other;
 use crate::controller::command::{Command, PreviousCommand};
 use crate::controller::input::{self, InputMode};
@@ -8,6 +9,7 @@ use crate::model::datarow::{DataItem, DataTable};
 use crate::navigation::Direction;
 use crate::tui::TUI;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use std::sync::Arc;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     path::PathBuf,
@@ -16,7 +18,6 @@ use std::{
 use super::command::QueuedCommand;
 use super::input::StateMachine;
 
-const POLL_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(3000);
 const HISTORY_LIMIT: usize = 100;
 
 #[derive(Debug)]
@@ -25,8 +26,12 @@ pub struct Controller {
     pub(crate) ui: UiState,
     pub(crate) view: ViewState,
     history: History,
-    pub(crate) selected_rows: HashSet<i32>,
+    pub(crate) selected_rows: Selection,
     column_layouts: HashMap<String, ColumnLayout>,
+    page_key: Option<(String, String, u32, u32, u64, ColumnLayout)>,
+    source_page: Option<SourcePage>,
+    pub(super) table_height: u32,
+    pub(super) defer_refresh: bool,
     pub(crate) command_history: VecDeque<LoggedCommand>,
 }
 
@@ -40,7 +45,7 @@ struct ViewSnapshot {
     ascending: bool,
     table_before_metadata: Option<String>,
     layout: ColumnLayout,
-    selected_rows: HashSet<i32>,
+    selected_rows: Selection,
 }
 
 #[derive(Debug)]
@@ -56,7 +61,7 @@ pub(crate) struct LoggedCommand {
     pub(crate) inputs: Vec<String>,
     pub(crate) table: String,
     snapshot: ViewSnapshot,
-    selected_rows: HashSet<i32>,
+    selected_rows: Selection,
 }
 
 #[derive(Debug, Default)]
@@ -65,13 +70,13 @@ struct History {
     redo: VecDeque<HistoryEntry>,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 struct ColumnLayout {
     order: Vec<String>,
     hidden: HashSet<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct ViewState {
     pub(crate) table_name: String,
     pub(crate) column: usize,
@@ -80,12 +85,20 @@ pub(crate) struct ViewState {
     pub(crate) order_column: Option<String>,
     pub(crate) ascending: bool,
     pub(crate) headers: Vec<String>,
-    pub(crate) rows: Vec<Vec<DataItem>>,
+    pub(crate) rows: Arc<Vec<Vec<DataItem>>>,
+    pub(crate) column_indexes: Vec<usize>,
     pub(crate) table_before_metadata: Option<String>,
 }
 
-/// Terminal interaction state kept out of the SQLite-backed data model.
 #[derive(Debug)]
+struct SourcePage {
+    key: (String, String, u32, u32, u64),
+    headers: Vec<String>,
+    rows: Arc<Vec<Vec<DataItem>>>,
+}
+
+/// Terminal interaction state kept out of the SQLite-backed data model.
+#[derive(Debug, Clone)]
 pub(crate) struct UiState {
     pub(crate) input: String,
     pub(crate) character_index: usize,
@@ -106,8 +119,12 @@ impl Controller {
         Self {
             database,
             history: History::default(),
-            selected_rows: HashSet::new(),
+            selected_rows: Selection::default(),
             column_layouts: HashMap::new(),
+            page_key: None,
+            source_page: None,
+            table_height: 20,
+            defer_refresh: false,
             command_history: VecDeque::new(),
             view: ViewState {
                 table_name,
@@ -117,7 +134,8 @@ impl Controller {
                 order_column: Some("id".into()),
                 ascending: true,
                 headers: vec![],
-                rows: vec![],
+                rows: Arc::default(),
+                column_indexes: vec![],
                 table_before_metadata: None,
             },
             ui: UiState {
@@ -230,7 +248,7 @@ impl Controller {
             .ok_or_else(|| app_error_other!("No command selected"))?;
         self.restore_view(entry.snapshot.clone());
         self.selected_rows = entry.selected_rows.clone();
-        self.get_headers_and_rows(100)?;
+        self.refresh_page(100)?;
         let result = match entry.command {
             Command::Copy => self.copy(),
             Command::Sort => self.sort(),
@@ -273,7 +291,7 @@ impl Controller {
         }
     }
 
-    fn clear_history(&mut self) {
+    pub(super) fn clear_history(&mut self) {
         for entry in self
             .history
             .undo
@@ -331,7 +349,7 @@ impl Controller {
         match &self.view.order_column {
             Some(column) => format!(
                 r#"ORDER BY "{}" {}"#,
-                column,
+                column.replace('"', "\"\""),
                 if self.view.ascending { "ASC" } else { "DESC" }
             ),
             None => String::new(),
@@ -517,7 +535,9 @@ impl Controller {
             },
             before,
         );
-        self.get_headers_and_rows(100)?;
+        if !self.defer_refresh {
+            self.refresh_page(100)?;
+        }
         Ok(())
     }
 
@@ -553,7 +573,9 @@ impl Controller {
             },
             before,
         );
-        self.get_headers_and_rows(100)?;
+        if !self.defer_refresh {
+            self.refresh_page(100)?;
+        }
         Ok(())
     }
 
@@ -562,10 +584,10 @@ impl Controller {
             .view
             .rows
             .get(self.view.row)
-            .and_then(|row| row.first())
+            .and_then(|row| row.get(*self.view.column_indexes.first()?))
             .ok_or_else(|| app_error_other!("No selected row"))?
             .to_string()
-            .parse::<i32>()
+            .parse::<i64>()
             .map_err(|err| app_error_other!(err.to_string()))?;
         if !self.selected_rows.insert(id) {
             self.selected_rows.remove(&id);
@@ -593,7 +615,7 @@ impl Controller {
             .connection
             .prepare(&format!("SELECT id FROM \"{table}\" WHERE {condition}"))?;
         let ids = stmt
-            .query_map([], |row| row.get::<_, i32>(0))?
+            .query_map([], |row| row.get::<_, i64>(0))?
             .collect::<Result<Vec<_>, _>>()?;
         self.selected_rows.extend(ids);
         self.ui.last_command = PreviousCommand::new(
@@ -606,28 +628,10 @@ impl Controller {
         let pattern = inputs
             .first()
             .ok_or_else(|| app_error_other!("Enter a regex"))?;
-        let regex = regex::Regex::new(pattern)?;
-        let col = self.selected_column()?;
-        let idx = self
+        let column = self.selected_column()?;
+        let ids = self
             .database
-            .get_headers(&self.view.table_name)?
-            .iter()
-            .position(|h| h == &col)
-            .ok_or_else(|| app_error_other!("Column not found"))?;
-        let (_, rows) = self
-            .database
-            .get(1_000_000, 0, &self.view.table_name, &self.ordering())?;
-        let mut ids = Vec::new();
-        for row in rows {
-            if row
-                .get(idx)
-                .is_some_and(|v| !v.is_empty() && regex.is_match(&v.to_string()))
-            {
-                if let Some(DataItem::Integer(id)) = row.first() {
-                    ids.push(*id as i32);
-                }
-            }
-        }
+            .select_regex(&self.view.table_name, &column, pattern)?;
         self.selected_rows.extend(ids);
         self.ui.last_command = PreviousCommand::new(
             Command::SelectRegex,
@@ -640,34 +644,13 @@ impl Controller {
             return Err(app_error_other!("No rows selected"));
         }
         let table = self.view.table_name.clone();
-        let headers = self.database.get_headers(&table)?;
-        let (_, all) = self.database.get(1_000_000, 0, &table, "")?;
-        let rows = all
-            .into_iter()
-            .filter(|r| {
-                r.first()
-                    .and_then(|x| x.to_string().parse::<i32>().ok())
-                    .is_some_and(|id| self.selected_rows.contains(&id))
-            })
-            .collect::<Vec<_>>();
         let before = self.view_snapshot();
-        for row in &rows {
-            let id = row[0].to_string();
-            self.database.execute_batch(&format!(
-                "DELETE FROM \"{}\" WHERE id={id};",
-                table.replace('"', "\"\"")
-            ))?;
+        let record = self.database.delete_selected(&table, &self.selected_rows)?;
+        self.record_history(record, before);
+        self.selected_rows.clear();
+        if !self.defer_refresh {
+            self.refresh_page(100)?;
         }
-        self.record_history(
-            UndoRecord::DeletedRows {
-                table,
-                headers,
-                rows,
-                is_deleted: true,
-            },
-            before,
-        );
-        self.get_headers_and_rows(100)?;
         self.ui.last_command = PreviousCommand::new(
             Command::DeleteSelected,
             Some("Deleted selected rows".into()),
@@ -687,50 +670,8 @@ impl Controller {
             target = format!("{base}_{n}");
             n += 1;
         }
-        let (_, rows) = self.database.get(1_000_000, 0, &source, &self.ordering())?;
-        let ids = rows
-            .into_iter()
-            .filter_map(|r| {
-                let id = r.first()?.to_string().parse::<i32>().ok()?;
-                self.selected_rows.contains(&id).then_some(id)
-            })
-            .collect::<Vec<_>>();
-        let src = source.replace('"', "\"\"");
-        let dst = target.replace('"', "\"\"");
-        let headers = self.database.get_headers(&source)?;
-        let mut stmt = self
-            .database
-            .connection
-            .prepare(&format!("PRAGMA table_info(\"{src}\")"))?;
-        let types = stmt
-            .query_map([], |r| Ok((r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
-            .collect::<Result<Vec<_>, _>>()?;
-        drop(stmt);
-        let declarations = types
-            .iter()
-            .filter(|(h, _)| h != "id")
-            .map(|(h, t)| format!("\"{}\" {}", h.replace('"', "\"\""), t))
-            .collect::<Vec<_>>();
-        let mut defs = vec!["\"id\" INTEGER PRIMARY KEY".to_string()];
-        defs.extend(declarations);
         self.database
-            .execute_batch(&format!("CREATE TABLE \"{dst}\" ({});", defs.join(",")))?;
-        let cols = headers
-            .iter()
-            .filter(|h| *h != "id")
-            .map(|h| format!("\"{}\"", h.replace('"', "\"\"")))
-            .collect::<Vec<_>>()
-            .join(",");
-        for id in ids {
-            if cols.is_empty() {
-                self.database
-                    .execute_batch(&format!("INSERT INTO \"{dst}\" DEFAULT VALUES;"))?;
-            } else {
-                self.database.execute_batch(&format!(
-                    "INSERT INTO \"{dst}\" ({cols}) SELECT {cols} FROM \"{src}\" WHERE id={id};"
-                ))?;
-            }
-        }
+            .copy_selected(&source, &target, &self.ordering(), &self.selected_rows)?;
         let hidden = self.database.internal_table_name()?;
         let before = self.view_snapshot();
         self.view.table_name = target.clone();
@@ -747,7 +688,9 @@ impl Controller {
             },
             before,
         );
-        self.get_headers_and_rows(100)?;
+        if !self.defer_refresh {
+            self.refresh_page(100)?;
+        }
         Ok(())
     }
 
@@ -766,23 +709,10 @@ impl Controller {
         let value = inputs
             .first()
             .ok_or_else(|| app_error_other!("No value provided"))?;
-        let mut ids = self.selected_rows.iter().copied().collect::<Vec<_>>();
-        ids.sort_unstable();
-        let mut cells = Vec::with_capacity(ids.len());
-        for id in ids {
-            let old = self.database.get_cell_item(&table, id, &column)?;
-            self.database.update_cell(&table, &column, id, value)?;
-            cells.push((id, old, DataItem::Text(value.clone())));
-        }
-        self.record_history(
-            UndoRecord::BulkCellEdit {
-                table,
-                column,
-                cells,
-                is_after: true,
-            },
-            before_view,
-        );
+        let record =
+            self.database
+                .bulk_edit_selected(&table, &column, &self.selected_rows, value)?;
+        self.record_history(record, before_view);
         self.ui.last_command =
             PreviousCommand::new(Command::BulkEdit, Some("Updated selected rows".into()));
         Ok(())
@@ -920,290 +850,282 @@ impl Controller {
         TUI::get_external_editor_input(&self.ui.input)
     }
 
-    fn user_input_mode(&mut self) -> AppResult<()> {
-        if let Event::Key(key) = event::read()? {
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                if let KeyCode::Char('c') = key.code {
-                    self.ui
-                        .input_mode_state_machine
-                        .transition(input::Event::AbortEditing)?;
-                    self.reset_input();
-                    return Ok(());
+    pub(super) fn dispatch(&mut self, command: Command, height: u32) -> AppResult<()> {
+        if self.ui.history_view {
+            match command {
+                Command::History | Command::HistoryClose => self.ui.history_view = false,
+                Command::Move(Direction::Up) => {
+                    self.ui.history_cursor = self.ui.history_cursor.saturating_sub(1)
                 }
-            }
-            if key.kind == KeyEventKind::Press {
-                match key.code {
-                    KeyCode::Enter => self.submit_message(),
-                    KeyCode::Char(to_insert) => {
-                        self.enter_char(to_insert);
-                    }
-                    KeyCode::Backspace => {
-                        self.delete_char();
-                    }
-                    KeyCode::Left => {
-                        self.move_cursor_left();
-                    }
-                    KeyCode::Right => {
-                        self.move_cursor_right();
-                    }
-                    KeyCode::Esc => {
-                        self.ui
-                            .input_mode_state_machine
-                            .transition(input::Event::AbortEditing)?;
-                        self.reset_input();
-                    }
-                    KeyCode::Tab => {
-                        self.ui
-                            .input_mode_state_machine
-                            .transition(input::Event::UseExternalEditor)?;
-                        let res = self.get_external_data();
-                        if let Ok(data) = res {
-                            self.ui.character_index = data.len();
-                            self.ui.input = data;
-                        }
-                        self.ui
-                            .input_mode_state_machine
-                            .transition(input::Event::ExitExternalEditor)?;
-                    }
-                    _ => {}
+                Command::Move(Direction::Down) => {
+                    self.ui.history_cursor = (self.ui.history_cursor + 1)
+                        .min(self.command_history.len().saturating_sub(1))
                 }
+                Command::HistoryReplay => {
+                    if let Err(err) = self.replay_history() {
+                        self.ui.last_command =
+                            PreviousCommand::new(Command::IllegalOperation, Some(err.to_string()));
+                    }
+                }
+                _ => {}
             }
+            return Ok(());
+        }
+        let before_command = self.view_snapshot();
+        self.ui.last_command = PreviousCommand::new(command.clone(), None);
+        let result = match command {
+            Command::RegexTransform
+            | Command::Save
+            | Command::RegexFilter
+            | Command::Edit
+            | Command::ExactSearch
+            | Command::SqlQuery
+            | Command::RenameColumn
+            | Command::MathOperation
+            | Command::RenameTable
+            | Command::Join
+            | Command::BulkEdit => {
+                self.ui.queued_command = Some(QueuedCommand::new(command.clone()));
+                self.ui
+                    .input_mode_state_machine
+                    .transition(input::Event::StartEditing)?;
+                Ok(())
+            }
+            Command::SelectSql | Command::SelectRegex => {
+                self.ui.queued_command = Some(QueuedCommand::new(command.clone()));
+                self.ui
+                    .input_mode_state_machine
+                    .transition(input::Event::StartEditing)?;
+                Ok(())
+            }
+            Command::Quit => Ok(()),
+            Command::Copy => self.copy(),
+            Command::IllegalOperation => Ok(()),
+            Command::None => Ok(()),
+            Command::Sort => self.sort(),
+            Command::Move(direction) => self.move_cursor(direction, height),
+            Command::NextTable => self.change_table(true),
+            Command::PrevTable => self.change_table(false),
+            Command::TextToInt => self.text_to_int(),
+            Command::IntToText => self.int_to_text(),
+            Command::DeleteColumn => self.delete_column(),
+            Command::DeleteTable => self.delete_table(),
+            Command::ToggleMetadataTable => self.toggle_metadata_table(),
+            Command::Undo | Command::Redo => self.dispatch_history_command(command.clone()), // Command::Join(_) => todo!(),
+            Command::Summary => self.show_analysis(false),
+            Command::Frequency => self.show_analysis(true),
+            Command::ToggleSelection => self.toggle_selection(),
+            Command::ClearSelection => self.clear_selection(),
+            Command::DeleteSelected => self.delete_selected(),
+            Command::CopySelected => self.copy_selected(),
+            Command::HideColumn => self.hide_selected_column(),
+            Command::ShowColumns => {
+                self.show_all_columns();
+                Ok(())
+            }
+            Command::ColumnLeft => self.move_column(true),
+            Command::ColumnRight => self.move_column(false),
+            Command::History => {
+                self.ui.history_view = true;
+                self.ui.history_cursor = self.command_history.len().saturating_sub(1);
+                Ok(())
+            }
+            Command::HistoryReplay | Command::HistoryClose => Ok(()),
+        };
+        match command {
+            Command::RenameTable => {
+                let old_table_name = self.view.table_name.clone();
+                self.ui.character_index = old_table_name.len();
+                self.ui.input = old_table_name;
+            }
+
+            Command::RenameColumn => {
+                log::info!("testing 2");
+            }
+            _ => {}
+        }
+
+        let prompted = matches!(
+            command,
+            Command::RegexTransform
+                | Command::Save
+                | Command::RegexFilter
+                | Command::Edit
+                | Command::ExactSearch
+                | Command::SqlQuery
+                | Command::RenameColumn
+                | Command::MathOperation
+                | Command::RenameTable
+                | Command::Join
+                | Command::BulkEdit
+                | Command::SelectSql
+                | Command::SelectRegex
+        );
+        if result.is_ok() && !prompted {
+            self.log_command(command.clone(), Vec::new(), before_command);
+        }
+
+        if let Err(err) = &result {
+            log::info!("Error: {:?}", err);
+        }
+        result
+    }
+    /// Execute a command synchronously for programmatic callers. The terminal
+    /// uses the worker protocol instead, so this never runs on its UI thread.
+    pub fn execute(&mut self, command: Command, inputs: Vec<String>) -> AppResult<()> {
+        self.refresh_page(100)?;
+        self.ui.last_command = PreviousCommand::new(command.clone(), None);
+        if super::worker::prompted(&command) {
+            self.execute_inputs(command, inputs)?;
+        } else {
+            self.dispatch(command, self.table_height)?;
+        }
+        self.refresh_page(100)?;
+        if self.ui.last_command.command == Command::IllegalOperation {
+            return Err(AppError::from(
+                self.ui
+                    .last_command
+                    .message
+                    .as_deref()
+                    .unwrap_or("Command failed"),
+            ));
         }
         Ok(())
     }
 
-    fn normal_mode(&mut self) -> AppResult<()> {
-        if event::poll(POLL_TIMEOUT)? {
-            let res = match if let Event::Key(key) = event::read()? {
-                Ok(Command::from(key))
+    pub fn run(self, tui: TUI) -> AppResult<()> {
+        super::worker::run(
+            move |token| {
+                let mut controller = self;
+                controller.database.cancellation = token.clone();
+                Database::install_cancellation(&controller.database.connection, token);
+                Ok(controller)
+            },
+            tui,
+        )
+    }
+
+    pub fn run_paths(paths: Vec<PathBuf>, tui: TUI) -> AppResult<()> {
+        super::worker::run(
+            move |token| Database::load_cancellable(paths, token).map(Self::new),
+            tui,
+        )
+    }
+
+    pub(super) fn execute_inputs(
+        &mut self,
+        command: Command,
+        inputs: Vec<String>,
+    ) -> AppResult<()> {
+        if inputs.is_empty() {
+            return Err(AppError::from("Command input is required"));
+        }
+        let before_command = self.view_snapshot();
+        self.ui.queued_command = Some(QueuedCommand {
+            command: command.clone(),
+            inputs: inputs.clone(),
+        });
+        self.execute_queued_command()?;
+        self.ui.queued_command = None;
+        if self.ui.last_command.command != Command::IllegalOperation {
+            if command == Command::SqlQuery {
+                self.ui.last_command = PreviousCommand::new(
+                    command,
+                    Some("SQL executed; undo history was cleared (SQL is not undoable)".into()),
+                );
             } else {
-                Err(app_error_other!("Could not poll"))
-            } {
-                Ok(command) => {
-                    if self.ui.history_view {
-                        match command {
-                            Command::History | Command::HistoryClose => {
-                                self.ui.history_view = false
-                            }
-                            Command::Move(Direction::Up) => {
-                                self.ui.history_cursor = self.ui.history_cursor.saturating_sub(1)
-                            }
-                            Command::Move(Direction::Down) => {
-                                self.ui.history_cursor = (self.ui.history_cursor + 1)
-                                    .min(self.command_history.len().saturating_sub(1))
-                            }
-                            Command::HistoryReplay => {
-                                if let Err(err) = self.replay_history() {
-                                    self.ui.last_command = PreviousCommand::new(
-                                        Command::IllegalOperation,
-                                        Some(err.to_string()),
-                                    );
-                                }
-                            }
-                            _ => {}
-                        }
-                        return Ok(());
-                    }
-                    let before_command = self.view_snapshot();
-                    self.ui.last_command = PreviousCommand::new(command.clone(), None);
-                    let result = match command {
-                        Command::RegexTransform
-                        | Command::Save
-                        | Command::RegexFilter
-                        | Command::Edit
-                        | Command::ExactSearch
-                        | Command::SqlQuery
-                        | Command::RenameColumn
-                        | Command::MathOperation
-                        | Command::RenameTable
-                        | Command::Join
-                        | Command::BulkEdit => {
-                            self.ui.queued_command = Some(QueuedCommand::new(command.clone()));
-                            self.ui
-                                .input_mode_state_machine
-                                .transition(input::Event::StartEditing)?;
-                            Ok(())
-                        }
-                        Command::SelectSql | Command::SelectRegex => {
-                            self.ui.queued_command = Some(QueuedCommand::new(command.clone()));
-                            self.ui
-                                .input_mode_state_machine
-                                .transition(input::Event::StartEditing)?;
-                            Ok(())
-                        }
-                        Command::Quit => Ok(()),
-                        Command::Copy => self.copy(),
-                        Command::IllegalOperation => Ok(()),
-                        Command::None => Ok(()),
-                        Command::Sort => self.sort(),
-                        Command::Move(direction) => {
-                            self.move_cursor(direction, TUI::get_table_height()?)
-                        }
-                        Command::NextTable => self.change_table(true),
-                        Command::PrevTable => self.change_table(false),
-                        Command::TextToInt => self.text_to_int(),
-                        Command::IntToText => self.int_to_text(),
-                        Command::DeleteColumn => self.delete_column(),
-                        Command::DeleteTable => self.delete_table(),
-                        Command::ToggleMetadataTable => self.toggle_metadata_table(),
-                        Command::Undo | Command::Redo => {
-                            self.dispatch_history_command(command.clone())
-                        } // Command::Join(_) => todo!(),
-                        Command::Summary => self.show_analysis(false),
-                        Command::Frequency => self.show_analysis(true),
-                        Command::ToggleSelection => self.toggle_selection(),
-                        Command::ClearSelection => self.clear_selection(),
-                        Command::DeleteSelected => self.delete_selected(),
-                        Command::CopySelected => self.copy_selected(),
-                        Command::HideColumn => self.hide_selected_column(),
-                        Command::ShowColumns => {
-                            self.show_all_columns();
-                            Ok(())
-                        }
-                        Command::ColumnLeft => self.move_column(true),
-                        Command::ColumnRight => self.move_column(false),
-                        Command::History => {
-                            self.ui.history_view = true;
-                            self.ui.history_cursor = self.command_history.len().saturating_sub(1);
-                            Ok(())
-                        }
-                        Command::HistoryReplay | Command::HistoryClose => Ok(()),
-                    };
-                    match command {
-                        Command::RenameTable => {
-                            let old_table_name = self.view.table_name.clone();
-                            self.ui.character_index = old_table_name.len();
-                            self.ui.input = old_table_name;
-                        }
-
-                        Command::RenameColumn => {
-                            log::info!("testing 2");
-                        }
-                        _ => {}
-                    }
-
-                    let prompted = matches!(
-                        command,
-                        Command::RegexTransform
-                            | Command::Save
-                            | Command::RegexFilter
-                            | Command::Edit
-                            | Command::ExactSearch
-                            | Command::SqlQuery
-                            | Command::RenameColumn
-                            | Command::MathOperation
-                            | Command::RenameTable
-                            | Command::Join
-                            | Command::BulkEdit
-                            | Command::SelectSql
-                            | Command::SelectRegex
-                    );
-                    if result.is_ok() && !prompted {
-                        self.log_command(command.clone(), Vec::new(), before_command);
-                    }
-
-                    if let Err(err) = &result {
-                        log::info!("Error: {:?}", err);
-                    }
-                    result
-                }
-                Err(result) => {
-                    self.ui.last_command =
-                        PreviousCommand::new(Command::IllegalOperation, Some(result.to_string()));
-                    Ok(())
-                }
-            };
-            if let Err(e) = res {
-                self.ui.last_command =
-                    PreviousCommand::new(Command::IllegalOperation, Some(format!(": {}", e)));
+                self.log_command(command.clone(), inputs, before_command);
+                self.ui.last_command = PreviousCommand::new(command, Some("Completed".into()));
             }
         }
         Ok(())
     }
-    pub fn run(&mut self, mut tui: TUI) -> AppResult<()> {
-        loop {
-            tui.draw(self)?;
-            match self.ui.input_mode_state_machine.get_state() {
-                InputMode::Finish => {
-                    if let Some(queued_command) = self.ui.queued_command.clone() {
-                        let before_command = self.view_snapshot();
-                        self.execute_queued_command()?;
-                        self.ui.queued_command = None;
-                        if self.ui.last_command.command != Command::IllegalOperation
-                            && queued_command.command == Command::SqlQuery
-                        {
-                            self.ui.last_command = PreviousCommand::new(
-                                Command::SqlQuery,
-                                Some(
-                                    "SQL executed; undo history was cleared (SQL is not undoable)"
-                                        .into(),
-                                ),
-                            );
-                        } else if self.ui.last_command.command != Command::IllegalOperation {
-                            self.log_command(
-                                queued_command.command.clone(),
-                                queued_command.inputs.clone(),
-                                before_command,
-                            );
-                            let message = self
-                                .ui
-                                .last_command
-                                .message
-                                .clone()
-                                .or_else(|| Some("Completed".to_owned()));
-                            self.ui.last_command =
-                                PreviousCommand::new(queued_command.command, message);
-                        }
-                        self.ui
-                            .input_mode_state_machine
-                            .transition(input::Event::Reset)?;
-                    } else {
-                        return Err(app_error_other!("No queued command, but in finish state"));
-                    }
-                }
-                InputMode::Editing if (self.ui.queued_command.is_some()) => {
-                    let res = self.user_input_mode();
-                }
-                InputMode::Normal => {
-                    let res = self.normal_mode();
-                    if self.ui.last_command.command == Command::Quit {
-                        tui.shutdown()?;
-                        self.clear_history();
-                        break Ok(());
-                    }
-                }
-                InputMode::Abort => {
-                    self.ui.last_command =
-                        PreviousCommand::new(Command::None, Some("Aborted input".to_string()));
 
-                    self.ui.queued_command = None;
-                    self.ui
-                        .input_mode_state_machine
-                        .transition(input::Event::Reset)?;
-                }
-                InputMode::ExternalEditor => todo!(),
-                InputMode::Editing => unreachable!(),
-            }
-        }
+    pub(super) fn shutdown(&mut self) {
+        self.clear_history();
     }
+
     pub fn get_headers_and_rows(&mut self, limit: u32) -> AppResult<DataTable> {
+        self.refresh_page(limit)?;
+        let rows = self
+            .view
+            .rows
+            .iter()
+            .map(|row| {
+                self.view
+                    .column_indexes
+                    .iter()
+                    .filter_map(|index| row.get(*index).cloned())
+                    .collect()
+            })
+            .collect();
+        Ok((self.view.headers.clone(), rows))
+    }
+
+    pub(super) fn refresh_page(&mut self, limit: u32) -> AppResult<()> {
         let ordering = self.ordering();
-        let page = self.database.get(
-            limit,
+        let layout = self
+            .column_layouts
+            .get(&self.view.table_name)
+            .cloned()
+            .unwrap_or_default();
+        let key = (
+            self.view.table_name.clone(),
+            ordering.clone(),
             self.view.row_offset,
-            &self.view.table_name,
-            &ordering,
-        )?;
+            limit,
+            self.database.revision(),
+            layout,
+        );
+        if self.page_key.as_ref() == Some(&key) {
+            return Ok(());
+        }
+        let source_key = (
+            self.view.table_name.clone(),
+            ordering.clone(),
+            self.view.row_offset,
+            limit,
+            self.database.revision(),
+        );
+        if self.source_page.as_ref().map(|page| &page.key) != Some(&source_key) {
+            let (headers, rows) = self.database.get(
+                limit,
+                self.view.row_offset,
+                &self.view.table_name,
+                &ordering,
+            )?;
+            self.source_page = Some(SourcePage {
+                key: source_key,
+                headers,
+                rows: Arc::new(rows),
+            });
+        }
+        let page = self.source_page.as_ref().unwrap();
         let layout = self
             .column_layouts
             .entry(self.view.table_name.clone())
             .or_default();
-        for header in &page.0 {
-            if !layout.order.contains(header) {
-                layout.order.push(header.clone());
-            }
-        }
-        layout.order.retain(|header| page.0.contains(header));
+        let positions = page
+            .headers
+            .iter()
+            .enumerate()
+            .map(|(index, header)| (header.as_str(), index))
+            .collect::<HashMap<_, _>>();
+        let known = layout
+            .order
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        let missing = page
+            .headers
+            .iter()
+            .filter(|header| !known.contains(header.as_str()))
+            .cloned()
+            .collect::<Vec<_>>();
+        layout.order.extend(missing);
+        layout
+            .order
+            .retain(|header| positions.contains_key(header.as_str()));
         if let Some(id_index) = layout.order.iter().position(|header| header == "id") {
             if id_index != 0 {
                 layout.order.swap(0, id_index);
@@ -1214,25 +1136,28 @@ impl Controller {
             .order
             .iter()
             .filter(|header| !layout.hidden.contains(*header))
-            .filter_map(|header| page.0.iter().position(|candidate| candidate == header))
+            .filter_map(|header| positions.get(header.as_str()).copied())
             .collect::<Vec<_>>();
-        self.view.headers = indexes.iter().map(|index| page.0[*index].clone()).collect();
-        self.view.rows = page
-            .1
+        self.view.headers = indexes
             .iter()
-            .map(|row| {
-                indexes
-                    .iter()
-                    .filter_map(|index| row.get(*index).cloned())
-                    .collect()
-            })
+            .map(|index| page.headers[*index].clone())
             .collect();
+        self.view.rows = page.rows.clone();
+        self.view.column_indexes = indexes;
         self.view.row = self.view.row.min(self.view.rows.len().saturating_sub(1));
         self.view.column = self
             .view
             .column
             .min(self.view.headers.len().saturating_sub(1));
-        Ok((self.view.headers.clone(), self.view.rows.clone()))
+        self.page_key = Some((
+            self.view.table_name.clone(),
+            ordering,
+            self.view.row_offset,
+            limit,
+            self.database.revision(),
+            layout.clone(),
+        ));
+        Ok(())
     }
 
     pub fn regex_filter(&mut self, inputs: Vec<String>) -> AppResult<()> {
@@ -1271,7 +1196,6 @@ impl Controller {
         let contains_capture_pattern = regex.capture_names().len() > 1;
         let header = self.selected_column()?;
 
-        log::error!("TODO implement capture groups again!!!");
         if let Some(transformation) = inputs.get(1) {
             if contains_capture_pattern && !transformation.is_empty() {
                 // let transformation = if cfg!(debug_assertions) {
@@ -1319,7 +1243,9 @@ impl Controller {
             },
             before,
         );
-        self.get_headers_and_rows(100)?;
+        if !self.defer_refresh {
+            self.refresh_page(100)?;
+        }
         Ok(())
     }
 
@@ -1345,10 +1271,10 @@ impl Controller {
             .view
             .rows
             .get(self.view.row)
-            .and_then(|r| r.first())
+            .and_then(|r| r.get(*self.view.column_indexes.first()?))
             .map(|v| v.to_string())
             .ok_or_else(|| app_error_other!("No selected row"))?
-            .parse::<i32>()
+            .parse::<i64>()
             .map_err(|e| app_error_other!(e.to_string()))?;
         let data = self.database.get_cell_item(&table, id, &header)?;
         let edit_result = inputs[0].to_owned();
@@ -1395,7 +1321,7 @@ impl Controller {
             &pattern,
         ) {
             Ok(position) => {
-                let height = TUI::get_table_height()?.max(1);
+                let height = self.table_height.max(1);
                 self.view.row = (position % height) as usize;
                 self.view.row_offset = position - position % height;
                 self.ui.last_command =
@@ -1491,7 +1417,9 @@ impl Controller {
             },
             before,
         );
-        self.get_headers_and_rows(100)?;
+        if !self.defer_refresh {
+            self.refresh_page(100)?;
+        }
         Ok(())
     }
 

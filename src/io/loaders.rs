@@ -31,60 +31,63 @@ impl TryFrom<Vec<PathBuf>> for Database {
     type Error = AppError;
 
     fn try_from(paths: Vec<PathBuf>) -> AppResult<Self> {
+        Self::load_cancellable(
+            paths,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+    }
+}
+
+impl Database {
+    pub(crate) fn load_cancellable(
+        paths: Vec<PathBuf>,
+        token: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) -> AppResult<Self> {
         if paths.is_empty() {
             return Err(AppError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "No file paths provided",
             )));
         }
-        if paths.len() == 1 {
-            let path = paths[0].clone();
-            return match path.extension().and_then(|ext| ext.to_str()) {
-                Some("csv") => {
-                    let connection = if cfg!(debug_assertions) {
-                        Connection::open_in_memory()?
-                    } else {
-                        let _ = std::fs::remove_file("db.sqlite");
-                        Connection::open("db.sqlite")?
-                    };
-                    csv_dataset(path, connection)
-                }
-                Some("tsv") => {
-                    let connection = Connection::open_in_memory()?;
-                    tsv(path, &connection)?;
-                    Database::new(connection)
-                }
-                Some("sqlite") | Some("sqlite3") | Some("db") => sqlite(Connection::open(path)?),
-                _ => Err(AppError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    "Invalid file extension",
-                ))),
-            };
+        if paths.len() == 1
+            && paths[0]
+                .extension()
+                .is_some_and(|ext| ext == "sqlite" || ext == "sqlite3" || ext == "db")
+        {
+            let connection = Connection::open(&paths[0])?;
+            Self::install_cancellation(&connection, token.clone());
+            let mut database = Self::new(connection)?;
+            Self::install_cancellation(&database.connection, token.clone());
+            database.cancellation = token;
+            return Ok(database);
         }
-
         if paths.iter().all(|path| {
             path.extension()
-                .is_some_and(|extension| extension == "csv" || extension == "tsv")
+                .is_some_and(|ext| ext == "csv" || ext == "tsv")
         }) {
-            let _ = std::fs::remove_file("db.sqlite");
-            let connection = Connection::open("db.sqlite")?;
-            let first = paths[0].clone();
-            let database = if first
-                .extension()
-                .is_some_and(|extension| extension == "tsv")
-            {
-                tsv(first, &connection)?;
-                Database::new(connection)?
-            } else {
-                csv_dataset(first, connection)?
-            };
-            for path in paths.iter().skip(1) {
-                if path.extension().is_some_and(|extension| extension == "tsv") {
-                    tsv(path.clone(), &database.connection)?;
-                } else {
-                    csv(path.clone(), &database.connection)?;
+            let directory = tempfile::Builder::new().prefix("dataman-").tempdir()?;
+            let connection = Connection::open(directory.path().join("session.sqlite"))?;
+            let mut database = Database::new(connection)?;
+            database.session_directory = Some(directory);
+            database.cancellation = token.clone();
+            Self::install_cancellation(&database.connection, token.clone());
+            database.atomic(|| {
+                for path in paths {
+                    database.check_cancelled()?;
+                    let delimiter = if path.extension().is_some_and(|ext| ext == "tsv") {
+                        b'\t'
+                    } else {
+                        b','
+                    };
+                    super::csv_format::insert_delimited_cancellable(
+                        path,
+                        &database.connection,
+                        delimiter,
+                        Some(&token),
+                    )?;
                 }
-            }
+                Ok(())
+            })?;
             return Ok(database);
         }
 

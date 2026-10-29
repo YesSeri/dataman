@@ -1,43 +1,105 @@
-use criterion::{criterion_group, criterion_main, Criterion};
-use rusqlite::Connection;
-use rusqlite::Result;
+mod support;
+use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use dataman::{
+    controller::{controller_impl::Controller, Command},
+    model::database::Database,
+    navigation::Direction,
+};
+use support::Fixture;
 
-fn setup_large_database(conn: &Connection, num_rows: usize) -> Result<()> {
-    conn.execute(
-        "CREATE TABLE test (id INTEGER PRIMARY KEY, val INTEGER, transformed_val INTEGER)",
-        [],
-    )?;
-    let mut stmt = conn.prepare("INSERT INTO test (val) VALUES (?)")?;
-
-    for i in 0..num_rows {
-        let val = i + 1;
-        stmt.execute([val])?;
-    }
-
-    Ok(())
-}
-fn benchmark_math(c: &mut Criterion) {
-    let conn0 = Connection::open_in_memory().unwrap();
-    setup_large_database(&conn0, 100000).unwrap();
-    let conn1 = Connection::open_in_memory().unwrap();
-    setup_large_database(&conn1, 100000).unwrap();
-    c.bench_function("math complex query", |b| {
+fn workflows(c: &mut Criterion) {
+    let rows = support::rows();
+    let mut group = c.benchmark_group(format!("rows/{rows}"));
+    let fixture = Fixture::new(rows);
+    let output = fixture.directory.path().join("export.csv");
+    fixture
+        .database
+        .export_delimited("data", &output, b',')
+        .unwrap();
+    group.bench_function("workflow/import_csv", |b| {
         b.iter(|| {
-            let mut stmt = conn1
-                .prepare("UPDATE test SET transformed_val = ln(val)")
-                .unwrap();
-            stmt.execute([]).unwrap();
+            black_box(Database::try_from(vec![output.clone()]).unwrap());
         })
     });
-    c.bench_function("math simple query", |b| {
+    group.bench_function("workflow/export_csv", |b| {
         b.iter(|| {
-            let mut stmt = conn0
-                .prepare("UPDATE test SET transformed_val = val + 1")
-                .unwrap();
-            stmt.execute([]).unwrap();
+            fixture
+                .database
+                .export_delimited("data", &output, b',')
+                .unwrap()
         })
     });
+    group.bench_function("workflow/derive_column", |b| {
+        b.iter(|| {
+            fixture
+                .database
+                .derive_column("data", "value", "derived", |value| {
+                    Some(format!("{value}-suffix"))
+                })
+                .unwrap();
+            fixture
+                .database
+                .execute_batch("ALTER TABLE data DROP COLUMN derived;")
+                .unwrap();
+        })
+    });
+    // Model the original transaction-per-row update on the same disk-backed fixture.
+    let mut legacy_iteration = false;
+    group.bench_function("bulk/legacy_1000_commits", |b| {
+        b.iter(|| {
+            legacy_iteration = !legacy_iteration;
+            for id in 1..=1000 {
+                fixture
+                    .raw
+                    .execute(
+                        "UPDATE data SET value=? WHERE id=?",
+                        rusqlite::params![
+                            if legacy_iteration {
+                                "legacy-a"
+                            } else {
+                                "legacy-b"
+                            },
+                            id
+                        ],
+                    )
+                    .unwrap();
+            }
+        })
+    });
+    group.bench_function("workflow/exact_search", |b| {
+        b.iter(|| {
+            black_box(
+                fixture
+                    .database
+                    .exact_search("data", "ORDER BY id", 0, "value", "value-999")
+                    .unwrap(),
+            );
+        })
+    });
+    let mut controller = Controller::new(fixture.database);
+    controller
+        .execute(Command::Move(Direction::Right), vec![])
+        .unwrap();
+    controller
+        .execute(Command::SelectSql, vec!["id <= 1000".into()])
+        .unwrap();
+    group.bench_function("bulk/transaction_with_undo_1000", |b| {
+        b.iter(|| {
+            controller
+                .execute(Command::BulkEdit, vec!["updated".into()])
+                .unwrap();
+            controller.execute(Command::Undo, vec![]).unwrap();
+        })
+    });
+    group.bench_function("workflow/regex_selection", |b| {
+        b.iter(|| {
+            controller
+                .execute(Command::SelectRegex, vec!["value-99$".into()])
+                .unwrap();
+            controller.execute(Command::ClearSelection, vec![]).unwrap();
+        })
+    });
+    group.finish();
 }
-
-criterion_group!(benches, benchmark_math);
+criterion_group! { name = benches; config = Criterion::default().sample_size(10); targets = workflows }
 criterion_main!(benches);

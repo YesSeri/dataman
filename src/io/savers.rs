@@ -4,12 +4,12 @@ use crate::{error::AppResult, model::database::Database};
 
 /// Export the selected table to CSV.
 pub fn csv(database: &Database, table_name: &str, path: &Path) -> AppResult<()> {
-    super::csv_format::save_to_csv_file(&database.connection, table_name, &path.to_path_buf())
+    database.export_delimited(table_name, path, b',')
 }
 
 /// Export the selected table to TSV.
 pub fn tsv(database: &Database, table_name: &str, path: &Path) -> AppResult<()> {
-    super::csv_format::save_to_tsv_file(&database.connection, table_name, &path.to_path_buf())
+    database.export_delimited(table_name, path, b'\t')
 }
 
 /// Save the complete SQLite dataset to a database file.
