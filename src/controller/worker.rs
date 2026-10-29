@@ -447,7 +447,7 @@ impl Frontend {
                 self.moved_while_busy = true;
             } else if matches!(
                 command,
-                Command::NextTable | Command::PrevTable | Command::Sort
+                Command::NextTable | Command::PrevTable | Command::PreviousSheet | Command::Sort
             ) {
                 self.deferred = Some(command);
             } else if command != Command::None {

@@ -41,6 +41,17 @@ Command history is kept for the current session. SQL and file saves are excluded
 
 This checklist is the supported workflow target and release gate.
 
+### VisiData workflow roadmap status
+
+- [x] Preserve cursor, sort order, and row selection independently for each table while switching; `Ctrl+^` returns to the previously visited table.
+- [ ] Dedicated sheet-list view with stable sheet identities, selection, rename, reorder, and atomic multi-delete.
+- [ ] Logical type configuration, conversion error records, and all-column Describe statistics.
+- [ ] Frequency provenance, source-row drill-down, and selection propagation.
+- [ ] Grouping, aggregations, and pivots.
+- [ ] Multi-key joins and schema-aligned append.
+
+The remaining items above are planned work and are not supported by the current release.
+
 The following are some of the more commonly used key commands in the TUI application:
 
 ### Table Navigation
@@ -48,6 +59,7 @@ The following are some of the more commonly used key commands in the TUI applica
 | -------------------- | ------------------- |
 | `Ctrl + Right`       | Next Table          |
 | `Ctrl + Left`        | Previous Table      |
+| `Ctrl + ^`           | Return to Previous Table |
 | `Right/Left/Up/Down` | Move cursor         |
 | `Ctrl + c`           | Quit                |
 | `Ctrl + s`           | Save                |

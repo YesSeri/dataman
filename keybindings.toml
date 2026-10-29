@@ -40,6 +40,8 @@
 "esc" = "history_close"
 "ctrl+right" = "next_table"
 "ctrl+left" = "previous_table"
+"ctrl+^" = "previous_sheet"
+"ctrl+6" = "previous_sheet"
 "left" = "move_left"
 "right" = "move_right"
 "up" = "move_up"

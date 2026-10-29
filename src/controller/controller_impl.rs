@@ -28,11 +28,23 @@ pub struct Controller {
     history: History,
     pub(crate) selected_rows: Selection,
     column_layouts: HashMap<String, ColumnLayout>,
+    sheet_views: HashMap<String, SheetView>,
+    previous_sheet: Option<String>,
     page_key: Option<(String, String, u32, u32, u64, ColumnLayout)>,
     source_page: Option<SourcePage>,
     pub(super) table_height: u32,
     pub(super) defer_refresh: bool,
     pub(crate) command_history: VecDeque<LoggedCommand>,
+}
+
+#[derive(Debug, Clone)]
+struct SheetView {
+    column: usize,
+    row: usize,
+    row_offset: u32,
+    order_column: Option<String>,
+    ascending: bool,
+    selection: Selection,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +133,8 @@ impl Controller {
             history: History::default(),
             selected_rows: Selection::default(),
             column_layouts: HashMap::new(),
+            sheet_views: HashMap::new(),
+            previous_sheet: None,
             page_key: None,
             source_page: None,
             table_height: 20,
@@ -213,6 +227,7 @@ impl Controller {
                 | Command::Move(_)
                 | Command::NextTable
                 | Command::PrevTable
+                | Command::PreviousSheet
                 | Command::Save
                 | Command::SqlQuery
                 | Command::Undo
@@ -476,11 +491,7 @@ impl Controller {
             } else {
                 (index + names.len() - 1) % names.len()
             };
-            self.view.table_name = names[target].clone();
-            self.selected_rows.clear();
-            self.view.column = 0;
-            self.view.row = 0;
-            self.view.row_offset = 0;
+            self.switch_sheet(names[target].clone())?;
         } else if self
             .database
             .get_table_names()?
@@ -493,6 +504,54 @@ impl Controller {
             self.view.row_offset = 0;
         }
         self.normalize_sort_column()?;
+        Ok(())
+    }
+
+    fn switch_sheet(&mut self, target: String) -> AppResult<()> {
+        if target == self.view.table_name {
+            return Ok(());
+        }
+        let current = self.view.table_name.clone();
+        self.sheet_views.insert(
+            current.clone(),
+            SheetView {
+                column: self.view.column,
+                row: self.view.row,
+                row_offset: self.view.row_offset,
+                order_column: self.view.order_column.clone(),
+                ascending: self.view.ascending,
+                selection: self.selected_rows.clone(),
+            },
+        );
+        self.previous_sheet = Some(current);
+        self.view.table_name = target.clone();
+        if let Some(saved) = self.sheet_views.get(&target).cloned() {
+            self.view.column = saved.column;
+            self.view.row = saved.row;
+            self.view.row_offset = saved.row_offset;
+            self.view.order_column = saved.order_column;
+            self.view.ascending = saved.ascending;
+            self.selected_rows = saved.selection;
+        } else {
+            self.view.column = 0;
+            self.view.row = 0;
+            self.view.row_offset = 0;
+            self.selected_rows.clear();
+        }
+        self.normalize_sort_column()?;
+        Ok(())
+    }
+
+    fn previous_sheet(&mut self) -> AppResult<()> {
+        let Some(name) = self.previous_sheet.clone() else {
+            return Ok(());
+        };
+        if !self.database.get_table_names()?.contains(&name) {
+            return Ok(());
+        }
+        let current = self.view.table_name.clone();
+        self.switch_sheet(name)?;
+        self.previous_sheet = Some(current);
         Ok(())
     }
 
@@ -906,6 +965,7 @@ impl Controller {
             Command::Move(direction) => self.move_cursor(direction, height),
             Command::NextTable => self.change_table(true),
             Command::PrevTable => self.change_table(false),
+            Command::PreviousSheet => self.previous_sheet(),
             Command::TextToInt => self.text_to_int(),
             Command::IntToText => self.int_to_text(),
             Command::DeleteColumn => self.delete_column(),
@@ -1474,6 +1534,7 @@ impl Controller {
                 | Command::Sort
                 | Command::NextTable
                 | Command::PrevTable
+                | Command::PreviousSheet
                 | Command::TextToInt
                 | Command::IntToText
                 | Command::DeleteTable
@@ -1526,6 +1587,12 @@ impl Controller {
             .rename_table(&old_table_name, &new_table_name)?;
         if let Some(layout) = self.column_layouts.remove(&old_table_name) {
             self.column_layouts.insert(new_table_name.clone(), layout);
+        }
+        if let Some(sheet_view) = self.sheet_views.remove(&old_table_name) {
+            self.sheet_views.insert(new_table_name.clone(), sheet_view);
+        }
+        if self.previous_sheet.as_deref() == Some(&old_table_name) {
+            self.previous_sheet = Some(new_table_name.clone());
         }
         self.view.table_name = new_table_name;
         self.ui.last_command = PreviousCommand::new(Command::RenameTable, None);

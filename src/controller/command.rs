@@ -48,6 +48,7 @@ pub enum Command {
     Move(Direction),
     NextTable,
     PrevTable,
+    PreviousSheet,
     ExactSearch,
     TextToInt,
     IntToText,
@@ -88,6 +89,7 @@ impl Command {
             | Command::Sort
             | Command::NextTable
             | Command::PrevTable
+            | Command::PreviousSheet
             | Command::TextToInt
             | Command::IntToText
             | Command::DeleteColumn
@@ -138,6 +140,7 @@ impl Command {
             Command::Move(dir) => format!("Move {}", dir),
             Command::NextTable => "Next Table".to_string(),
             Command::PrevTable => "Prev Table".to_string(),
+            Command::PreviousSheet => "Previous Sheet".to_string(),
             Command::ExactSearch => "Exact Search".to_string(),
             Command::TextToInt => "Text to Int".to_string(),
             Command::IntToText => "Int to Text".to_string(),
@@ -188,6 +191,7 @@ impl From<KeyEvent> for Command {
             "save" => Command::Save,
             "next_table" => Command::NextTable,
             "previous_table" => Command::PrevTable,
+            "previous_sheet" => Command::PreviousSheet,
             "exact_search" => Command::ExactSearch,
             "text_to_int" => Command::TextToInt,
             "int_to_text" => Command::IntToText,
@@ -270,6 +274,10 @@ mod keybinding_tests {
         assert_eq!(
             Command::from(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)),
             Command::NextTable
+        );
+        assert_eq!(
+            Command::from(KeyEvent::new(KeyCode::Char('6'), KeyModifiers::CONTROL)),
+            Command::PreviousSheet
         );
         assert_eq!(
             Command::from(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL)),
