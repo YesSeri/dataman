@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -73,6 +73,13 @@ pub(crate) enum UndoRecord {
     },
     Group(Vec<UndoRecord>),
     ViewChange,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum JoinKind {
+    Inner,
+    Left,
+    Full,
 }
 
 #[derive(Debug)]
@@ -1095,6 +1102,173 @@ impl Database {
         Ok(result)
     }
 
+    pub(crate) fn join_tables_with_keys(
+        &self,
+        left: &str,
+        right: &str,
+        keys: &[(String, String)],
+        kind: JoinKind,
+    ) -> AppResult<String> {
+        if keys.is_empty() {
+            return Err(AppError::from("At least one join key is required"));
+        }
+        if left == right {
+            return Err(AppError::from("Choose two different tables"));
+        }
+        let left_headers = self.get_headers(left)?;
+        let right_headers = self.get_headers(right)?;
+        let mut conditions = Vec::with_capacity(keys.len());
+        for (left_key, right_key) in keys {
+            if !left_headers.contains(left_key) || !right_headers.contains(right_key) {
+                return Err(AppError::from("Join column does not exist"));
+            }
+            let left_type = self.column_declared_type(left, left_key)?;
+            let right_type = self.column_declared_type(right, right_key)?;
+            if Self::type_affinity(&left_type) != Self::type_affinity(&right_type) {
+                return Err(crate::app_error_other!(
+                    "Incompatible join key types: {left_type} and {right_type}"
+                ));
+            }
+            conditions.push(format!(
+                "{}.{} = {}.{}",
+                quote_identifier(left),
+                quote_identifier(left_key),
+                quote_identifier(right),
+                quote_identifier(right_key)
+            ));
+        }
+        let result = self.find_unused_table_name(&format!("{left}_{right}_join"))?;
+        let mut columns = Vec::new();
+        let mut aliases = HashSet::new();
+        for (source, headers) in [(left, left_headers), (right, right_headers)] {
+            for header in headers
+                .into_iter()
+                .filter(|header| header != "id" && !header.starts_with(INTERNAL_PREFIX))
+            {
+                let base = format!("{source}_{header}");
+                let mut alias = base.clone();
+                let mut suffix = 1;
+                while !aliases.insert(alias.clone()) {
+                    alias = format!("{base}_{suffix}");
+                    suffix += 1;
+                }
+                columns.push(format!(
+                    "{}.{} AS {}",
+                    quote_identifier(source),
+                    quote_identifier(&header),
+                    quote_identifier(&alias)
+                ));
+            }
+        }
+        if columns.is_empty() {
+            columns.push("1 AS value".into());
+        }
+        let join_type = match kind {
+            JoinKind::Inner => "INNER JOIN",
+            JoinKind::Left => "LEFT JOIN",
+            JoinKind::Full => "FULL OUTER JOIN",
+        };
+        let query = format!(
+            "CREATE TABLE {} AS SELECT ROW_NUMBER() OVER () AS id, {} FROM {} {} {} ON {};",
+            quote_identifier(&result),
+            columns.join(", "),
+            quote_identifier(left),
+            join_type,
+            quote_identifier(right),
+            conditions.join(" AND ")
+        );
+        self.execute_batch(&query)?;
+        Ok(result)
+    }
+
+    pub(crate) fn append_tables(&self, tables: &[String]) -> AppResult<String> {
+        if tables.len() < 2 {
+            return Err(AppError::from("Append requires at least two tables"));
+        }
+        let mut headers = Vec::new();
+        let mut known = HashSet::new();
+        for table in tables {
+            for header in self
+                .get_headers(table)?
+                .into_iter()
+                .filter(|header| header != "id" && !header.starts_with(INTERNAL_PREFIX))
+            {
+                if known.insert(header.clone()) {
+                    headers.push(header);
+                }
+            }
+        }
+        if headers.is_empty() {
+            return Err(AppError::from("Tables have no data columns to append"));
+        }
+        let result = self.find_unused_table_name("append")?;
+        let selects = tables
+            .iter()
+            .map(|table| {
+                let table_headers = self.get_headers(table)?;
+                let values = headers
+                    .iter()
+                    .map(|header| {
+                        if table_headers.contains(header) {
+                            format!(
+                                "{} AS {}",
+                                quote_identifier(header),
+                                quote_identifier(header)
+                            )
+                        } else {
+                            format!("NULL AS {}", quote_identifier(header))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Ok::<_, AppError>(format!("SELECT {values} FROM {}", quote_identifier(table)))
+            })
+            .collect::<AppResult<Vec<_>>>()?
+            .join(" UNION ALL ");
+        let query = format!(
+            "CREATE TABLE {} AS SELECT ROW_NUMBER() OVER () AS id, * FROM ({selects}) AS appended;",
+            quote_identifier(&result)
+        );
+        self.execute_batch(&query)?;
+        Ok(result)
+    }
+
+    fn column_declared_type(&self, table: &str, column: &str) -> AppResult<String> {
+        let mut statement = self
+            .connection
+            .prepare(&format!("PRAGMA table_info({})", quote_identifier(table)))?;
+        let columns = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        columns
+            .into_iter()
+            .find(|(name, _)| name == column)
+            .map(|(_, ty)| ty)
+            .ok_or_else(|| AppError::from("Join column does not exist"))
+    }
+
+    fn type_affinity(declared_type: &str) -> &'static str {
+        let ty = declared_type.to_ascii_uppercase();
+        if ty.contains("INT") {
+            "numeric"
+        } else if ty.contains("CHAR") || ty.contains("CLOB") || ty.contains("TEXT") {
+            "text"
+        } else if ty.contains("REAL")
+            || ty.contains("FLOA")
+            || ty.contains("DOUB")
+            || ty.contains("NUM")
+            || ty.contains("DEC")
+        {
+            "numeric"
+        } else if ty.is_empty() || ty.contains("BLOB") {
+            "blob"
+        } else {
+            "numeric"
+        }
+    }
+
     fn find_unused_header_name(&self, table_name: &str, header_name: &str) -> AppResult<String> {
         let header_names = self.get_headers(table_name)?;
         let mut new_header_name = header_name.to_string();
@@ -1547,6 +1721,96 @@ mod tests {
             .get_table_names()
             .unwrap()
             .contains(&"rights".into()));
+    }
+
+    #[test]
+    fn composite_full_join_preserves_duplicates_and_unmatched_rows() {
+        let database = setup_database();
+        database
+            .execute_batch("CREATE TABLE lefts (id INTEGER PRIMARY KEY, k1 TEXT, k2 INTEGER, value TEXT); INSERT INTO lefts(k1,k2,value) VALUES ('x',1,'l1'), ('x',1,'l2'), ('y',2,'l3'); CREATE TABLE rights (id INTEGER PRIMARY KEY, k1 TEXT, k2 INTEGER, value TEXT); INSERT INTO rights(k1,k2,value) VALUES ('x',1,'r1'), ('x',1,'r2'), ('z',3,'r3');")
+            .unwrap();
+        let result = database
+            .join_tables_with_keys(
+                "lefts",
+                "rights",
+                &[("k1".into(), "k1".into()), ("k2".into(), "k2".into())],
+                JoinKind::Full,
+            )
+            .unwrap();
+        let rows = database.get(10, 0, &result, "").unwrap().1;
+        assert_eq!(rows.len(), 6);
+        assert_eq!(
+            rows.iter()
+                .filter(|row| row[3] == DataItem::Text("l1".into())
+                    || row[3] == DataItem::Text("l2".into()))
+                .count(),
+            4
+        );
+        assert!(rows
+            .iter()
+            .any(|row| row[3] == DataItem::Text("l3".into()) && row[6] == DataItem::Null));
+        assert!(rows
+            .iter()
+            .any(|row| row[3] == DataItem::Null && row[6] == DataItem::Text("r3".into())));
+    }
+
+    #[test]
+    fn append_aligns_columns_by_name_and_assigns_fresh_ids() {
+        let database = setup_database();
+        database
+            .execute_batch("CREATE TABLE firsts (id INTEGER PRIMARY KEY, a TEXT, shared INTEGER); INSERT INTO firsts(a,shared) VALUES ('one',1), ('two',2); CREATE TABLE seconds (id INTEGER PRIMARY KEY, shared INTEGER, b TEXT); INSERT INTO seconds(shared,b) VALUES (3,'three'), (4,'four');")
+            .unwrap();
+        let result = database
+            .append_tables(&["firsts".into(), "seconds".into()])
+            .unwrap();
+        assert_eq!(
+            database.get_headers(&result).unwrap(),
+            vec!["id", "a", "shared", "b"]
+        );
+        let rows = database.get(10, 0, &result, "ORDER BY id").unwrap().1;
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0][0], DataItem::Integer(1));
+        assert_eq!(rows[0][3], DataItem::Null);
+        assert_eq!(rows[2][1], DataItem::Null);
+        assert_eq!(rows[2][3], DataItem::Text("three".into()));
+    }
+
+    #[test]
+    fn composite_join_rejects_incompatible_key_affinities() {
+        let database = setup_database();
+        database.execute_batch("CREATE TABLE lefts (id INTEGER PRIMARY KEY, key TEXT); CREATE TABLE rights (id INTEGER PRIMARY KEY, key INTEGER);").unwrap();
+        assert!(database
+            .join_tables_with_keys(
+                "lefts",
+                "rights",
+                &[("key".into(), "key".into())],
+                JoinKind::Inner,
+            )
+            .is_err());
+        assert!(!database
+            .get_table_names()
+            .unwrap()
+            .iter()
+            .any(|name| name.contains("join")));
+    }
+
+    #[test]
+    fn cancelled_append_leaves_no_partial_result() {
+        let database = setup_database();
+        database.execute_batch("CREATE TABLE firsts (id INTEGER PRIMARY KEY, value TEXT); CREATE TABLE seconds (id INTEGER PRIMARY KEY, value TEXT);").unwrap();
+        database
+            .cancellation
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(database
+            .append_tables(&["firsts".into(), "seconds".into()])
+            .is_err());
+        database
+            .cancellation
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        assert!(!database
+            .get_table_names()
+            .unwrap()
+            .contains(&"append".into()));
     }
 
     #[test]

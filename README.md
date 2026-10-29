@@ -51,7 +51,7 @@ This checklist is the supported workflow target and release gate.
 - [ ] Frequency stale-state refresh after source edits.
 - Frequency results already include percentages and source metadata; Enter highlights matching source rows, and selected groups propagate their row selection to the source.
 - [ ] Grouping, aggregations, and pivots.
-- [ ] Multi-key joins and schema-aligned append.
+- [ ] Join/append chooser and undoable UI workflow; the database model now supports composite inner/left/full joins and schema-aligned append.
 
 Unchecked items above are planned work and are not supported by the current release.
 
