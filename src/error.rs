@@ -1,4 +1,3 @@
-use crate::CONFIG;
 use std::{error::Error, fmt};
 
 pub type AppResult<T> = Result<T, AppError>;

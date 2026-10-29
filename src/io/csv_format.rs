@@ -1,10 +1,8 @@
 use std::path::PathBuf;
-use std::{error::Error, fs::File, path, path::Path};
+use std::{error::Error, fs::File, path::Path};
 
-use csv::{Reader, StringRecord, Writer};
-use rusqlite::types::ValueRef;
-use rusqlite::{Connection, Rows};
-use serde::Serialize;
+use csv::{Reader, StringRecord};
+use rusqlite::Connection;
 
 use crate::app_error_other;
 use crate::error::{AppError, AppResult};
@@ -12,9 +10,7 @@ use crate::model::datarow::DataItem;
 
 use crate::model::database::{Database, INTERNAL_PREFIX};
 
-fn quote_identifier(identifier: &str) -> String {
-    format!("\"{}\"", identifier.replace('"', "\"\""))
-}
+use crate::model::sql_queries::quote_identifier;
 
 pub(crate) fn database_from_csv(path: PathBuf, connection: Connection) -> AppResult<Database> {
     insert_csv_data_database(path, &connection)?;
@@ -70,70 +66,6 @@ pub(crate) fn get_headers_for_query(
         .collect::<Vec<String>>()
         .join(", ");
     Ok(columns)
-}
-
-pub(crate) fn sqlite_to_out(connection: &Connection, path: PathBuf) -> AppResult<()> {
-    let mut stmt = connection
-        .prepare(r#"SELECT "name" FROM sqlite_master WHERE type='table' AND name != 'table_of_tables' ORDER BY "name";"#)?;
-    let tables: Vec<String> = stmt
-        .query_map([], |row| row.get(0))?
-        .collect::<Result<Vec<String>, _>>()?
-        .into_iter()
-        .filter(|table| !table.starts_with(INTERNAL_PREFIX))
-        .collect();
-    let mut wtr = csv::Writer::from_path(path)?;
-    for table in tables {
-        let mut info = connection.prepare(&format!(
-            "PRAGMA table_info(\"{}\")",
-            table.replace('"', "\"\"")
-        ))?;
-        let columns = info
-            .query_map([], |row| row.get::<_, String>(1))?
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .filter(|column| !column.starts_with(INTERNAL_PREFIX))
-            .collect::<Vec<_>>();
-        let select = columns
-            .iter()
-            .map(|column| format!("\"{}\"", column.replace('"', "\"\"")))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let query = &format!("SELECT {select} FROM \"{}\";", table.replace('"', "\"\""));
-        let mut stmt = connection.prepare(query)?;
-        let headers = stmt
-            .column_names()
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<String>>();
-        let rows = stmt.query_map([], |row| {
-            let mut items = Vec::new();
-
-            for i in 0..headers.len() {
-                let header = headers.get(i).unwrap();
-                if header == "id" {
-                    continue;
-                }
-                let item = DataItem::from(row.get_ref(i).unwrap());
-                items.push(item);
-            }
-            Ok(items)
-        })?;
-        wtr.write_record(headers.iter().filter(|&el| el != "id").clone())
-            .unwrap();
-        for row in rows {
-            let row = row?;
-            let row: Vec<Option<DataItem>> = row
-                .into_iter()
-                .map(|el| match el {
-                    DataItem::Null => None,
-                    o => Some(o),
-                })
-                .collect();
-            wtr.serialize(row.clone()).unwrap();
-        }
-    }
-
-    Ok(())
 }
 
 pub(crate) fn insert_csv_data_database(
@@ -200,31 +132,6 @@ pub(crate) fn insert_delimited_cancellable(
         transaction.commit()?;
     }
     Ok(())
-}
-
-pub(crate) fn save_to_csv_file(
-    connection: &Connection,
-    table_name: &str,
-    save_file: &PathBuf,
-) -> AppResult<()> {
-    save_delimited_file(connection, table_name, save_file, b',')
-}
-
-pub(crate) fn save_to_tsv_file(
-    connection: &Connection,
-    table_name: &str,
-    save_file: &PathBuf,
-) -> AppResult<()> {
-    save_delimited_file(connection, table_name, save_file, b'\t')
-}
-
-fn save_delimited_file(
-    connection: &Connection,
-    table_name: &str,
-    save_file: &PathBuf,
-    delimiter: u8,
-) -> AppResult<()> {
-    save_delimited_cancellable(connection, table_name, save_file, delimiter, None)
 }
 
 pub(crate) fn save_delimited_cancellable(
@@ -329,7 +236,7 @@ mod tests {
         std::fs::write(&input, b"name\tcount\nAda\t42\nGrace\t7\n").unwrap();
 
         let database = Database::try_from(vec![input.clone()]).unwrap();
-        super::save_to_tsv_file(&database.connection, &stem, &output).unwrap();
+        crate::io::savers::tsv(&database, &stem, &output).unwrap();
         let reopened = Database::try_from(vec![output.clone()]).unwrap();
         assert_eq!(
             reopened
@@ -353,7 +260,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("out-data.csv");
         let database1 = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
-        sqlite_to_out(&database1.connection, output.clone()).unwrap();
+        crate::io::savers::csv(&database1, "data", &output).unwrap();
         let database2 = Database::try_from(vec![output]).unwrap();
         let first_row_db1 = database1.get(1, 0, "data", "").unwrap().1;
         let first_row_db2 = database2.get(1, 0, "out-data", "").unwrap().1;

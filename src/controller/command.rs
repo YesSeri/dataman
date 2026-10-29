@@ -86,6 +86,27 @@ pub enum Command {
 }
 
 impl Command {
+    pub(crate) fn needs_input(&self) -> bool {
+        matches!(
+            self,
+            Command::RegexTransform
+                | Command::Save
+                | Command::RegexFilter
+                | Command::Edit
+                | Command::ExactSearch
+                | Command::SqlQuery
+                | Command::RenameColumn
+                | Command::MathOperation
+                | Command::RenameTable
+                | Command::Join
+                | Command::CombineTables
+                | Command::ConfigureAggregator
+                | Command::BulkEdit
+                | Command::SelectSql
+                | Command::SelectRegex
+        )
+    }
+
     pub fn requires_updating_view(&self) -> bool {
         match self {
             Command::Copy
@@ -273,7 +294,7 @@ fn normalized_key(key: &KeyEvent) -> String {
     }
 }
 
-use std::fmt::{self, write};
+use std::fmt;
 impl Command {}
 
 impl fmt::Display for Command {

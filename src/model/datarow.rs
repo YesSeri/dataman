@@ -1,8 +1,6 @@
-use std::collections::VecDeque;
 use std::fmt::Display;
 
 use rusqlite::types::ValueRef;
-use rusqlite::Row;
 use serde::Serialize;
 
 pub type DataTable = (Vec<String>, Vec<Vec<DataItem>>);
@@ -52,16 +50,7 @@ impl DataItem {
 
 impl From<DataItem> for String {
     fn from(item: DataItem) -> String {
-        match item {
-            DataItem::Text(text) => text,
-            DataItem::Integer(num) => num.to_string(),
-            DataItem::Float(num) => num.to_string(),
-            DataItem::Blob(bytes) => bytes
-                .iter()
-                .map(|byte| format!("{byte:02x}"))
-                .collect::<String>(),
-            DataItem::Null => String::from(""),
-        }
+        item.to_string()
     }
 }
 

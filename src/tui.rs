@@ -1,7 +1,5 @@
 use std::{
-    fmt::{Debug, Display},
-    io::{stdout, Read, Stdout, Write},
-    iter::Sum,
+    io::{stdout, Stdout, Write},
     panic,
 };
 
@@ -11,19 +9,15 @@ use crossterm::{
     terminal::{self, disable_raw_mode, enable_raw_mode, LeaveAlternateScreen},
     ExecutableCommand,
 };
-use log::info;
 use ratatui::{
-    prelude::{Backend, Constraint, CrosstermBackend, Layout},
+    prelude::{Constraint, CrosstermBackend, Layout},
     style::{Color, Modifier, Style, Stylize},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
     Frame, Terminal,
 };
 
-use crate::{
-    app_error_other,
-    controller::{self, controller_impl::Controller},
-};
+use crate::{app_error_other, controller};
 
 fn data_item_cell(item: &DataItem) -> Cell<'_> {
     match item {
@@ -93,11 +87,8 @@ fn trim_external_editor_newline(editable: String) -> String {
         editable
     }
 }
+use crate::error::{AppError, AppResult};
 use crate::{controller::input::InputMode, model::datarow::DataItem};
-use crate::{
-    error::{AppError, AppResult},
-    model::database::Database,
-};
 
 pub struct TUI {
     terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -191,7 +182,7 @@ impl TUI {
         let rects = Layout::default()
             .direction(ratatui::prelude::Direction::Vertical)
             .constraints(constraints.as_slice())
-            .split(f.size());
+            .split(f.area());
 
         if ui.history_view {
             let block = Block::default().borders(Borders::ALL).title(format!(
@@ -218,25 +209,13 @@ impl TUI {
                     ))
                 })
                 .collect::<Vec<_>>();
-            f.render_widget(Paragraph::new(lines).block(block), f.size());
+            f.render_widget(Paragraph::new(lines).block(block), f.area());
             return Ok(());
         }
         let headers = &view.headers;
         let rows = &view.rows;
-        let id_space: u16 = rows.iter().fold(0, |acc, row| {
-            let id = row
-                .get(view.column_indexes.first().copied().unwrap_or(0))
-                .map(|item| item.to_string().len() as u16)
-                .unwrap_or(0);
-            if id > acc {
-                id
-            } else {
-                acc
-            }
-        });
-
         let widths = &controller.column_widths;
-        let window = column_window(widths, view.column, f.size().width.saturating_sub(4));
+        let window = column_window(widths, view.column, f.area().width.saturating_sub(4));
         let constraints = widths[window.clone()]
             .iter()
             .map(|w| Constraint::Min(*w))
@@ -304,7 +283,7 @@ impl TUI {
                     .borders(Borders::ALL)
                     .title(view.table_name.as_str()),
             )
-            .highlight_style(selected_style)
+            .row_highlight_style(selected_style)
             // .highlight_symbol(">> ")
             .bg(Color::Black);
         let row = view.row;
@@ -312,13 +291,7 @@ impl TUI {
         table_state.select(Some(row));
         f.render_stateful_widget(t, rects[0], &mut table_state);
 
-        let a = view.column;
         let total_rows = controller.total_rows;
-        let rowid = rows
-            .get(row)
-            .map(|el| el.first().unwrap().to_string())
-            .unwrap_or("xxx".to_owned());
-        let offset = table_state.offset();
         let last_command = ui.last_command.command.to_string();
         let status = ui.last_command.message.as_deref().unwrap_or("");
         let busy = if controller.busy {
@@ -355,7 +328,7 @@ impl TUI {
                         .title(format!("{title} input")),
                 );
 
-            f.set_cursor(rects[2].x + ui.character_index as u16 + 1, rects[2].y + 1);
+            f.set_cursor_position((rects[2].x + ui.character_index as u16 + 1, rects[2].y + 1));
             f.render_widget(paragraph, rects[2]);
             // match app.input_mode {
             //     InputMode::Normal =>
@@ -405,14 +378,12 @@ impl Default for TUI {
 #[cfg(test)]
 mod tests {
     use super::{column_window, table_height_for, trim_external_editor_newline};
+    use crate::model::database::Database;
 
     #[test]
     #[ignore = "manual rendering benchmark"]
     fn benchmark_cached_render() {
-        use crate::{
-            controller::{controller_impl::Controller, worker::RenderState},
-            model::database::Database,
-        };
+        use crate::controller::{controller_impl::Controller, worker::RenderState};
         let connection = rusqlite::Connection::open_in_memory().unwrap();
         connection.execute_batch("CREATE TABLE t(id INTEGER PRIMARY KEY, value TEXT, amount INTEGER);
             WITH RECURSIVE n(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM n WHERE id<100) INSERT INTO t SELECT id,'some text',id FROM n;").unwrap();
@@ -435,10 +406,7 @@ mod tests {
 
     #[test]
     fn cached_render_handles_resize_typing_and_history_without_database_access() {
-        use crate::{
-            controller::{controller_impl::Controller, worker::RenderState},
-            model::database::Database,
-        };
+        use crate::controller::{controller_impl::Controller, worker::RenderState};
         use rusqlite::{
             hooks::{AuthContext, Authorization},
             Connection,

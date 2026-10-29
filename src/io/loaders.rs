@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use rusqlite::Connection;
 
 use crate::{
-    app_error_other,
     error::{AppError, AppResult},
     model::database::Database,
 };

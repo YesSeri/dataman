@@ -1,8 +1,6 @@
 use crate::error::AppResult;
 
-fn quote_identifier(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\"\""))
-}
+use crate::model::sql_queries::quote_identifier;
 
 fn quote_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))

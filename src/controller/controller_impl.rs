@@ -1,14 +1,15 @@
 use super::selection::Selection;
 use crate::app_error_other;
 use crate::controller::command::{Command, PreviousCommand};
-use crate::controller::input::{self, InputMode};
+use crate::controller::input;
 use crate::error::{AppError, AppResult};
 use crate::io::savers;
 use crate::model::database::{Aggregator, Database, JoinKind, UndoRecord, INTERNAL_PREFIX};
 use crate::model::datarow::{DataItem, DataTable};
 use crate::navigation::Direction;
 use crate::tui::TUI;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+#[cfg(test)]
+use crossterm::event::{KeyCode, KeyModifiers};
 use std::sync::Arc;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -791,56 +792,23 @@ impl Controller {
     }
 
     fn show_analysis(&mut self, frequency: bool) -> AppResult<()> {
-        let before = self.view_snapshot();
         let source = self.view.table_name.clone();
-        let (result, spec) = if frequency {
-            let column = self.selected_column()?;
-            let (result, membership) = self
-                .database
-                .frequency_table_with_members(&source, &column)?;
-            self.frequency_sources
-                .insert(result.clone(), (source.clone(), membership));
-            self.frequency_selection_baselines
-                .insert(result.clone(), self.selected_rows.clone());
-            (
-                result,
-                DerivedSpec::Frequency {
-                    source: source.clone(),
-                    column,
-                },
-            )
+        let spec = if frequency {
+            DerivedSpec::Frequency {
+                source,
+                column: self.selected_column()?,
+            }
         } else {
-            (
-                self.database.describe_table(&source)?,
-                DerivedSpec::Describe {
-                    source: source.clone(),
-                },
-            )
+            DerivedSpec::Describe { source }
         };
-        self.table_sources
-            .insert(result.clone(), vec![source.clone()]);
-        self.derived_specs.insert(result.clone(), spec);
-        self.stale_derived.remove(&result);
-        let hidden_name = self.database.internal_table_name()?;
-        self.switch_sheet(result.clone())?;
-        self.view.column = 0;
-        self.view.row = 0;
-        self.view.row_offset = 0;
-        self.view.order_column = Some("id".into());
-        self.view.ascending = true;
-        self.record_history(
-            UndoRecord::Visibility {
-                table: None,
-                visible_name: result,
-                hidden_name,
-                is_visible: true,
+        self.create_derived_sheet(
+            spec,
+            if frequency {
+                Command::Frequency
+            } else {
+                Command::Summary
             },
-            before,
-        );
-        if !self.defer_refresh {
-            self.refresh_page(100)?;
-        }
-        Ok(())
+        )
     }
 
     fn join_table(&mut self, inputs: Vec<String>) -> AppResult<()> {
@@ -853,44 +821,15 @@ impl Controller {
         if right.is_empty() || right_column.is_empty() || right == "table_of_tables" {
             return Err(app_error_other!("Invalid join target"));
         }
-        let before = self.view_snapshot();
-        let left = self.view.table_name.clone();
-        let left_column = self.selected_column()?;
-        let result = self
-            .database
-            .join_tables(&left, &left_column, right, right_column)?;
-        self.table_sources
-            .insert(result.clone(), vec![left.clone(), right.to_string()]);
-        self.derived_specs.insert(
-            result.clone(),
+        self.create_derived_sheet(
             DerivedSpec::Join {
-                left: left.clone(),
-                right: right.to_string(),
-                keys: vec![(left_column.clone(), right_column.to_string())],
+                left: self.view.table_name.clone(),
+                right: right.into(),
+                keys: vec![(self.selected_column()?, right_column.into())],
                 kind: JoinKind::Inner,
             },
-        );
-        self.stale_derived.remove(&result);
-        let hidden_name = self.database.internal_table_name()?;
-        self.view.table_name = result.clone();
-        self.view.column = 0;
-        self.view.row = 0;
-        self.view.row_offset = 0;
-        self.view.order_column = Some("id".into());
-        self.view.ascending = true;
-        self.record_history(
-            UndoRecord::Visibility {
-                table: None,
-                visible_name: result,
-                hidden_name,
-                is_visible: true,
-            },
-            before,
-        );
-        if !self.defer_refresh {
-            self.refresh_page(100)?;
-        }
-        Ok(())
+            Command::Join,
+        )
     }
 
     fn toggle_join_key(&mut self) -> AppResult<()> {
@@ -937,9 +876,10 @@ impl Controller {
             .first()
             .map(|value| value.trim().to_ascii_lowercase())
             .ok_or_else(|| app_error_other!("Choose append, inner, left, or full"))?;
-        let before = self.view_snapshot();
-        let result = if action == "append" {
-            self.database.append_tables(&tables)?
+        let spec = if action == "append" {
+            DerivedSpec::Append {
+                sources: tables.clone(),
+            }
         } else {
             if tables.len() != 2 {
                 return Err(app_error_other!(
@@ -953,28 +893,11 @@ impl Controller {
                     "Mark the same number of ordered join keys on both tables"
                 ));
             }
-            let keys = left_keys.into_iter().zip(right_keys).collect::<Vec<_>>();
             let kind = match action.as_str() {
                 "inner" => JoinKind::Inner,
                 "left" => JoinKind::Left,
                 "full" => JoinKind::Full,
                 _ => return Err(app_error_other!("Choose append, inner, left, or full")),
-            };
-            self.database
-                .join_tables_with_keys(&tables[0], &tables[1], &keys, kind)?
-        };
-        self.table_sources.insert(result.clone(), tables.clone());
-        let spec = if action == "append" {
-            DerivedSpec::Append {
-                sources: tables.clone(),
-            }
-        } else {
-            let left_keys = self.join_keys.get(&tables[0]).cloned().unwrap_or_default();
-            let right_keys = self.join_keys.get(&tables[1]).cloned().unwrap_or_default();
-            let kind = match action.as_str() {
-                "inner" => JoinKind::Inner,
-                "left" => JoinKind::Left,
-                _ => JoinKind::Full,
             };
             DerivedSpec::Join {
                 left: tables[0].clone(),
@@ -983,28 +906,7 @@ impl Controller {
                 kind,
             }
         };
-        self.derived_specs.insert(result.clone(), spec);
-        self.stale_derived.remove(&result);
-        let hidden_name = self.database.internal_table_name()?;
-        self.selected_sheets.clear();
-        self.switch_sheet(result.clone())?;
-        self.record_history(
-            UndoRecord::Visibility {
-                table: None,
-                visible_name: result,
-                hidden_name,
-                is_visible: true,
-            },
-            before,
-        );
-        self.ui.last_command = PreviousCommand::new(
-            Command::CombineTables,
-            Some(format!("Created result from {} tables", tables.len())),
-        );
-        if !self.defer_refresh {
-            self.refresh_page(100)?;
-        }
-        Ok(())
+        self.create_derived_sheet(spec, Command::CombineTables)
     }
 
     fn configure_aggregator(&mut self, inputs: Vec<String>) -> AppResult<()> {
@@ -1044,20 +946,14 @@ impl Controller {
         let source = self.view.table_name.clone();
         let keys = self.join_keys.get(&source).cloned().unwrap_or_default();
         let aggregations = self.aggregators.get(&source).cloned().unwrap_or_default();
-        let before = self.view_snapshot();
-        let result = self.database.grouped_table(&source, &keys, &aggregations)?;
-        self.table_sources
-            .insert(result.clone(), vec![source.clone()]);
-        self.derived_specs.insert(
-            result.clone(),
+        self.create_derived_sheet(
             DerivedSpec::Group {
-                source: source.clone(),
+                source,
                 keys,
                 aggregations,
             },
-        );
-        self.stale_derived.remove(&result);
-        self.open_created_result(result, source, before, Command::Group)
+            Command::Group,
+        )
     }
 
     fn create_pivot_sheet(&mut self) -> AppResult<()> {
@@ -1070,32 +966,37 @@ impl Controller {
             ));
         }
         let aggregations = self.aggregators.get(&source).cloned().unwrap_or_default();
-        let before = self.view_snapshot();
-        let result = self
-            .database
-            .pivot_table(&source, &keys, &pivot_column, &aggregations)?;
-        self.table_sources
-            .insert(result.clone(), vec![source.clone()]);
-        self.derived_specs.insert(
-            result.clone(),
+        self.create_derived_sheet(
             DerivedSpec::Pivot {
-                source: source.clone(),
+                source,
                 keys,
                 column: pivot_column,
                 aggregations,
             },
-        );
-        self.stale_derived.remove(&result);
-        self.open_created_result(result, source, before, Command::Pivot)
+            Command::Pivot,
+        )
     }
 
-    fn open_created_result(
-        &mut self,
-        result: String,
-        source: String,
-        before: ViewSnapshot,
-        command: Command,
-    ) -> AppResult<()> {
+    fn create_derived_sheet(&mut self, spec: DerivedSpec, command: Command) -> AppResult<()> {
+        let before = self.view_snapshot();
+        let (result, membership) = self.build_derived_sheet(&spec)?;
+        let sources = Self::derived_sources(&spec)
+            .into_iter()
+            .map(str::to_owned)
+            .collect::<Vec<_>>();
+        if let Some(membership) = membership {
+            self.frequency_sources
+                .insert(result.clone(), (sources[0].clone(), membership));
+            self.frequency_selection_baselines
+                .insert(result.clone(), self.selected_rows.clone());
+        }
+        let source = sources.join(", ");
+        self.table_sources.insert(result.clone(), sources);
+        self.derived_specs.insert(result.clone(), spec);
+        self.stale_derived.remove(&result);
+        if command == Command::CombineTables {
+            self.selected_sheets.clear();
+        }
         let hidden_name = self.database.internal_table_name()?;
         self.switch_sheet(result.clone())?;
         self.view.column = 0;
@@ -1120,6 +1021,46 @@ impl Controller {
         Ok(())
     }
 
+    fn build_derived_sheet(&self, spec: &DerivedSpec) -> AppResult<(String, Option<String>)> {
+        Ok(match spec {
+            DerivedSpec::Describe { source } => (self.database.describe_table(source)?, None),
+            DerivedSpec::Frequency { source, column } => {
+                let (table, membership) =
+                    self.database.frequency_table_with_members(source, column)?;
+                (table, Some(membership))
+            }
+            DerivedSpec::Group {
+                source,
+                keys,
+                aggregations,
+            } => (
+                self.database.grouped_table(source, keys, aggregations)?,
+                None,
+            ),
+            DerivedSpec::Pivot {
+                source,
+                keys,
+                column,
+                aggregations,
+            } => (
+                self.database
+                    .pivot_table(source, keys, column, aggregations)?,
+                None,
+            ),
+            DerivedSpec::Append { sources } => (self.database.append_tables(sources)?, None),
+            DerivedSpec::Join {
+                left,
+                right,
+                keys,
+                kind,
+            } => (
+                self.database
+                    .join_tables_with_keys(left, right, keys, *kind)?,
+                None,
+            ),
+        })
+    }
+
     fn refresh_derived_sheet(&mut self) -> AppResult<()> {
         let name = self.view.table_name.clone();
         let Some(spec) = self.derived_specs.get(&name).cloned() else {
@@ -1139,43 +1080,7 @@ impl Controller {
             .get(&name)
             .map(|(_, membership)| membership.clone());
         let new_membership = self.database.atomic(|| {
-            let (generated, membership) = match &spec {
-                DerivedSpec::Describe { source } => (self.database.describe_table(source)?, None),
-                DerivedSpec::Frequency { source, column } => {
-                    let (table, membership) =
-                        self.database.frequency_table_with_members(source, column)?;
-                    (table, Some(membership))
-                }
-                DerivedSpec::Group {
-                    source,
-                    keys,
-                    aggregations,
-                } => (
-                    self.database.grouped_table(source, keys, aggregations)?,
-                    None,
-                ),
-                DerivedSpec::Pivot {
-                    source,
-                    keys,
-                    column,
-                    aggregations,
-                } => (
-                    self.database
-                        .pivot_table(source, keys, column, aggregations)?,
-                    None,
-                ),
-                DerivedSpec::Append { sources } => (self.database.append_tables(sources)?, None),
-                DerivedSpec::Join {
-                    left,
-                    right,
-                    keys,
-                    kind,
-                } => (
-                    self.database
-                        .join_tables_with_keys(left, right, keys, *kind)?,
-                    None,
-                ),
-            };
+            let (generated, membership) = self.build_derived_sheet(&spec)?;
             if let Some(membership) = &old_membership {
                 self.database.connection.execute_batch(&format!(
                     "DROP TABLE IF EXISTS \"{}\";",
@@ -1559,92 +1464,9 @@ impl Controller {
         Ok(())
     }
 
-    pub(crate) fn save_to_sqlite_file(&self) -> AppResult<()> {
-        if let Some(queued_command) = &self.ui.queued_command {
-            let filename = queued_command.inputs.first();
-            if let Some(filename) = filename {
-                let path = PathBuf::from(filename);
-                Ok(savers::sqlite(&self.database, &path)?)
-            } else {
-                Err(app_error_other!("No filename provided"))
-            }
-        } else {
-            Err(app_error_other!("No queued command"))
-        }
-    }
-
     pub(crate) fn sql_query(&self, inputs: Vec<String>) -> Result<(), AppError> {
         let query = inputs[0].to_owned();
         self.database.sql_query(&query)
-    }
-
-    fn enter_char(&mut self, new_char: char) {
-        let index = self.byte_index();
-        self.ui.input.insert(index, new_char);
-        self.move_cursor_right();
-    }
-    fn move_cursor_right(&mut self) {
-        let cursor_moved_right = self.ui.character_index.saturating_add(1);
-        self.ui.character_index = self.clamp_cursor(cursor_moved_right);
-    }
-
-    fn clamp_cursor(&self, new_cursor_pos: usize) -> usize {
-        new_cursor_pos.clamp(0, self.ui.input.chars().count())
-    }
-
-    fn byte_index(&self) -> usize {
-        self.ui
-            .input
-            .char_indices()
-            .map(|(i, _)| i)
-            .nth(self.ui.character_index)
-            .unwrap_or(self.ui.input.len())
-    }
-
-    fn submit_message(&mut self) {
-        if let Some(queued_command) = &mut self.ui.queued_command {
-            let needs_transform_template = queued_command.command == Command::RegexTransform
-                && queued_command.inputs.is_empty()
-                && regex::Regex::new(&self.ui.input)
-                    .is_ok_and(|regex| regex.capture_names().len() > 1);
-            if !needs_transform_template {
-                self.ui
-                    .input_mode_state_machine
-                    .transition(input::Event::FinishEditing)
-                    .unwrap();
-            }
-            queued_command.inputs.push(self.ui.input.clone());
-        }
-        self.reset_input();
-    }
-
-    fn reset_input(&mut self) {
-        self.ui.input.clear();
-        self.reset_cursor();
-    }
-
-    fn reset_cursor(&mut self) {
-        self.ui.character_index = 0;
-    }
-    fn move_cursor_left(&mut self) {
-        let cursor_moved_left = self.ui.character_index.saturating_sub(1);
-        self.ui.character_index = self.clamp_cursor(cursor_moved_left);
-    }
-
-    fn delete_char(&mut self) {
-        let is_not_cursor_leftmost = self.ui.character_index != 0;
-        if is_not_cursor_leftmost {
-            let current_index = self.ui.character_index;
-            let from_left_to_current_index = current_index - 1;
-            let before_char_to_delete = self.ui.input.chars().take(from_left_to_current_index);
-            let after_char_to_delete = self.ui.input.chars().skip(current_index);
-            self.ui.input = before_char_to_delete.chain(after_char_to_delete).collect();
-            self.move_cursor_left();
-        }
-    }
-
-    fn get_external_data(&mut self) -> AppResult<String> {
-        TUI::get_external_editor_input(&self.ui.input)
     }
 
     pub(super) fn dispatch(&mut self, command: Command, height: u32) -> AppResult<()> {
@@ -1700,26 +1522,7 @@ impl Controller {
         let before_command = self.view_snapshot();
         self.ui.last_command = PreviousCommand::new(command.clone(), None);
         let result = match command {
-            Command::RegexTransform
-            | Command::Save
-            | Command::RegexFilter
-            | Command::Edit
-            | Command::ExactSearch
-            | Command::SqlQuery
-            | Command::RenameColumn
-            | Command::MathOperation
-            | Command::RenameTable
-            | Command::Join
-            | Command::CombineTables
-            | Command::ConfigureAggregator
-            | Command::BulkEdit => {
-                self.ui.queued_command = Some(QueuedCommand::new(command.clone()));
-                self.ui
-                    .input_mode_state_machine
-                    .transition(input::Event::StartEditing)?;
-                Ok(())
-            }
-            Command::SelectSql | Command::SelectRegex => {
+            _ if command.needs_input() => {
                 self.ui.queued_command = Some(QueuedCommand::new(command.clone()));
                 self.ui
                     .input_mode_state_machine
@@ -1790,6 +1593,7 @@ impl Controller {
                 self.previous_sheet()
             }
             Command::HistoryReplay | Command::HistoryClose => Ok(()),
+            _ => unreachable!("input commands are handled above"),
         };
         if result.is_ok() && self.database.revision() != revision_before {
             if command == Command::SqlQuery {
@@ -1823,24 +1627,7 @@ impl Controller {
             _ => {}
         }
 
-        let prompted = matches!(
-            command,
-            Command::RegexTransform
-                | Command::Save
-                | Command::RegexFilter
-                | Command::Edit
-                | Command::ExactSearch
-                | Command::SqlQuery
-                | Command::RenameColumn
-                | Command::MathOperation
-                | Command::RenameTable
-                | Command::Join
-                | Command::CombineTables
-                | Command::ConfigureAggregator
-                | Command::BulkEdit
-                | Command::SelectSql
-                | Command::SelectRegex
-        );
+        let prompted = command.needs_input();
         if result.is_ok() && !prompted {
             self.log_command(command.clone(), Vec::new(), before_command);
         }
@@ -1855,7 +1642,7 @@ impl Controller {
     pub fn execute(&mut self, command: Command, inputs: Vec<String>) -> AppResult<()> {
         self.refresh_page(100)?;
         self.ui.last_command = PreviousCommand::new(command.clone(), None);
-        if super::worker::prompted(&command) {
+        if command.needs_input() {
             self.execute_inputs(command, inputs)?;
         } else {
             self.dispatch(command, self.table_height)?;
@@ -2365,46 +2152,7 @@ impl Controller {
                 Command::BulkEdit => self.bulk_edit(inputs),
                 Command::SelectSql => self.select_sql(inputs),
                 Command::SelectRegex => self.select_regex(inputs),
-                // _ => {
-                //     log::error!("Command not implemented: {:?}", queued_command.command);
-                //     Err(AppError::from("Command not implemented"))
-                // }
-                Command::Move(_)
-                | Command::Quit
-                | Command::Copy
-                | Command::IllegalOperation
-                | Command::None
-                | Command::Sort
-                | Command::NextTable
-                | Command::PrevTable
-                | Command::PreviousSheet
-                | Command::TextToInt
-                | Command::IntToText
-                | Command::DeleteTable
-                | Command::Undo
-                | Command::Redo
-                | Command::ToggleMetadataTable
-                | Command::DeleteColumn
-                | Command::Summary
-                | Command::Frequency
-                | Command::ToggleSelection
-                | Command::ToggleJoinKey
-                | Command::Group
-                | Command::Pivot
-                | Command::RefreshDerived
-                | Command::DeleteSelected
-                | Command::CopySelected
-                | Command::ClearSelection
-                | Command::HideColumn
-                | Command::ShowColumns
-                | Command::ColumnLeft
-                | Command::ColumnRight
-                | Command::History
-                | Command::HistoryReplay
-                | Command::HistoryClose => {
-                    log::error!("Non-queueable command executed as queued: {:?}", command);
-                    unreachable!("This command should not be queueable!!!");
-                }
+                _ => return Err(app_error_other!("This command does not accept input")),
             };
             if let Err(err) = result {
                 self.ui.last_command =
@@ -2524,6 +2272,40 @@ mod history_tests {
             .unwrap()
             .collect::<Result<Vec<String>, _>>()
             .unwrap()
+    }
+
+    #[test]
+    fn join_shortcut_and_refresh_share_schema_and_preserve_source_view() {
+        let mut controller = controller();
+        controller.database.execute_batch("CREATE TABLE scores (id INTEGER PRIMARY KEY, name TEXT, score INTEGER); INSERT INTO scores(name, score) VALUES ('abc', 9);").unwrap();
+        controller.view.row = 1;
+        controller.selected_rows.insert(2);
+        controller
+            .execute(Command::Join, vec!["scores.name".into()])
+            .unwrap();
+        let result = controller.view.table_name.clone();
+        let headers = controller.database.get_headers(&result).unwrap();
+        assert!(headers.contains(&"t_name".into()));
+        assert!(headers.contains(&"scores_score".into()));
+        controller.switch_sheet("t".into()).unwrap();
+        assert_eq!(controller.view.row, 1);
+        assert!(controller.selected_rows.contains(&2));
+        controller
+            .execute(
+                Command::SqlQuery,
+                vec!["UPDATE scores SET score = 10".into()],
+            )
+            .unwrap();
+        controller.switch_sheet(result.clone()).unwrap();
+        controller.execute(Command::RefreshDerived, vec![]).unwrap();
+        assert_eq!(controller.database.get_headers(&result).unwrap(), headers);
+        assert_eq!(
+            controller
+                .database
+                .get_cell(&result, 1, "scores_score")
+                .unwrap(),
+            "10"
+        );
     }
 
     #[test]
@@ -2890,45 +2672,6 @@ mod history_tests {
             .get_headers("t")
             .unwrap()
             .contains(&"name_copy".into()));
-    }
-
-    #[test]
-    fn regex_transform_only_prompts_again_for_capture_templates() {
-        let mut controller = controller();
-        controller
-            .ui
-            .input_mode_state_machine
-            .transition(input::Event::StartEditing)
-            .unwrap();
-        controller.ui.queued_command = Some(QueuedCommand::new(Command::RegexTransform));
-        controller.ui.input = ".+".into();
-        controller.submit_message();
-        assert_eq!(
-            controller.ui.input_mode_state_machine.get_state(),
-            InputMode::Finish
-        );
-
-        controller
-            .ui
-            .input_mode_state_machine
-            .transition(input::Event::Reset)
-            .unwrap();
-        controller
-            .ui
-            .input_mode_state_machine
-            .transition(input::Event::StartEditing)
-            .unwrap();
-        controller.ui.queued_command = Some(QueuedCommand::new(Command::RegexTransform));
-        controller.ui.input = "(.+)".into();
-        controller.submit_message();
-        assert_eq!(
-            controller.ui.input_mode_state_machine.get_state(),
-            InputMode::Editing
-        );
-        assert_eq!(
-            controller.ui.queued_command.as_ref().unwrap().inputs,
-            vec!["(.+)"]
-        );
     }
 
     #[test]

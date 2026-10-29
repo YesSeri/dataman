@@ -1,4 +1,4 @@
-use std::fmt;
+use crate::model::sql_queries::quote_identifier;
 
 use rusqlite::{params, Connection};
 
@@ -38,64 +38,29 @@ fn get_tables(conn: &Connection) -> AppResult<Vec<String>> {
         .collect())
 }
 
-fn get_table_row_count(conn: &Connection, table_name: &str) -> AppResult<i64> {
-    let mut stmt = conn.prepare(&format!(r#"SELECT COUNT(*) FROM "{}""#, table_name))?;
-    let row_count: i64 = stmt.query_row([], |row| row.get(0))?;
-    Ok(row_count)
-}
-
-fn get_table_col_count(conn: &Connection, table_name: &str) -> AppResult<usize> {
-    let mut stmt = conn.prepare(&format!(r#"PRAGMA table_info("{}")"#, table_name))?;
-    let col_count = stmt
-        .query_map([], |row| row.get::<_, String>(1))?
-        .filter_map(Result::ok)
-        .filter(|name| !name.starts_with(INTERNAL_PREFIX))
-        .count();
-    Ok(col_count)
-}
-
-#[derive(Debug, PartialEq)]
-enum ColumnKind {
-    Text,
-    Int,
-}
-
-impl fmt::Display for ColumnKind {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            ColumnKind::Text => write!(f, "TEXT"),
-            ColumnKind::Int => write!(f, "INTEGER"),
-        }
-    }
-}
-
-fn get_table_kind_col_count(
-    conn: &Connection,
-    table_name: &str,
-    kind: ColumnKind,
-) -> AppResult<usize> {
-    let mut stmt = conn.prepare(&format!(r#"PRAGMA table_info("{}")"#, table_name))?;
-    let col_count = stmt
-        .query_map([], |row| {
-            let name: String = row.get(1)?;
-            let type_name: String = row.get(2)?;
-            Ok((name, type_name))
-        })?
-        .filter_map(Result::ok)
-        .filter(|(name, type_name)| {
-            !name.starts_with(INTERNAL_PREFIX) && type_name == &kind.to_string()
-        })
-        .count();
-    Ok(col_count)
-}
 pub(crate) fn populate_table_of_tables(conn: &Connection) -> AppResult<()> {
     conn.execute("DELETE FROM table_of_tables", [])?;
     let tables = get_tables(conn)?;
     for table in tables {
-        let row_count = get_table_row_count(conn, &table)?;
-        let col_count = get_table_col_count(conn, &table)?;
-        let int_col_count = get_table_kind_col_count(conn, &table, ColumnKind::Int)?;
-        let text_col_count = get_table_kind_col_count(conn, &table, ColumnKind::Text)?;
+        let row_count: i64 = conn.query_row(
+            &format!("SELECT COUNT(*) FROM {}", quote_identifier(&table)),
+            [],
+            |row| row.get(0),
+        )?;
+        let mut statement =
+            conn.prepare(&format!("PRAGMA table_info({})", quote_identifier(&table)))?;
+        let columns = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(1)?, row.get::<_, String>(2)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let columns = columns
+            .iter()
+            .filter(|(name, _)| !name.starts_with(INTERNAL_PREFIX))
+            .collect::<Vec<_>>();
+        let col_count = columns.len();
+        let int_col_count = columns.iter().filter(|(_, kind)| kind == "INTEGER").count();
+        let text_col_count = columns.iter().filter(|(_, kind)| kind == "TEXT").count();
 
         conn.execute(
             r#"REPLACE INTO table_of_tables (table_name, row_count, col_count, text_col_count, int_col_count, source_names, sheet_kind, stale) VALUES (?1, ?2, ?3, ?4, ?5, '', 'table', 0)"#,
@@ -167,6 +132,16 @@ mod tests {
             .run_to_completion(10, time::Duration::from_millis(250), None)
             .unwrap();
     }
+    #[test]
+    fn metadata_counts_quoted_identifiers_and_excludes_internal_columns() {
+        let connection = Connection::open_in_memory().unwrap();
+        create_table_of_tables(&connection).unwrap();
+        connection.execute_batch("CREATE TABLE \"a\"\"b\" (id INTEGER, \"c\"\"d\" TEXT, __dataman_undo_hidden INTEGER); INSERT INTO \"a\"\"b\" VALUES (1, 'x', 0);").unwrap();
+        populate_table_of_tables(&connection).unwrap();
+        let counts = connection.query_row("SELECT row_count, col_count, text_col_count, int_col_count FROM table_of_tables WHERE table_name = ?1", ["a\"b"], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?))).unwrap();
+        assert_eq!(counts, (1, 2, 1, 1));
+    }
+
     #[test]
     fn table_of_tables_num_count_test() {
         let conn = setup_three_table_db().unwrap();

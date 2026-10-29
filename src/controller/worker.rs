@@ -505,7 +505,7 @@ impl Frontend {
                 self.state.ui.history_cursor = self.state.command_history.len().saturating_sub(1);
             }
             Command::None | Command::IllegalOperation | Command::HistoryClose => {}
-            command if prompted(&command) => {
+            command if command.needs_input() => {
                 self.state.ui.queued_command =
                     Some(super::command::QueuedCommand::new(command.clone()));
                 self.state.ui.last_command = PreviousCommand::new(command.clone(), None);
@@ -614,26 +614,6 @@ impl Frontend {
         }
         Ok(())
     }
-}
-pub(super) fn prompted(command: &Command) -> bool {
-    matches!(
-        command,
-        Command::RegexTransform
-            | Command::Save
-            | Command::RegexFilter
-            | Command::Edit
-            | Command::ExactSearch
-            | Command::SqlQuery
-            | Command::RenameColumn
-            | Command::MathOperation
-            | Command::RenameTable
-            | Command::Join
-            | Command::CombineTables
-            | Command::ConfigureAggregator
-            | Command::BulkEdit
-            | Command::SelectSql
-            | Command::SelectRegex
-    )
 }
 
 #[cfg(test)]
@@ -867,6 +847,21 @@ mod tests {
         let DatabaseRequest::Execute(operation) = receiver.try_recv().unwrap();
         assert_eq!(operation.command, Command::RegexTransform);
         assert_eq!(operation.inputs.unwrap(), ["(a)", "$1$1"]);
+        frontend.active = None;
+        frontend
+            .key(KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE))
+            .unwrap();
+        for character in ".+".chars() {
+            frontend
+                .key(KeyEvent::new(KeyCode::Char(character), KeyModifiers::NONE))
+                .unwrap();
+        }
+        frontend
+            .key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .unwrap();
+        let DatabaseRequest::Execute(operation) = receiver.try_recv().unwrap();
+        assert_eq!(operation.command, Command::RegexTransform);
+        assert_eq!(operation.inputs.unwrap(), [".+"]);
     }
 
     #[test]

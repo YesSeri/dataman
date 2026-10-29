@@ -19,9 +19,7 @@ use super::sql_queries;
 
 pub(crate) const INTERNAL_PREFIX: &str = "__dataman_undo_";
 
-fn quote_identifier(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\"\""))
-}
+use crate::model::sql_queries::quote_identifier;
 
 fn data_item_value(value: &DataItem) -> Value {
     match value {
@@ -963,14 +961,8 @@ impl Database {
     }
 
     pub(crate) fn frequency_table(&self, table: &str, column: &str) -> AppResult<String> {
-        let result = self.find_unused_table_name(&format!("{table}_frequency"))?;
-        let source_table = table.replace('\'', "''");
-        let source_column = column.replace('\'', "''");
-        let query = format!(
-            "CREATE TABLE {} AS SELECT ROW_NUMBER() OVER () AS id, {} AS value, COUNT(*) AS count, 100.0 * COUNT(*) / NULLIF((SELECT COUNT(*) FROM {}), 0) AS percentage, '{}' AS source_table, '{}' AS source_column FROM {} GROUP BY {} ORDER BY count DESC;",
-            quote_identifier(&result), quote_identifier(column), quote_identifier(table), source_table, source_column, quote_identifier(table), quote_identifier(column)
-        );
-        self.execute_batch(&query)?;
+        let (result, membership) = self.frequency_table_with_members(table, column)?;
+        self.execute_batch(&format!("DROP TABLE {};", quote_identifier(&membership)))?;
         Ok(result)
     }
 
@@ -1091,38 +1083,12 @@ impl Database {
         right: &str,
         right_column: &str,
     ) -> AppResult<String> {
-        let left_headers = self.get_headers(left)?;
-        let right_headers = self.get_headers(right)?;
-        if !left_headers.iter().any(|header| header == left_column)
-            || !right_headers.iter().any(|header| header == right_column)
-        {
-            return Err(crate::app_error_other!("Join column does not exist"));
-        }
-        let result = self.find_unused_table_name(&format!("{left}_{right}_join"))?;
-        let mut columns = Vec::new();
-        for (source, alias, headers) in [
-            (left, "left", left_headers),
-            (right, "right", right_headers),
-        ] {
-            for header in headers.into_iter().filter(|header| header != "id") {
-                columns.push(format!(
-                    "{}.{} AS {}",
-                    quote_identifier(source),
-                    quote_identifier(&header),
-                    quote_identifier(&format!("{alias}_{header}"))
-                ));
-            }
-        }
-        if columns.is_empty() {
-            columns.push("1 AS value".into());
-        }
-        let query = format!(
-            "CREATE TABLE {} AS SELECT ROW_NUMBER() OVER () AS id, {} FROM {} INNER JOIN {} ON {}.{} = {}.{};",
-            quote_identifier(&result), columns.join(", "), quote_identifier(left), quote_identifier(right),
-            quote_identifier(left), quote_identifier(left_column), quote_identifier(right), quote_identifier(right_column)
-        );
-        self.execute_batch(&query)?;
-        Ok(result)
+        self.join_tables_with_keys(
+            left,
+            right,
+            &[(left_column.into(), right_column.into())],
+            JoinKind::Inner,
+        )
     }
 
     pub(crate) fn join_tables_with_keys(
@@ -1168,13 +1134,7 @@ impl Database {
                 .into_iter()
                 .filter(|header| header != "id" && !header.starts_with(INTERNAL_PREFIX))
             {
-                let base = format!("{source}_{header}");
-                let mut alias = base.clone();
-                let mut suffix = 1;
-                while !aliases.insert(alias.clone()) {
-                    alias = format!("{base}_{suffix}");
-                    suffix += 1;
-                }
+                let alias = Self::unique_output_name(format!("{source}_{header}"), &mut aliases);
                 columns.push(format!(
                     "{}.{} AS {}",
                     quote_identifier(source),
@@ -1566,20 +1526,28 @@ impl Database {
         Ok(())
     }
 
-    pub(crate) fn copy(&self, table_name: &str, header: &str) -> AppResult<()> {
-        let transform_header = format!("{}_copy", header);
-        let new_header_name = self.find_unused_header_name(table_name, &transform_header)?;
-        // let derived_header_name = format!("derived_{}", header);
-        let create_header_query =
-            format!(r#"ALTER TABLE "{table_name}" ADD COLUMN "{new_header_name}" TEXT;"#);
-
-        let mut queries = String::new();
-        queries.push_str(&create_header_query);
-        let update_query =
-            format!(r#"UPDATE "{table_name}" SET "{new_header_name}" = "{header}";"#);
-        queries.push_str(&update_query);
-        self.execute_batch(&queries)
+    fn add_expression_column(
+        &self,
+        table: &str,
+        base: &str,
+        kind: &str,
+        expression: &str,
+    ) -> AppResult<()> {
+        let column = self.find_unused_header_name(table, base)?;
+        let table = quote_identifier(table);
+        let column = quote_identifier(&column);
+        self.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}; UPDATE {table} SET {column} = {expression};"))
     }
+
+    pub(crate) fn copy(&self, table_name: &str, header: &str) -> AppResult<()> {
+        self.add_expression_column(
+            table_name,
+            &format!("{header}_copy"),
+            "TEXT",
+            &quote_identifier(header),
+        )
+    }
+
     pub(crate) fn sql_query(&self, query: &str) -> AppResult<()> {
         // User transaction statements must not escape the operation's rollback boundary.
         use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
@@ -1649,23 +1617,21 @@ impl Database {
     }
 
     pub(crate) fn text_to_int(&self, table_name: &str, column: &str) -> AppResult<()> {
-        let derived = self.find_unused_header_name(table_name, &format!("INTEGER_{column}"))?;
-        self.atomic(|| {
-            self.connection.execute_batch(&format!(
-                "ALTER TABLE {} ADD COLUMN {} INTEGER; UPDATE {} SET {} = dataman_try_integer({});",
-                quote_identifier(table_name),
-                quote_identifier(&derived),
-                quote_identifier(table_name),
-                quote_identifier(&derived),
-                quote_identifier(column),
-            ))?;
-            Ok(())
-        })
+        self.add_expression_column(
+            table_name,
+            &format!("INTEGER_{column}"),
+            "INTEGER",
+            &format!("dataman_try_integer({})", quote_identifier(column)),
+        )
     }
 
     pub(crate) fn int_to_text(&self, table_name: &str, column: &str) -> AppResult<()> {
-        let queries = sql_queries::build::int_to_text_query(table_name, column);
-        self.execute_batch(&queries)
+        self.add_expression_column(
+            table_name,
+            &format!("TEXT_{column}"),
+            "TEXT",
+            &format!("CAST({} AS TEXT)", quote_identifier(column)),
+        )
     }
 
     pub(crate) fn delete_column(&self, table_name: &str, column: &str) -> AppResult<String> {
@@ -1725,11 +1691,13 @@ impl Database {
     // TODO if the column contains a float, 3.0, then ensure that ALL intermediary calculations are done with floats.
     // currently (3/2)*2.0 = 2.0, but it should be 3.0.
     pub(crate) fn math_operation(&self, table_name: &str, inputs: Vec<String>) -> AppResult<()> {
-        let math_expr = inputs[0].clone();
-        let new_math_expr_col = self.find_unused_header_name(table_name, "math_expr")?;
-        let query =
-            sql_queries::build::math_expression_query(&new_math_expr_col, table_name, &math_expr);
-        self.execute_batch(&query)
+        let expression = &inputs[0];
+        let kind = if expression.contains('.') {
+            "REAL"
+        } else {
+            "INTEGER"
+        };
+        self.add_expression_column(table_name, "math_expr", kind, expression)
     }
 
     pub(crate) fn view_metadata_table(&self) -> Result<(), AppError> {
@@ -1795,6 +1763,43 @@ mod tests {
         let row = database.get(1, 0, &summary, "").unwrap().1.remove(0);
         assert_eq!(row.get(1), Some(&DataItem::Integer(4)));
         assert_eq!(row.get(2), Some(&DataItem::Integer(1)));
+    }
+
+    #[test]
+    fn expression_columns_quote_names_disambiguate_and_roll_back_failures() {
+        let database = setup_database();
+        database.execute_batch(r#"CREATE TABLE "quoted""table" (id INTEGER PRIMARY KEY, "raw""value" TEXT); INSERT INTO "quoted""table" VALUES (1, '42');"#).unwrap();
+        let table = "quoted\"table";
+        let column = "raw\"value";
+        database.copy(table, column).unwrap();
+        database.text_to_int(table, column).unwrap();
+        database.int_to_text(table, column).unwrap();
+        database.int_to_text(table, column).unwrap();
+        assert_eq!(
+            database
+                .get_cell_item(table, 1, "INTEGER_raw\"value")
+                .unwrap(),
+            DataItem::Integer(42)
+        );
+        assert_eq!(
+            database.get_cell(table, 1, "TEXT_raw\"value_1").unwrap(),
+            "42"
+        );
+        let headers = database.get_headers(table).unwrap();
+        assert!(database
+            .math_operation(table, vec!["not_a_function()".into()])
+            .is_err());
+        assert_eq!(database.get_headers(table).unwrap(), headers);
+        database
+            .rename_column(table, column, "renamed\"column")
+            .unwrap();
+        database.rename_table(table, "renamed\"table").unwrap();
+        assert_eq!(
+            database
+                .get_cell("renamed\"table", 1, "renamed\"column")
+                .unwrap(),
+            "42"
+        );
     }
 
     #[test]
@@ -1927,8 +1932,8 @@ mod tests {
             .join_tables("lefts", "key", "rights", "key")
             .unwrap();
         assert_eq!(database.count_rows(&result), Some(1));
-        assert_eq!(database.get_cell(&result, 1, "left_name").unwrap(), "Ada");
-        assert_eq!(database.get_cell(&result, 1, "right_score").unwrap(), "9");
+        assert_eq!(database.get_cell(&result, 1, "lefts_name").unwrap(), "Ada");
+        assert_eq!(database.get_cell(&result, 1, "rights_score").unwrap(), "9");
         assert!(database
             .get_table_names()
             .unwrap()
