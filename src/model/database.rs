@@ -922,9 +922,11 @@ impl Database {
 
     pub(crate) fn frequency_table(&self, table: &str, column: &str) -> AppResult<String> {
         let result = self.find_unused_table_name(&format!("{table}_frequency"))?;
+        let source_table = table.replace('\'', "''");
+        let source_column = column.replace('\'', "''");
         let query = format!(
-            "CREATE TABLE {} AS SELECT ROW_NUMBER() OVER () AS id, {} AS value, COUNT(*) AS count FROM {} GROUP BY {} ORDER BY count DESC;",
-            quote_identifier(&result), quote_identifier(column), quote_identifier(table), quote_identifier(column)
+            "CREATE TABLE {} AS SELECT ROW_NUMBER() OVER () AS id, {} AS value, COUNT(*) AS count, 100.0 * COUNT(*) / NULLIF((SELECT COUNT(*) FROM {}), 0) AS percentage, '{}' AS source_table, '{}' AS source_column FROM {} GROUP BY {} ORDER BY count DESC;",
+            quote_identifier(&result), quote_identifier(column), quote_identifier(table), source_table, source_column, quote_identifier(table), quote_identifier(column)
         );
         self.execute_batch(&query)?;
         Ok(result)
@@ -1254,6 +1256,13 @@ mod tests {
             .iter()
             .any(|row| row.get(1) == Some(&DataItem::Null)
                 && row.get(2) == Some(&DataItem::Integer(1))));
+        let repeated = rows
+            .iter()
+            .find(|row| row.get(1) == Some(&DataItem::Text("a".into())))
+            .unwrap();
+        assert_eq!(repeated.get(3), Some(&DataItem::Float(50.0)));
+        assert_eq!(repeated.get(4), Some(&DataItem::Text("sample".into())));
+        assert_eq!(repeated.get(5), Some(&DataItem::Text("value".into())));
 
         let summary = database.summary_table("sample", "value").unwrap();
         let row = database.get(1, 0, &summary, "").unwrap().1.remove(0);
