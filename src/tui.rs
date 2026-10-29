@@ -17,7 +17,7 @@ use ratatui::{
     Frame, Terminal,
 };
 
-use crate::{app_error_other, controller};
+use crate::controller;
 
 fn data_item_cell(item: &DataItem) -> Cell<'_> {
     match item {
@@ -92,40 +92,48 @@ use crate::{controller::input::InputMode, model::datarow::DataItem};
 
 pub struct TUI {
     terminal: Terminal<CrosstermBackend<Stdout>>,
+    restored: bool,
 }
 
 impl TUI {
-    pub fn new() -> Self {
-        let stdout = std::io::stdout();
-        let backend = CrosstermBackend::new(stdout);
-        let terminal = Terminal::new(backend).unwrap();
-        enable_raw_mode().unwrap();
-        Self { terminal }
+    pub fn new() -> AppResult<Self> {
+        let result = (|| -> AppResult<Self> {
+            let backend = CrosstermBackend::new(std::io::stdout());
+            let terminal = Terminal::new(backend)?;
+            enable_raw_mode()?;
+            Ok(Self {
+                terminal,
+                restored: false,
+            })
+        })();
+        match result {
+            Ok(tui) => Ok(tui),
+            Err(error) => crate::error::finish(
+                Err(error.context("Initializing terminal")),
+                restore_terminal(),
+            ),
+        }
     }
     pub fn get_table_height() -> AppResult<u32> {
         Ok(table_height_for(crossterm::terminal::size()?.1))
     }
 
-    pub fn shutdown(&mut self) -> Result<(), AppError> {
-        execute!(
-            self.terminal.backend_mut(),
-            terminal::Clear(terminal::ClearType::All),
-        )?;
-        print!("\x1B[2J\x1B[1;1H");
-        terminal::disable_raw_mode()?;
-        Ok(())
+    pub fn shutdown(&mut self) -> AppResult<()> {
+        if self.restored {
+            return Ok(());
+        }
+        let result = restore_terminal();
+        self.restored = result.is_ok();
+        result
     }
     pub(crate) fn draw(
         &mut self,
         controller: &crate::controller::worker::RenderState,
     ) -> AppResult<()> {
-        self.terminal.draw(|f| match TUI::update(f, controller) {
-            Ok(_) => (),
-            Err(err) => {
-                log::error!("Error updating TUI: {:?}", err);
-            }
-        })?;
-        Ok(())
+        let mut update = Ok(());
+        self.terminal
+            .draw(|frame| update = Self::update(frame, controller))?;
+        update
     }
 
     pub fn get_input() -> AppResult<controller::command::Command> {
@@ -133,14 +141,19 @@ impl TUI {
             let command = controller::command::Command::from(key);
             Ok(command)
         } else {
-            Err(app_error_other!("Could not get input."))
+            Err(AppError::invalid_input("Could not get input."))
         }
     }
 
     pub fn get_external_editor_input(data: &str) -> AppResult<String> {
         let res = std::env::var("EDITOR");
         let editor_var = match res {
-            Err(err) => return Err(app_error_other!(format!("Could not get editor: {:?}", err))),
+            Err(err) => {
+                return Err(AppError::invalid_input(format!(
+                    "Could not get editor: {:?}",
+                    err
+                )))
+            }
             Ok(ev) => ev,
         };
         let editor_and_args = editor_var.split_whitespace().collect::<Vec<_>>();
@@ -158,7 +171,10 @@ impl TUI {
                 .to_str()
                 .ok_or_else(|| AppError::from("Invalid editor path"))?,
         );
-        std::process::Command::new(editor).args(args).status()?;
+        let status = std::process::Command::new(editor).args(args).status()?;
+        if !status.success() {
+            return Err(AppError::Message(format!("Editor exited with {status}")));
+        }
         let editable = std::fs::read_to_string(temporary.path())?;
         let trimmed = trim_external_editor_newline(editable);
         Ok(trimmed)
@@ -177,7 +193,9 @@ impl TUI {
             InputMode::Normal | InputMode::Abort | InputMode::Finish => {
                 vec![Constraint::Max(1000), Constraint::Length(1)]
             }
-            InputMode::ExternalEditor => todo!(),
+            InputMode::ExternalEditor => {
+                return Err(AppError::from("External editor is still active"))
+            }
         };
         let rects = Layout::default()
             .direction(ratatui::prelude::Direction::Vertical)
@@ -355,23 +373,41 @@ impl TUI {
     pub fn install_panic_hook() {
         let original_hook = panic::take_hook();
         panic::set_hook(Box::new(move |panic_info| {
-            stdout().execute(LeaveAlternateScreen).unwrap();
-            disable_raw_mode().unwrap();
+            let _ = restore_terminal();
             original_hook(panic_info);
         }));
     }
 }
 
-impl Drop for TUI {
-    fn drop(&mut self) {
-        let _ = disable_raw_mode();
-        let _ = self.terminal.show_cursor();
+/// Each step is attempted even if an earlier step fails.
+fn restore_steps(steps: &mut [&mut dyn FnMut() -> AppResult<()>]) -> AppResult<()> {
+    let mut result = Ok(());
+    for step in steps {
+        result = crate::error::finish(result, step());
     }
+    result
 }
 
-impl Default for TUI {
-    fn default() -> Self {
-        Self::new()
+fn restore_terminal() -> AppResult<()> {
+    restore_steps(&mut [
+        &mut || {
+            execute!(stdout(), LeaveAlternateScreen)?;
+            Ok(())
+        },
+        &mut || {
+            execute!(stdout(), crossterm::cursor::Show)?;
+            Ok(())
+        },
+        &mut || {
+            disable_raw_mode()?;
+            Ok(())
+        },
+    ])
+}
+
+impl Drop for TUI {
+    fn drop(&mut self) {
+        let _ = self.shutdown();
     }
 }
 
@@ -387,9 +423,9 @@ mod tests {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
         connection.execute_batch("CREATE TABLE t(id INTEGER PRIMARY KEY, value TEXT, amount INTEGER);
             WITH RECURSIVE n(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM n WHERE id<100) INSERT INTO t SELECT id,'some text',id FROM n;").unwrap();
-        let mut controller = Controller::new(Database::new(connection).unwrap());
+        let mut controller = Controller::new(Database::new(connection).unwrap()).unwrap();
         controller.get_headers_and_rows(100).unwrap();
-        let state = RenderState::from_controller(&controller);
+        let state = RenderState::from_controller(&controller).unwrap();
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
         let start = std::time::Instant::now();
@@ -413,9 +449,9 @@ mod tests {
         };
         let connection = Connection::open_in_memory().unwrap();
         connection.execute_batch("CREATE TABLE t(id INTEGER PRIMARY KEY, value TEXT); INSERT INTO t VALUES(1,'hello');").unwrap();
-        let mut controller = Controller::new(Database::new(connection).unwrap());
+        let mut controller = Controller::new(Database::new(connection).unwrap()).unwrap();
         controller.get_headers_and_rows(100).unwrap();
-        let mut state = RenderState::from_controller(&controller);
+        let mut state = RenderState::from_controller(&controller).unwrap();
         controller
             .database
             .connection
@@ -448,5 +484,28 @@ mod tests {
     fn selected_column_is_kept_inside_horizontal_window() {
         assert_eq!(column_window(&[10, 10, 10, 10], 3, 20), 2..4);
         assert_eq!(column_window(&[10, 10, 10, 10], 0, 20), 0..2);
+    }
+    #[test]
+    fn restoration_attempts_every_step_and_preserves_failures() {
+        use std::cell::Cell;
+        let attempts = Cell::new(0);
+        let error = super::restore_steps(&mut [
+            &mut || {
+                attempts.set(attempts.get() + 1);
+                Err(crate::error::AppError::from("screen"))
+            },
+            &mut || {
+                attempts.set(attempts.get() + 1);
+                Ok(())
+            },
+            &mut || {
+                attempts.set(attempts.get() + 1);
+                Err(crate::error::AppError::from("raw mode"))
+            },
+        ])
+        .unwrap_err();
+        assert_eq!(attempts.get(), 3);
+        assert!(error.to_string().contains("screen"));
+        assert!(error.to_string().contains("raw mode"));
     }
 }

@@ -42,6 +42,16 @@ impl Database {
         paths: Vec<PathBuf>,
         token: std::sync::Arc<std::sync::atomic::AtomicBool>,
     ) -> AppResult<Self> {
+        let context = format!(
+            "Loading {}",
+            paths
+                .iter()
+                .map(|path| format!("'{}'", path.display()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        let cancellation = token.clone();
+        (|| {
         if paths.is_empty() {
             return Err(AppError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -94,5 +104,6 @@ impl Database {
             std::io::ErrorKind::InvalidInput,
             "Invalid file extension. One or several csv files or a single sqlite3 database can be provided.",
         )))
+        })().map_err(|error: AppError| error.normalize_cancelled(cancellation.load(std::sync::atomic::Ordering::Relaxed)).context(context))
     }
 }

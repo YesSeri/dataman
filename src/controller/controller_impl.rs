@@ -1,5 +1,4 @@
 use super::selection::Selection;
-use crate::app_error_other;
 use crate::controller::command::{Command, PreviousCommand};
 use crate::controller::input;
 use crate::error::{AppError, AppResult};
@@ -171,11 +170,13 @@ pub(crate) struct UiState {
 }
 
 impl Controller {
-    pub fn new(database: Database) -> Self {
-        let mut sheet_order = database.get_table_names().unwrap_or_default();
+    pub fn new(database: Database) -> AppResult<Self> {
+        let mut sheet_order = database
+            .get_table_names()
+            .map_err(|error| error.context("Discovering startup sheets"))?;
         sheet_order.retain(|name| name != "table_of_tables" && !name.starts_with(INTERNAL_PREFIX));
         let table_name = sheet_order.first().cloned().unwrap_or_default();
-        Self {
+        Ok(Self {
             database,
             history: History::default(),
             selected_rows: Selection::default(),
@@ -218,7 +219,7 @@ impl Controller {
                 history_view: false,
                 history_cursor: 0,
             },
-        }
+        })
     }
 
     fn view_snapshot(&self) -> ViewSnapshot {
@@ -333,7 +334,7 @@ impl Controller {
             .command_history
             .get(self.ui.history_cursor)
             .cloned()
-            .ok_or_else(|| app_error_other!("No command selected"))?;
+            .ok_or_else(|| AppError::invalid_input("No command selected"))?;
         self.restore_view(entry.snapshot.clone());
         self.selected_rows = entry.selected_rows.clone();
         self.refresh_page(100)?;
@@ -367,7 +368,7 @@ impl Controller {
             }
             Command::ColumnLeft => self.move_column(true),
             Command::ColumnRight => self.move_column(false),
-            _ => Err(app_error_other!("This command cannot be replayed")),
+            _ => Err(AppError::invalid_input("This command cannot be replayed")),
         };
         match result {
             Ok(()) => {
@@ -384,17 +385,18 @@ impl Controller {
         }
     }
 
-    pub(super) fn clear_history(&mut self) {
+    pub(super) fn clear_history(&mut self) -> AppResult<()> {
+        let mut result = Ok(());
         for entry in self
             .history
             .undo
             .drain(..)
             .chain(self.history.redo.drain(..))
         {
-            if let Err(err) = self.database.discard_hidden_record(&entry.record) {
-                log::warn!("Could not discard history artifact: {err}");
-            }
+            result =
+                crate::error::finish(result, self.database.discard_hidden_record(&entry.record));
         }
+        result
     }
 
     fn undo(&mut self) -> AppResult<()> {
@@ -472,7 +474,7 @@ impl Controller {
             .headers
             .get(self.view.column)
             .cloned()
-            .ok_or_else(|| app_error_other!("Could not get header"))
+            .ok_or_else(|| AppError::invalid_input("Could not get header"))
     }
 
     fn move_cursor(&mut self, direction: Direction, height: u32) -> AppResult<()> {
@@ -498,10 +500,7 @@ impl Controller {
                 }
             }
             Direction::Down => {
-                let count = self
-                    .database
-                    .count_rows(&self.view.table_name)
-                    .unwrap_or(u32::MAX);
+                let count = self.database.count_rows(&self.view.table_name)?;
                 if height > 0
                     && self.view.row + 1 >= height as usize
                     && self.view.row_offset + self.view.row as u32 + 1 < count
@@ -519,8 +518,8 @@ impl Controller {
     fn hide_selected_column(&mut self) -> AppResult<()> {
         let name = self.selected_column()?;
         if name == "id" {
-            return Err(app_error_other!(
-                "The id column is pinned and cannot be hidden"
+            return Err(AppError::invalid_input(
+                "The id column is pinned and cannot be hidden",
             ));
         }
         self.column_layouts
@@ -543,7 +542,7 @@ impl Controller {
     fn move_column(&mut self, left: bool) -> AppResult<()> {
         let name = self.selected_column()?;
         if name == "id" {
-            return Err(app_error_other!("The id column stays first"));
+            return Err(AppError::invalid_input("The id column stays first"));
         }
         let visible = self.view.headers.clone();
         let position = self.view.column;
@@ -563,12 +562,12 @@ impl Controller {
             .order
             .iter()
             .position(|header| header == &name)
-            .ok_or_else(|| app_error_other!("Column layout is out of date"))?;
+            .ok_or_else(|| AppError::invalid_input("Column layout is out of date"))?;
         let target_index = layout
             .order
             .iter()
             .position(|header| header == &visible[target])
-            .ok_or_else(|| app_error_other!("Column layout is out of date"))?;
+            .ok_or_else(|| AppError::invalid_input("Column layout is out of date"))?;
         layout.order.swap(current_index, target_index);
         self.view.column = target;
         Ok(())
@@ -680,7 +679,9 @@ impl Controller {
             .iter()
             .position(|candidate| candidate == &name)
         else {
-            return Err(app_error_other!("The highlighted sheet is not registered"));
+            return Err(AppError::invalid_input(
+                "The highlighted sheet is not registered",
+            ));
         };
         let target = if toward_start {
             position.checked_sub(1)
@@ -814,12 +815,12 @@ impl Controller {
     fn join_table(&mut self, inputs: Vec<String>) -> AppResult<()> {
         let target = inputs
             .first()
-            .ok_or_else(|| app_error_other!("Enter a target as table.column"))?;
+            .ok_or_else(|| AppError::invalid_input("Enter a target as table.column"))?;
         let (right, right_column) = target
             .split_once('.')
-            .ok_or_else(|| app_error_other!("Join target must use table.column"))?;
+            .ok_or_else(|| AppError::invalid_input("Join target must use table.column"))?;
         if right.is_empty() || right_column.is_empty() || right == "table_of_tables" {
-            return Err(app_error_other!("Invalid join target"));
+            return Err(AppError::invalid_input("Invalid join target"));
         }
         self.create_derived_sheet(
             DerivedSpec::Join {
@@ -834,7 +835,9 @@ impl Controller {
 
     fn toggle_join_key(&mut self) -> AppResult<()> {
         if self.view.table_name == "table_of_tables" {
-            return Err(app_error_other!("Mark join keys in each source table"));
+            return Err(AppError::invalid_input(
+                "Mark join keys in each source table",
+            ));
         }
         let table = self.view.table_name.clone();
         let column = self.selected_column()?;
@@ -857,8 +860,8 @@ impl Controller {
 
     fn combine_selected_tables(&mut self, inputs: Vec<String>) -> AppResult<()> {
         if self.view.table_name != "table_of_tables" {
-            return Err(app_error_other!(
-                "Open the sheet list and select tables first"
+            return Err(AppError::invalid_input(
+                "Open the sheet list and select tables first",
             ));
         }
         let tables = self
@@ -868,36 +871,40 @@ impl Controller {
             .cloned()
             .collect::<Vec<_>>();
         if tables.len() < 2 {
-            return Err(app_error_other!(
-                "Select at least two tables in the sheet list"
+            return Err(AppError::invalid_input(
+                "Select at least two tables in the sheet list",
             ));
         }
         let action = inputs
             .first()
             .map(|value| value.trim().to_ascii_lowercase())
-            .ok_or_else(|| app_error_other!("Choose append, inner, left, or full"))?;
+            .ok_or_else(|| AppError::invalid_input("Choose append, inner, left, or full"))?;
         let spec = if action == "append" {
             DerivedSpec::Append {
                 sources: tables.clone(),
             }
         } else {
             if tables.len() != 2 {
-                return Err(app_error_other!(
-                    "Joins require exactly two selected tables"
+                return Err(AppError::invalid_input(
+                    "Joins require exactly two selected tables",
                 ));
             }
             let left_keys = self.join_keys.get(&tables[0]).cloned().unwrap_or_default();
             let right_keys = self.join_keys.get(&tables[1]).cloned().unwrap_or_default();
             if left_keys.is_empty() || left_keys.len() != right_keys.len() {
-                return Err(app_error_other!(
-                    "Mark the same number of ordered join keys on both tables"
+                return Err(AppError::invalid_input(
+                    "Mark the same number of ordered join keys on both tables",
                 ));
             }
             let kind = match action.as_str() {
                 "inner" => JoinKind::Inner,
                 "left" => JoinKind::Left,
                 "full" => JoinKind::Full,
-                _ => return Err(app_error_other!("Choose append, inner, left, or full")),
+                _ => {
+                    return Err(AppError::invalid_input(
+                        "Choose append, inner, left, or full",
+                    ))
+                }
             };
             DerivedSpec::Join {
                 left: tables[0].clone(),
@@ -914,7 +921,9 @@ impl Controller {
         let label = inputs
             .first()
             .map(|value| value.trim().to_ascii_lowercase())
-            .ok_or_else(|| app_error_other!("Choose count, distinct, sum, average, min, or max"))?;
+            .ok_or_else(|| {
+                AppError::invalid_input("Choose count, distinct, sum, average, min, or max")
+            })?;
         let aggregator = match label.as_str() {
             "count" => Aggregator::Count,
             "distinct" | "distinct_count" => Aggregator::DistinctCount,
@@ -923,8 +932,8 @@ impl Controller {
             "min" => Aggregator::Min,
             "max" => Aggregator::Max,
             _ => {
-                return Err(app_error_other!(
-                    "Choose count, distinct, sum, average, min, or max"
+                return Err(AppError::invalid_input(
+                    "Choose count, distinct, sum, average, min, or max",
                 ))
             }
         };
@@ -961,8 +970,8 @@ impl Controller {
         let pivot_column = self.selected_column()?;
         let keys = self.join_keys.get(&source).cloned().unwrap_or_default();
         if keys.contains(&pivot_column) {
-            return Err(app_error_other!(
-                "The pivot column cannot also be a row key"
+            return Err(AppError::invalid_input(
+                "The pivot column cannot also be a row key",
             ));
         }
         let aggregations = self.aggregators.get(&source).cloned().unwrap_or_default();
@@ -979,7 +988,12 @@ impl Controller {
 
     fn create_derived_sheet(&mut self, spec: DerivedSpec, command: Command) -> AppResult<()> {
         let before = self.view_snapshot();
-        let (result, membership) = self.build_derived_sheet(&spec)?;
+        let (result, membership) = self.build_derived_sheet(&spec).map_err(|error| {
+            error.context(format!(
+                "Constructing sheet from '{}'",
+                self.view.table_name
+            ))
+        })?;
         let sources = Self::derived_sources(&spec)
             .into_iter()
             .map(str::to_owned)
@@ -1064,8 +1078,8 @@ impl Controller {
     fn refresh_derived_sheet(&mut self) -> AppResult<()> {
         let name = self.view.table_name.clone();
         let Some(spec) = self.derived_specs.get(&name).cloned() else {
-            return Err(app_error_other!(
-                "The current sheet has no refreshable source"
+            return Err(AppError::invalid_input(
+                "The current sheet has no refreshable source",
             ));
         };
         if !self.stale_derived.contains(&name) {
@@ -1130,10 +1144,10 @@ impl Controller {
             .rows
             .get(self.view.row)
             .and_then(|row| row.get(*self.view.column_indexes.first()?))
-            .ok_or_else(|| app_error_other!("No selected row"))?
+            .ok_or_else(|| AppError::invalid_input("No selected row"))?
             .to_string()
             .parse::<i64>()
-            .map_err(|err| app_error_other!(err.to_string()))?;
+            .map_err(|err| AppError::invalid_input(err.to_string()))?;
         if !self.selected_rows.insert(id) {
             self.selected_rows.remove(&id);
         }
@@ -1192,19 +1206,19 @@ impl Controller {
             .view
             .rows
             .get(self.view.row)
-            .ok_or_else(|| app_error_other!("No frequency group is highlighted"))?;
+            .ok_or_else(|| AppError::invalid_input("No frequency group is highlighted"))?;
         let group_id = row
             .get(
                 *self
                     .view
                     .column_indexes
                     .first()
-                    .ok_or_else(|| app_error_other!("Frequency ID column is hidden"))?,
+                    .ok_or_else(|| AppError::invalid_input("Frequency ID column is hidden"))?,
             )
-            .ok_or_else(|| app_error_other!("Frequency ID is unavailable"))?
+            .ok_or_else(|| AppError::invalid_input("Frequency ID is unavailable"))?
             .to_string()
             .parse::<i64>()
-            .map_err(|error| app_error_other!(error.to_string()))?;
+            .map_err(|error| AppError::invalid_input(error.to_string()))?;
         let members = self
             .database
             .frequency_group_members(&membership, group_id)?;
@@ -1236,7 +1250,7 @@ impl Controller {
     fn select_sql(&mut self, inputs: Vec<String>) -> AppResult<()> {
         let condition = inputs
             .first()
-            .ok_or_else(|| app_error_other!("Enter a SQL condition"))?;
+            .ok_or_else(|| AppError::invalid_input("Enter a SQL condition"))?;
         let table = self.view.table_name.replace('"', "\"\"");
         let mut stmt = self
             .database
@@ -1255,7 +1269,7 @@ impl Controller {
     fn select_regex(&mut self, inputs: Vec<String>) -> AppResult<()> {
         let pattern = inputs
             .first()
-            .ok_or_else(|| app_error_other!("Enter a regex"))?;
+            .ok_or_else(|| AppError::invalid_input("Enter a regex"))?;
         let column = self.selected_column()?;
         let ids = self
             .database
@@ -1269,7 +1283,7 @@ impl Controller {
     }
     fn delete_selected(&mut self) -> AppResult<()> {
         if self.selected_rows.is_empty() {
-            return Err(app_error_other!("No rows selected"));
+            return Err(AppError::invalid_input("No rows selected"));
         }
         let table = self.view.table_name.clone();
         let before = self.view_snapshot();
@@ -1287,7 +1301,7 @@ impl Controller {
     }
     fn copy_selected(&mut self) -> AppResult<()> {
         if self.selected_rows.is_empty() {
-            return Err(app_error_other!("No rows selected"));
+            return Err(AppError::invalid_input("No rows selected"));
         }
         let source = self.view.table_name.clone();
         let mut target = format!("{source}_selected");
@@ -1324,19 +1338,19 @@ impl Controller {
 
     fn bulk_edit(&mut self, inputs: Vec<String>) -> AppResult<()> {
         if self.selected_rows.is_empty() {
-            return Err(app_error_other!(
-                "Select rows with Space before bulk editing"
+            return Err(AppError::invalid_input(
+                "Select rows with Space before bulk editing",
             ));
         }
         let before_view = self.view_snapshot();
         let table = self.view.table_name.clone();
         let column = self.selected_column()?;
         if column == "id" {
-            return Err(app_error_other!("The id column is read-only"));
+            return Err(AppError::invalid_input("The id column is read-only"));
         }
         let value = inputs
             .first()
-            .ok_or_else(|| app_error_other!("No value provided"))?;
+            .ok_or_else(|| AppError::invalid_input("No value provided"))?;
         let record =
             self.database
                 .bulk_edit_selected(&table, &column, &self.selected_rows, value)?;
@@ -1360,7 +1374,9 @@ impl Controller {
                 tables.push(self.highlighted_table_name()?);
             }
             if tables.iter().any(|table| table == "table_of_tables") {
-                return Err(app_error_other!("The metadata table cannot be deleted"));
+                return Err(AppError::invalid_input(
+                    "The metadata table cannot be deleted",
+                ));
             }
             let hidden = self.database.delete_tables(&tables)?;
             let records = hidden
@@ -1386,7 +1402,9 @@ impl Controller {
         }
         let table = self.view.table_name.clone();
         if table == "table_of_tables" {
-            return Err(app_error_other!("The metadata table cannot be deleted"));
+            return Err(AppError::invalid_input(
+                "The metadata table cannot be deleted",
+            ));
         }
         let hidden_name = self.database.delete_table(&table)?;
         self.change_table(false)?;
@@ -1408,7 +1426,7 @@ impl Controller {
 
     fn highlighted_table_name(&self) -> AppResult<String> {
         if self.view.table_name != "table_of_tables" {
-            return Err(app_error_other!("The sheet list is not open"));
+            return Err(AppError::invalid_input("The sheet list is not open"));
         }
         let row = self.view.row.saturating_sub(self.view.row_offset as usize);
         let display_column = self
@@ -1416,12 +1434,12 @@ impl Controller {
             .headers
             .iter()
             .position(|header| header == "table_name")
-            .ok_or_else(|| app_error_other!("Sheet list has no table_name column"))?;
+            .ok_or_else(|| AppError::invalid_input("Sheet list has no table_name column"))?;
         let raw_column = *self
             .view
             .column_indexes
             .get(display_column)
-            .ok_or_else(|| app_error_other!("Sheet list layout is out of date"))?;
+            .ok_or_else(|| AppError::invalid_input("Sheet list layout is out of date"))?;
         match self
             .view
             .rows
@@ -1430,7 +1448,7 @@ impl Controller {
         {
             Some(DataItem::Text(name)) => Ok(name.clone()),
             Some(value) => Ok(value.to_string()),
-            None => Err(app_error_other!("No table is highlighted")),
+            None => Err(AppError::invalid_input("No table is highlighted")),
         }
     }
 
@@ -1465,7 +1483,10 @@ impl Controller {
     }
 
     pub(crate) fn sql_query(&self, inputs: Vec<String>) -> Result<(), AppError> {
-        let query = inputs[0].to_owned();
+        let query = inputs
+            .first()
+            .ok_or_else(|| AppError::invalid_input("Command input is required"))?
+            .to_owned();
         self.database.sql_query(&query)
     }
 
@@ -1480,12 +1501,7 @@ impl Controller {
                     self.ui.history_cursor = (self.ui.history_cursor + 1)
                         .min(self.command_history.len().saturating_sub(1))
                 }
-                Command::HistoryReplay => {
-                    if let Err(err) = self.replay_history() {
-                        self.ui.last_command =
-                            PreviousCommand::new(Command::IllegalOperation, Some(err.to_string()));
-                    }
-                }
+                Command::HistoryReplay => self.replay_history()?,
                 _ => {}
             }
             return Ok(());
@@ -1515,7 +1531,9 @@ impl Controller {
                     | Command::Pivot
             )
         {
-            return Err(app_error_other!("Frequency source rows are read-only"));
+            return Err(AppError::invalid_input(
+                "Frequency source rows are read-only",
+            ));
         }
         let mutation_source = self.view.table_name.clone();
         let revision_before = self.database.revision();
@@ -1601,12 +1619,14 @@ impl Controller {
             } else if Self::command_mutates_source(&command) {
                 self.mark_source_stale(&mutation_source);
             }
-            self.refresh_sheet_list()?;
+            self.refresh_sheet_list().map_err(|error| {
+                error.context("Command completed; sheet list could not be loaded")
+            })?;
         }
         match command {
             Command::RenameTable => {
                 let old_table_name = if self.view.table_name == "table_of_tables" {
-                    self.highlighted_table_name().unwrap_or_default()
+                    self.highlighted_table_name()?
                 } else {
                     self.view.table_name.clone()
                 };
@@ -1632,9 +1652,6 @@ impl Controller {
             self.log_command(command.clone(), Vec::new(), before_command);
         }
 
-        if let Err(err) = &result {
-            log::info!("Error: {:?}", err);
-        }
         result
     }
     /// Execute a command synchronously for programmatic callers. The terminal
@@ -1647,16 +1664,8 @@ impl Controller {
         } else {
             self.dispatch(command, self.table_height)?;
         }
-        self.refresh_page(100)?;
-        if self.ui.last_command.command == Command::IllegalOperation {
-            return Err(AppError::from(
-                self.ui
-                    .last_command
-                    .message
-                    .as_deref()
-                    .unwrap_or("Command failed"),
-            ));
-        }
+        self.refresh_page(100)
+            .map_err(|error| error.context("Command completed; page could not be loaded"))?;
         Ok(())
     }
 
@@ -1674,7 +1683,11 @@ impl Controller {
 
     pub fn run_paths(paths: Vec<PathBuf>, tui: TUI) -> AppResult<()> {
         super::worker::run(
-            move |token| Database::load_cancellable(paths, token).map(Self::new),
+            move |token| {
+                Database::load_cancellable(paths, token)
+                    .and_then(Self::new)
+                    .map_err(|error| error.context("Starting Dataman"))
+            },
             tui,
         )
     }
@@ -1703,24 +1716,26 @@ impl Controller {
             } else if Self::command_mutates_source(&command) {
                 self.mark_source_stale(&mutation_source);
             }
-            self.refresh_sheet_list()?;
+            self.refresh_sheet_list().map_err(|error| {
+                error.context("Command completed; sheet list could not be loaded")
+            })?;
         }
-        if self.ui.last_command.command != Command::IllegalOperation {
-            if command == Command::SqlQuery {
-                self.ui.last_command = PreviousCommand::new(
-                    command,
-                    Some("SQL executed; undo history was cleared (SQL is not undoable)".into()),
-                );
-            } else {
-                self.log_command(command.clone(), inputs, before_command);
+        if command == Command::SqlQuery {
+            self.ui.last_command = PreviousCommand::new(
+                command,
+                Some("SQL executed; undo history was cleared (SQL is not undoable)".into()),
+            );
+        } else {
+            self.log_command(command.clone(), inputs, before_command);
+            if command != Command::ExactSearch {
                 self.ui.last_command = PreviousCommand::new(command, Some("Completed".into()));
             }
         }
         Ok(())
     }
 
-    pub(super) fn shutdown(&mut self) {
-        self.clear_history();
+    pub(super) fn shutdown(&mut self) -> AppResult<()> {
+        self.clear_history()
     }
 
     pub fn get_headers_and_rows(&mut self, limit: u32) -> AppResult<DataTable> {
@@ -1778,7 +1793,10 @@ impl Controller {
                 rows: Arc::new(rows),
             });
         }
-        let page = self.source_page.as_ref().unwrap();
+        let page = self
+            .source_page
+            .as_ref()
+            .ok_or_else(|| AppError::from("Page cache is unavailable"))?;
         let layout = self
             .column_layouts
             .entry(self.view.table_name.clone())
@@ -1840,7 +1858,10 @@ impl Controller {
 
     pub fn regex_filter(&mut self, inputs: Vec<String>) -> AppResult<()> {
         let before = self.view_snapshot();
-        let pattern = inputs[0].to_owned();
+        let pattern = inputs
+            .first()
+            .ok_or_else(|| AppError::invalid_input("Command input is required"))?
+            .to_owned();
         let header = self.selected_column()?;
         let filtered_table =
             self.database
@@ -1869,7 +1890,10 @@ impl Controller {
         let before = self.view_snapshot();
         let table = self.view.table_name.clone();
         let old_headers = self.database.get_headers(&table)?;
-        let pattern = inputs[0].to_owned();
+        let pattern = inputs
+            .first()
+            .ok_or_else(|| AppError::invalid_input("Command input is required"))?
+            .to_owned();
         let regex = regex::Regex::new(&pattern)?;
         let contains_capture_pattern = regex.capture_names().len() > 1;
         let header = self.selected_column()?;
@@ -1910,7 +1934,7 @@ impl Controller {
             .get_headers(table)?
             .into_iter()
             .find(|header| !old_headers.contains(header))
-            .ok_or_else(|| app_error_other!("Operation did not create a column"))?;
+            .ok_or_else(|| AppError::invalid_input("Operation did not create a column"))?;
         let hidden_name = self.database.internal_column_name(table)?;
         self.record_history(
             UndoRecord::Visibility {
@@ -1942,7 +1966,7 @@ impl Controller {
         let before_view = self.view_snapshot();
         let header = self.selected_column()?;
         if header == "id" {
-            return Err(app_error_other!("The id column is read-only"));
+            return Err(AppError::invalid_input("The id column is read-only"));
         }
         let table = self.view.table_name.clone();
         let id = self
@@ -1951,11 +1975,14 @@ impl Controller {
             .get(self.view.row)
             .and_then(|r| r.get(*self.view.column_indexes.first()?))
             .map(|v| v.to_string())
-            .ok_or_else(|| app_error_other!("No selected row"))?
+            .ok_or_else(|| AppError::invalid_input("No selected row"))?
             .parse::<i64>()
-            .map_err(|e| app_error_other!(e.to_string()))?;
+            .map_err(|e| AppError::invalid_input(e.to_string()))?;
         let data = self.database.get_cell_item(&table, id, &header)?;
-        let edit_result = inputs[0].to_owned();
+        let edit_result = inputs
+            .first()
+            .ok_or_else(|| AppError::invalid_input("Command input is required"))?
+            .to_owned();
 
         self.database
             .update_cell(&self.view.table_name, header.as_str(), id, &edit_result)?;
@@ -1988,7 +2015,10 @@ impl Controller {
         Ok(())
     }
     fn exact_search(&mut self, inputs: Vec<String>) -> AppResult<()> {
-        let pattern = inputs[0].to_owned();
+        let pattern = inputs
+            .first()
+            .ok_or_else(|| AppError::invalid_input("Command input is required"))?
+            .to_owned();
         let header = self.selected_column()?;
         let current = self.view.row_offset + self.view.row as u32;
         match self.database.exact_search(
@@ -1997,15 +2027,15 @@ impl Controller {
             current,
             &header,
             &pattern,
-        ) {
-            Ok(position) => {
+        )? {
+            Some(position) => {
                 let height = self.table_height.max(1);
                 self.view.row = (position % height) as usize;
                 self.view.row_offset = position - position % height;
                 self.ui.last_command =
                     PreviousCommand::new(Command::ExactSearch, Some("Match found".to_string()));
             }
-            Err(_) => {
+            None => {
                 self.ui.last_command =
                     PreviousCommand::new(Command::ExactSearch, Some("No match found".to_string()));
             }
@@ -2067,10 +2097,13 @@ impl Controller {
     fn rename_column(&mut self, inputs: Vec<String>) -> Result<(), AppError> {
         let before = self.view_snapshot();
         let table = self.view.table_name.clone();
-        let new_column = inputs[0].to_owned();
+        let new_column = inputs
+            .first()
+            .ok_or_else(|| AppError::invalid_input("Command input is required"))?
+            .to_owned();
         if new_column.starts_with(INTERNAL_PREFIX) {
-            return Err(app_error_other!(
-                "Column names using Dataman's reserved undo prefix are not supported"
+            return Err(AppError::invalid_input(
+                "Column names using Dataman's reserved undo prefix are not supported",
             ));
         }
         let old_column = self.selected_column()?;
@@ -2134,7 +2167,10 @@ impl Controller {
                 Command::RenameTable => self.rename_table(inputs),
                 Command::ExactSearch => self.exact_search(inputs),
                 Command::Save => {
-                    let filename = inputs[0].as_str();
+                    let filename = inputs
+                        .first()
+                        .ok_or_else(|| AppError::invalid_input("Command input is required"))?
+                        .as_str();
                     let path = PathBuf::from(filename);
                     match path.extension().and_then(|ext| ext.to_str()).unwrap_or("") {
                         "csv" => savers::csv(&self.database, &self.view.table_name, &path),
@@ -2152,15 +2188,16 @@ impl Controller {
                 Command::BulkEdit => self.bulk_edit(inputs),
                 Command::SelectSql => self.select_sql(inputs),
                 Command::SelectRegex => self.select_regex(inputs),
-                _ => return Err(app_error_other!("This command does not accept input")),
+                _ => {
+                    return Err(AppError::invalid_input(
+                        "This command does not accept input",
+                    ))
+                }
             };
-            if let Err(err) = result {
-                self.ui.last_command =
-                    PreviousCommand::new(Command::IllegalOperation, Some(err.to_string()));
-                return Ok(());
-            }
+            result?;
             if command == Command::SqlQuery {
-                self.clear_history();
+                self.clear_history()
+                    .map_err(|error| error.context("SQL completed; undo history cleanup failed"))?;
             }
         }
         Ok(())
@@ -2168,7 +2205,10 @@ impl Controller {
 
     fn rename_table(&mut self, inputs: Vec<String>) -> Result<(), AppError> {
         let before = self.view_snapshot();
-        let new_table_name = inputs[0].to_owned();
+        let new_table_name = inputs
+            .first()
+            .ok_or_else(|| AppError::invalid_input("Command input is required"))?
+            .to_owned();
         let from_sheet_list = self.view.table_name == "table_of_tables";
         let old_table_name = if from_sheet_list {
             self.highlighted_table_name()?
@@ -2176,11 +2216,13 @@ impl Controller {
             self.view.table_name.clone()
         };
         if old_table_name == "table_of_tables" {
-            return Err(app_error_other!("The metadata table cannot be renamed"));
+            return Err(AppError::invalid_input(
+                "The metadata table cannot be renamed",
+            ));
         }
         if new_table_name.starts_with(INTERNAL_PREFIX) {
-            return Err(app_error_other!(
-                "Table names using Dataman's reserved undo prefix are not supported"
+            return Err(AppError::invalid_input(
+                "Table names using Dataman's reserved undo prefix are not supported",
             ));
         }
         self.database
@@ -2255,7 +2297,7 @@ mod history_tests {
             )
             .unwrap();
         let database = Database::new(connection).unwrap();
-        let mut controller = Controller::new(database);
+        let mut controller = Controller::new(database).unwrap();
         controller.view.table_name = "t".into();
         controller.get_headers_and_rows(10).unwrap();
         controller.view.column = 1;
@@ -2468,7 +2510,7 @@ mod history_tests {
             .unwrap();
         let result = controller.view.table_name.clone();
         assert_eq!(controller.view.table_name, result);
-        assert_eq!(controller.database.count_rows(&result), Some(4));
+        assert_eq!(controller.database.count_rows(&result).unwrap(), 4);
         assert_eq!(
             controller.database.get_headers(&result).unwrap(),
             vec!["id", "name", "extra"]
@@ -2527,8 +2569,11 @@ mod history_tests {
             .combine_selected_tables(vec!["full".into()])
             .unwrap();
         assert_eq!(
-            controller.database.count_rows(&controller.view.table_name),
-            Some(3)
+            controller
+                .database
+                .count_rows(&controller.view.table_name)
+                .unwrap(),
+            3
         );
         assert!(controller
             .database
@@ -2679,7 +2724,7 @@ mod history_tests {
         let mut controller = controller();
         controller.view.column = 0;
         assert!(controller.edit_cell(vec!["10".into()]).is_err());
-        assert_eq!(controller.database.count_rows("t"), Some(2));
+        assert_eq!(controller.database.count_rows("t").unwrap(), 2);
         assert_eq!(controller.database.get_cell("t", 1, "name").unwrap(), "abc");
         assert!(controller.history.undo.is_empty());
     }
@@ -2918,7 +2963,7 @@ mod history_tests {
         assert_eq!(controller.view.table_name, "t");
         assert!(controller.selected_rows.contains(&1));
         assert!(controller.dispatch(Command::DeleteSelected, 10).is_err());
-        assert_eq!(controller.database.count_rows("t"), Some(2));
+        assert_eq!(controller.database.count_rows("t").unwrap(), 2);
         controller.dispatch(Command::HistoryClose, 10).unwrap();
         assert_eq!(controller.view.table_name, frequency);
     }
@@ -3076,7 +3121,7 @@ mod history_tests {
         let mut controller = controller();
         controller.regex_filter(vec!["a".into()]).unwrap();
         let filtered = controller.view.table_name.clone();
-        assert_eq!(controller.database.count_rows(&filtered), Some(1));
+        assert_eq!(controller.database.count_rows(&filtered).unwrap(), 1);
         controller.undo().unwrap();
         assert_eq!(controller.view.table_name, "t");
         assert!(!controller
@@ -3086,7 +3131,7 @@ mod history_tests {
             .contains(&filtered));
         controller.redo().unwrap();
         assert_eq!(controller.view.table_name, filtered);
-        assert_eq!(controller.database.count_rows(&filtered), Some(1));
+        assert_eq!(controller.database.count_rows(&filtered).unwrap(), 1);
     }
 
     #[test]
@@ -3249,7 +3294,7 @@ mod history_tests {
             .execute("INSERT INTO t (id, count) VALUES (1, 42);", [])
             .unwrap();
         let database = Database::new(connection).unwrap();
-        let mut controller = Controller::new(database);
+        let mut controller = Controller::new(database).unwrap();
         controller.view.table_name = "t".into();
         controller.get_headers_and_rows(10).unwrap();
         controller.view.column = 1;
@@ -3343,7 +3388,7 @@ mod history_tests {
             )
             .unwrap();
         let database = Database::new(connection).unwrap();
-        let mut controller = Controller::new(database);
+        let mut controller = Controller::new(database).unwrap();
         controller.view.table_name = "t".into();
         controller.get_headers_and_rows(10).unwrap();
         controller.view.column = 1;
@@ -3391,5 +3436,33 @@ mod history_tests {
             .unwrap();
         assert!(redo_controller.redo().is_err());
         assert_eq!(redo_controller.history.redo.len(), 1);
+    }
+    #[test]
+    fn queued_and_synchronous_failures_preserve_typed_errors_and_history() {
+        let mut controller = controller();
+        controller
+            .execute(Command::Edit, vec!["changed".into()])
+            .unwrap();
+        let undo = controller.history.undo.len();
+        let commands = controller.command_history.len();
+        let error = controller
+            .execute(
+                Command::SqlQuery,
+                vec!["UPDATE missing SET name='x'".into()],
+            )
+            .unwrap_err();
+        assert!(matches!(error, AppError::Sqlite(_)));
+        assert_eq!(controller.history.undo.len(), undo);
+        assert_eq!(controller.command_history.len(), commands);
+        controller.ui.queued_command = Some(QueuedCommand {
+            command: Command::RegexFilter,
+            inputs: vec!["[".into()],
+        });
+        assert!(matches!(
+            controller.execute_queued_command(),
+            Err(AppError::Regex(_))
+        ));
+        assert_eq!(controller.history.undo.len(), undo);
+        assert_eq!(controller.command_history.len(), commands);
     }
 }

@@ -7,7 +7,7 @@ use std::sync::{
 };
 use std::time;
 
-use rusqlite::{backup, params, types::Value, Connection, Statement};
+use rusqlite::{backup, params, types::Value, Connection, OptionalExtension, Statement};
 
 use crate::error::{AppError, AppResult};
 use crate::model::datarow::DataItem;
@@ -148,7 +148,7 @@ impl Database {
 
     pub(crate) fn check_cancelled(&self) -> AppResult<()> {
         if self.cancellation.load(Ordering::Relaxed) {
-            Err(AppError::from("Operation cancelled"))
+            Err(AppError::Cancelled)
         } else {
             Ok(())
         }
@@ -179,7 +179,7 @@ impl Database {
             safe
         } else {
             // Triggers and FK cascades can change row counts or other tables.
-            let safe = self.connection.query_row("SELECT NOT EXISTS(SELECT 1 FROM sqlite_master WHERE type='trigger') AND NOT EXISTS(SELECT 1 FROM sqlite_master m, pragma_foreign_key_list(m.name) f WHERE m.type='table')", [], |row| row.get::<_,bool>(0)).unwrap_or(false);
+            let safe = self.connection.query_row("SELECT NOT EXISTS(SELECT 1 FROM sqlite_master WHERE type='trigger') AND NOT EXISTS(SELECT 1 FROM sqlite_master m, pragma_foreign_key_list(m.name) f WHERE m.type='table')", [], |row| row.get::<_,bool>(0))?;
             self.cache.borrow_mut().value_cache_safe = Some(safe);
             safe
         };
@@ -217,7 +217,9 @@ impl Database {
         if !self.connection.is_autocommit() {
             return operation();
         }
-        let transaction = self.connection.unchecked_transaction()?;
+        // Keep the transaction guard for rollback during unwinding. Commit and
+        // rollback are explicit so failures from both can be retained.
+        let mut transaction = self.connection.unchecked_transaction()?;
         let result = operation().and_then(|value| {
             self.check_cancelled()?;
             Ok(value)
@@ -225,13 +227,27 @@ impl Database {
         // COMMIT/ROLLBACK are the operation boundary. A late cancellation must not
         // interrupt rollback or turn a successfully committed mutation into an error.
         self.connection.progress_handler(0, None::<fn() -> bool>);
+        let result = result.and_then(|value| {
+            self.connection.execute_batch("COMMIT")?;
+            Ok(value)
+        });
         let result = match result {
-            Ok(value) => transaction.commit().map(|()| value).map_err(AppError::from),
-            Err(error) => transaction
-                .rollback()
-                .map_err(AppError::from)
-                .and(Err(error)),
+            Err(error) => {
+                let cleanup = if self.connection.is_autocommit() {
+                    Ok(())
+                } else {
+                    self.connection
+                        .execute_batch("ROLLBACK")
+                        .map_err(AppError::from)
+                };
+                crate::error::finish(
+                    Err(error.normalize_cancelled(self.cancellation.load(Ordering::Relaxed))),
+                    cleanup,
+                )
+            }
+            success => success,
         };
+        transaction.set_drop_behavior(rusqlite::DropBehavior::Ignore);
         Self::install_cancellation(&self.connection, self.cancellation.clone());
         if invalidate_all || result.is_err() {
             self.invalidate();
@@ -261,74 +277,106 @@ impl Database {
         destination: P,
         delimiter: u8,
     ) -> AppResult<()> {
-        self.validate_destination(destination.as_ref())?;
-        crate::io::csv_format::save_delimited_cancellable(
-            &self.connection,
+        let context = format!(
+            "Exporting sheet '{}' to '{}'",
             table,
-            &destination.as_ref().to_path_buf(),
-            delimiter,
-            Some(&self.cancellation),
-        )
+            destination.as_ref().display()
+        );
+        (|| {
+            self.validate_destination(destination.as_ref())?;
+            crate::io::csv_format::save_delimited_cancellable(
+                &self.connection,
+                table,
+                &destination.as_ref().to_path_buf(),
+                delimiter,
+                Some(&self.cancellation),
+            )
+        })()
+        .map_err(|error: AppError| {
+            error
+                .normalize_cancelled(self.cancellation.load(Ordering::Relaxed))
+                .context(context)
+        })
     }
 
     pub(crate) fn backup_db<P: AsRef<Path>>(&self, destination: P) -> AppResult<()> {
         let destination = destination.as_ref();
-        self.validate_destination(destination)?;
-        let parent = destination
-            .parent()
-            .filter(|p| !p.as_os_str().is_empty())
-            .unwrap_or(Path::new("."));
-        let temporary = tempfile::NamedTempFile::new_in(parent)?;
-        {
-            let mut target = Connection::open(temporary.path())?;
-            let backup = backup::Backup::new(&self.connection, &mut target)?;
-            loop {
-                self.check_cancelled()?;
-                match backup.step(128)? {
-                    backup::StepResult::Done => break,
-                    backup::StepResult::More => {}
-                    _ => std::thread::sleep(time::Duration::from_millis(10)),
+        let context = format!("Saving database to '{}'", destination.display());
+        (|| {
+            self.validate_destination(destination)?;
+            let parent = destination
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .unwrap_or(Path::new("."));
+            let temporary = tempfile::NamedTempFile::new_in(parent)?;
+            {
+                let mut target = Connection::open(temporary.path())?;
+                let backup = backup::Backup::new(&self.connection, &mut target)?;
+                loop {
+                    self.check_cancelled()?;
+                    match backup.step(128)? {
+                        backup::StepResult::Done => break,
+                        backup::StepResult::More => {}
+                        _ => std::thread::sleep(time::Duration::from_millis(10)),
+                    }
                 }
             }
-        }
-        {
-            let target = Connection::open(temporary.path())?;
-            Self::install_cancellation(&target, self.cancellation.clone());
-            Self::purge_internal_artifacts_from(&target)?;
-        }
-        self.check_cancelled()?;
-        temporary.as_file().sync_all()?;
-        temporary
-            .persist(destination)
-            .map_err(|e| AppError::Io(e.error))?;
-        Ok(())
+            {
+                let target = Connection::open(temporary.path())?;
+                Self::install_cancellation(&target, self.cancellation.clone());
+                Self::purge_internal_artifacts_from(&target)?;
+            }
+            self.check_cancelled()?;
+            temporary.as_file().sync_all()?;
+            temporary
+                .persist(destination)
+                .map_err(|e| AppError::Io(e.error))?;
+            Ok(())
+        })()
+        .map_err(|error: AppError| {
+            error
+                .normalize_cancelled(self.cancellation.load(Ordering::Relaxed))
+                .context(context)
+        })
     }
 
-    fn storage_key(&self, table: &str) -> String {
+    fn storage_key(&self, table: &str) -> AppResult<String> {
         if let Some(key) = self.cache.borrow().storage_keys.get(table) {
-            return key.clone();
+            return Ok(key.clone());
         }
-        let headers = self.get_headers(table).unwrap_or_default();
+        let headers = self.get_headers(table)?;
         for candidate in ["rowid", "_rowid_", "oid"] {
-            if !headers
+            if headers
                 .iter()
                 .any(|name| name.eq_ignore_ascii_case(candidate))
-                && self
-                    .connection
-                    .prepare(&format!(
-                        "SELECT {candidate} FROM {} LIMIT 0",
-                        quote_identifier(table)
-                    ))
-                    .is_ok()
             {
-                self.cache
-                    .borrow_mut()
-                    .storage_keys
-                    .insert(table.to_owned(), candidate.to_owned());
-                return candidate.to_owned();
+                continue;
+            }
+            match self.connection.prepare(&format!(
+                "SELECT {candidate} FROM {} LIMIT 0",
+                quote_identifier(table)
+            )) {
+                Ok(_) => {
+                    self.cache
+                        .borrow_mut()
+                        .storage_keys
+                        .insert(table.to_owned(), candidate.to_owned());
+                    return Ok(candidate.to_owned());
+                }
+                Err(rusqlite::Error::SqliteFailure(code, Some(message)))
+                    if code.code == rusqlite::ErrorCode::Unknown
+                        && message == format!("no such column: {candidate}") => {}
+                Err(rusqlite::Error::SqlInputError { error, msg, .. })
+                    if error.code == rusqlite::ErrorCode::Unknown
+                        && msg == format!("no such column: {candidate}") => {}
+                Err(error) => return Err(error.into()),
             }
         }
-        "id".to_owned()
+        self.connection.prepare(&format!(
+            "SELECT id FROM {} LIMIT 0",
+            quote_identifier(table)
+        ))?;
+        Ok("id".to_owned())
     }
 
     /// Build an indexed, deterministic position map once per table/order revision.
@@ -343,7 +391,7 @@ impl Database {
         } else {
             "rowid"
         };
-        let storage_key = self.storage_key(table);
+        let storage_key = self.storage_key(table)?;
         let order = if ordering.is_empty() {
             format!("ORDER BY {}", quote_identifier(identity))
         } else {
@@ -373,7 +421,7 @@ impl Database {
             .map(|h| format!("t.{}", quote_identifier(h)))
             .collect::<Vec<_>>()
             .join(", ");
-        let storage_key = self.storage_key(table_name);
+        let storage_key = self.storage_key(table_name)?;
         let query = format!(
             "SELECT {columns} FROM temp.__dataman_undo_page_order p JOIN {} t ON t.{} = p.storage_key \
              WHERE p.position >= {} AND p.position < {} ORDER BY p.position;",
@@ -405,23 +453,28 @@ impl Database {
         };
         Ok((headers, data_rows))
     }
-    pub(crate) fn count_rows(&self, table_name: &str) -> Option<u32> {
-        if let Some(count) = self.cache.borrow().counts.get(table_name) {
-            return Some(*count);
-        }
-        let count = self
-            .connection
-            .query_row(
+    pub(crate) fn count_rows(&self, table_name: &str) -> AppResult<u32> {
+        (|| {
+            self.check_cancelled()?;
+            if let Some(count) = self.cache.borrow().counts.get(table_name) {
+                return Ok(*count);
+            }
+            let count = self.connection.query_row(
                 &format!("SELECT COUNT(*) FROM {};", quote_identifier(table_name)),
                 [],
                 |row| row.get(0),
-            )
-            .ok()?;
-        self.cache
-            .borrow_mut()
-            .counts
-            .insert(table_name.to_owned(), count);
-        Some(count)
+            )?;
+            self.cache
+                .borrow_mut()
+                .counts
+                .insert(table_name.to_owned(), count);
+            Ok(count)
+        })()
+        .map_err(|error: AppError| {
+            error
+                .normalize_cancelled(self.cancellation.load(Ordering::Relaxed))
+                .context(format!("Counting rows in sheet '{table_name}'"))
+        })
     }
     pub fn get_cell(&self, table_name: &str, id: i64, header: &str) -> AppResult<String> {
         Ok(self.get_cell_item(table_name, id, header)?.to_string())
@@ -1114,8 +1167,8 @@ impl Database {
             let left_type = self.column_declared_type(left, left_key)?;
             let right_type = self.column_declared_type(right, right_key)?;
             if Self::type_affinity(&left_type) != Self::type_affinity(&right_type) {
-                return Err(crate::app_error_other!(
-                    "Incompatible join key types: {left_type} and {right_type}"
+                return Err(AppError::invalid_input(
+                    "Incompatible join key types: {left_type} and {right_type}",
                 ));
             }
             conditions.push(format!(
@@ -1477,13 +1530,17 @@ impl Database {
         current_row: u32,
         search_header: &str,
         pattern: &str,
-    ) -> AppResult<u32> {
+    ) -> AppResult<Option<u32>> {
+        (|| {
+            self.check_cancelled()?;
         self.ensure_ordering(table_name, ordering)?;
-        let position: u32 = self.connection.query_row(&format!(
+        let position: Option<u32> = self.connection.query_row(&format!(
             "SELECT p.position FROM temp.__dataman_undo_page_order p JOIN {} t ON t.{} = p.storage_key
              WHERE t.{} = ? AND p.position > ? ORDER BY p.position LIMIT 1",
-            quote_identifier(table_name), quote_identifier(&self.storage_key(table_name)), quote_identifier(search_header)), params![pattern, current_row], |r| r.get(0))?;
+            quote_identifier(table_name), quote_identifier(&self.storage_key(table_name)?), quote_identifier(search_header)), params![pattern, current_row], |r| r.get(0)).optional()?;
         Ok(position)
+
+        })().map_err(|error: AppError| error.normalize_cancelled(self.cancellation.load(Ordering::Relaxed)).context(format!("Searching sheet '{table_name}'")))
     }
 
     /// This is a regex capture without capture groups e.g. [g-k].*n.
@@ -1581,7 +1638,8 @@ impl Database {
         let mut stmt = self.connection.prepare(&query)?;
         let column_names: Vec<String> = stmt
             .query_map([], |row| row.get(1))?
-            .map(|result| result.expect("Failed to retrieve column name"))
+            .collect::<Result<Vec<String>, _>>()?
+            .into_iter()
             .filter(|name: &String| !name.starts_with(INTERNAL_PREFIX))
             .collect();
         self.cache
@@ -1931,7 +1989,7 @@ mod tests {
         let result = database
             .join_tables("lefts", "key", "rights", "key")
             .unwrap();
-        assert_eq!(database.count_rows(&result), Some(1));
+        assert_eq!(database.count_rows(&result).unwrap(), 1);
         assert_eq!(database.get_cell(&result, 1, "lefts_name").unwrap(), "Ada");
         assert_eq!(database.get_cell(&result, 1, "rights_score").unwrap(), "9");
         assert!(database
@@ -2219,7 +2277,7 @@ mod tests {
             .unwrap();
         let database = Database::new(connection).unwrap();
         let filtered = database.regex_filter("t", "name", "'b").unwrap();
-        assert_eq!(database.count_rows(&filtered), Some(1));
+        assert_eq!(database.count_rows(&filtered).unwrap(), 1);
     }
 
     #[test]
@@ -2233,7 +2291,7 @@ mod tests {
             .unwrap();
         let database = Database::new(connection).unwrap();
         let filtered = database.regex_filter("t", "name", "a").unwrap();
-        assert_eq!(database.count_rows(&filtered), Some(1));
+        assert_eq!(database.count_rows(&filtered).unwrap(), 1);
     }
 
     #[test]
@@ -2542,9 +2600,9 @@ mod performance_regressions {
                 ..
             }
         ));
-        assert_eq!(database.count_rows("t"), Some(1));
+        assert_eq!(database.count_rows("t").unwrap(), 1);
         database.toggle_history_record(&mut record).unwrap();
-        assert_eq!(database.count_rows("t"), Some(3));
+        assert_eq!(database.count_rows("t").unwrap(), 3);
     }
 
     #[test]
@@ -2585,7 +2643,7 @@ mod performance_regressions {
                 database
                     .exact_search(table, "ORDER BY value ASC", 1, "value", "same")
                     .unwrap(),
-                2
+                Some(2)
             );
         }
         // The derived table has no id index: page retrieval must use its storage rowid.
@@ -2607,7 +2665,8 @@ mod performance_regressions {
 
     #[test]
     fn unchanged_page_and_counts_issue_no_queries() {
-        let mut controller = crate::controller::controller_impl::Controller::new(database(10));
+        let mut controller =
+            crate::controller::controller_impl::Controller::new(database(10)).unwrap();
         controller.get_headers_and_rows(100).unwrap();
         controller.database.count_rows("t").unwrap();
         let queries = Arc::new(AtomicUsize::new(0));
@@ -2671,7 +2730,7 @@ mod performance_regressions {
         assert!(database
             .delete_selected("t", &HashSet::from([1, 2, 3]))
             .is_err());
-        assert_eq!(database.count_rows("t"), Some(3));
+        assert_eq!(database.count_rows("t").unwrap(), 3);
         assert!(!database
             .raw_table_names()
             .unwrap()
@@ -2767,7 +2826,8 @@ mod performance_regressions {
     #[test]
     fn layout_changes_share_cached_cells_without_querying_sqlite() {
         use crate::controller::Command;
-        let mut controller = crate::controller::controller_impl::Controller::new(database(10));
+        let mut controller =
+            crate::controller::controller_impl::Controller::new(database(10)).unwrap();
         controller.get_headers_and_rows(100).unwrap();
         controller.view.column = 1;
         let before = controller.view.rows.clone();
@@ -2791,9 +2851,9 @@ mod performance_regressions {
         let database = database(3);
         database.execute_batch("CREATE TRIGGER add_row AFTER UPDATE ON t BEGIN INSERT INTO t(value) VALUES('trigger'); END;").unwrap();
         database.get(10, 0, "t", "ORDER BY id").unwrap();
-        assert_eq!(database.count_rows("t"), Some(3));
+        assert_eq!(database.count_rows("t").unwrap(), 3);
         database.update_cell("t", "value", 1, "changed").unwrap();
-        assert_eq!(database.count_rows("t"), Some(4));
+        assert_eq!(database.count_rows("t").unwrap(), 4);
         assert_eq!(database.get(10, 0, "t", "ORDER BY id").unwrap().1.len(), 4);
     }
 
@@ -2862,5 +2922,67 @@ mod performance_regressions {
                 .unwrap(),
             "before aa after"
         );
+    }
+    #[test]
+    fn search_distinguishes_absence_errors_and_cancellation() {
+        let database = database(3);
+        assert_eq!(
+            database
+                .exact_search("t", "", 0, "value", "absent")
+                .unwrap(),
+            None
+        );
+        assert!(database
+            .exact_search("t", "", 0, "missing_column", "absent")
+            .is_err());
+        database.cancellation.store(true, Ordering::Relaxed);
+        assert!(database
+            .exact_search("t", "", 0, "value", "absent")
+            .unwrap_err()
+            .is_cancelled());
+    }
+
+    #[test]
+    fn row_count_and_storage_key_propagate_database_failures() {
+        use rusqlite::hooks::{AuthContext, Authorization};
+        let database = database(3);
+        assert!(database.count_rows("missing_table").is_err());
+        database
+            .connection
+            .authorizer(Some(|_: AuthContext<'_>| Authorization::Deny));
+        assert!(database.count_rows("t").is_err());
+        assert!(database.storage_key("t").is_err());
+    }
+
+    #[test]
+    fn rollback_failure_preserves_primary_operation_error() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        let database = database(3);
+        let error = database
+            .atomic::<()>(|| {
+                database.connection.authorizer(Some(|ctx: AuthContext<'_>| {
+                    if matches!(
+                        ctx.action,
+                        AuthAction::Transaction {
+                            operation: rusqlite::hooks::TransactionOperation::Rollback
+                        }
+                    ) {
+                        Authorization::Deny
+                    } else {
+                        Authorization::Allow
+                    }
+                }));
+                Err(AppError::invalid_input("primary operation failed"))
+            })
+            .unwrap_err();
+        let AppError::Cleanup { source, cleanup } = error else {
+            panic!("missing rollback failure")
+        };
+        assert_eq!(source.to_string(), "primary operation failed");
+        assert!(matches!(*cleanup, AppError::Sqlite(_)));
+        database
+            .connection
+            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+        database.connection.execute_batch("ROLLBACK").unwrap();
     }
 }

@@ -1,10 +1,9 @@
 use std::path::PathBuf;
-use std::{error::Error, fs::File, path::Path};
+use std::{fs::File, path::Path};
 
 use csv::{Reader, StringRecord};
 use rusqlite::Connection;
 
-use crate::app_error_other;
 use crate::error::{AppError, AppResult};
 use crate::model::datarow::DataItem;
 
@@ -23,10 +22,7 @@ pub(crate) fn database_from_sqlite(connection: Connection) -> AppResult<Database
     Ok(database)
 }
 
-pub(crate) fn create_table_query(
-    csv: &mut Reader<File>,
-    table_name: &str,
-) -> Result<String, Box<dyn Error>> {
+pub(crate) fn create_table_query(csv: &mut Reader<File>, table_name: &str) -> AppResult<String> {
     let headers = csv.headers()?;
     if table_name.starts_with(INTERNAL_PREFIX)
         || headers
@@ -55,10 +51,7 @@ pub(crate) fn create_table_query(
     Ok(query)
 }
 
-pub(crate) fn get_headers_for_query(
-    csv: &mut Reader<File>,
-    table_name: &str,
-) -> Result<String, Box<dyn Error>> {
+pub(crate) fn get_headers_for_query(csv: &mut Reader<File>, table_name: &str) -> AppResult<String> {
     let headers = csv.headers()?;
     let columns: String = headers
         .iter()
@@ -68,17 +61,11 @@ pub(crate) fn get_headers_for_query(
     Ok(columns)
 }
 
-pub(crate) fn insert_csv_data_database(
-    path: PathBuf,
-    connection: &Connection,
-) -> Result<(), AppError> {
+pub(crate) fn insert_csv_data_database(path: PathBuf, connection: &Connection) -> AppResult<()> {
     insert_delimited_data_database(path, connection, b',')
 }
 
-pub(crate) fn insert_tsv_data_database(
-    path: PathBuf,
-    connection: &Connection,
-) -> Result<(), AppError> {
+pub(crate) fn insert_tsv_data_database(path: PathBuf, connection: &Connection) -> AppResult<()> {
     insert_delimited_data_database(path, connection, b'\t')
 }
 
@@ -86,7 +73,7 @@ fn insert_delimited_data_database(
     path: PathBuf,
     connection: &Connection,
     delimiter: u8,
-) -> Result<(), AppError> {
+) -> AppResult<()> {
     insert_delimited_cancellable(path, connection, delimiter, None)
 }
 
@@ -94,44 +81,80 @@ pub(crate) fn insert_delimited_cancellable(
     path: PathBuf,
     connection: &Connection,
     delimiter: u8,
-    cancellation: Option<&std::sync::atomic::AtomicBool>,
-) -> Result<(), AppError> {
-    let mut csv = csv::ReaderBuilder::new()
-        .delimiter(delimiter)
-        .from_path(&path)?;
-    let table_name =
-        Database::get_table_name(path).ok_or(app_error_other!("could not get table name."))?;
-    let transaction = if connection.is_autocommit() {
-        Some(connection.unchecked_transaction()?)
-    } else {
-        None
-    };
-    let query = create_table_query(&mut csv, &table_name)
-        .map_err(|error| app_error_other!(error.to_string()))?;
-    connection.execute_batch(&query)?;
-    let columns = get_headers_for_query(&mut csv, &table_name)
-        .map_err(|error| app_error_other!(error.to_string()))?;
-    let placeholders = (0..csv.headers()?.len())
-        .map(|_| "?")
-        .collect::<Vec<_>>()
-        .join(",");
-    {
-        let mut insert = connection.prepare(&format!(
-            "INSERT INTO {} ({columns}) VALUES ({placeholders})",
-            quote_identifier(&table_name)
-        ))?;
-        let mut record = StringRecord::new();
-        while csv.read_record(&mut record)? {
-            if cancellation.is_some_and(|token| token.load(std::sync::atomic::Ordering::Relaxed)) {
-                return Err(AppError::from("Operation cancelled"));
-            }
-            insert.execute(rusqlite::params_from_iter(record.iter()))?;
+    cancellation: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+) -> AppResult<()> {
+    let context = format!("Importing '{}'", path.display());
+    let owns_transaction = connection.is_autocommit();
+    let mut transaction = None;
+    let result = (|| -> AppResult<()> {
+        if cancellation.is_some_and(|token| token.load(std::sync::atomic::Ordering::Relaxed)) {
+            return Err(AppError::Cancelled);
         }
-    }
-    if let Some(transaction) = transaction {
-        transaction.commit()?;
-    }
-    Ok(())
+        let mut csv = csv::ReaderBuilder::new()
+            .delimiter(delimiter)
+            .from_path(&path)?;
+        let table_name = Database::get_table_name(path)
+            .ok_or(AppError::invalid_input("could not get table name."))?;
+        if owns_transaction {
+            transaction = Some(connection.unchecked_transaction()?);
+        }
+        let query = create_table_query(&mut csv, &table_name)?;
+        connection.execute_batch(&query)?;
+        let columns = get_headers_for_query(&mut csv, &table_name)?;
+        let placeholders = (0..csv.headers()?.len())
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(",");
+        {
+            let mut insert = connection.prepare(&format!(
+                "INSERT INTO {} ({columns}) VALUES ({placeholders})",
+                quote_identifier(&table_name)
+            ))?;
+            let mut record = StringRecord::new();
+            while csv.read_record(&mut record)? {
+                if cancellation
+                    .is_some_and(|token| token.load(std::sync::atomic::Ordering::Relaxed))
+                {
+                    return Err(AppError::Cancelled);
+                }
+                insert.execute(rusqlite::params_from_iter(record.iter()))?;
+            }
+        }
+        if cancellation.is_some_and(|token| token.load(std::sync::atomic::Ordering::Relaxed)) {
+            return Err(AppError::Cancelled);
+        }
+        Ok(())
+    })();
+    let result = if let Some(mut transaction) = transaction {
+        if cancellation.is_some() {
+            connection.progress_handler(0, None::<fn() -> bool>);
+        }
+        let result = result.and_then(|()| {
+            connection.execute_batch("COMMIT")?;
+            Ok(())
+        });
+        let result = match result {
+            Err(error) if !connection.is_autocommit() => crate::error::finish(
+                Err(error),
+                connection.execute_batch("ROLLBACK").map_err(AppError::from),
+            ),
+            result => result,
+        };
+        transaction.set_drop_behavior(rusqlite::DropBehavior::Ignore);
+        if let Some(token) = cancellation {
+            Database::install_cancellation(connection, token.clone());
+        }
+        result
+    } else {
+        result
+    };
+    result.map_err(|error| {
+        error
+            .normalize_cancelled(
+                cancellation.is_some_and(|token| token.load(std::sync::atomic::Ordering::Relaxed)),
+            )
+            .context(context)
+    })
 }
 
 pub(crate) fn save_delimited_cancellable(
@@ -139,11 +162,11 @@ pub(crate) fn save_delimited_cancellable(
     table_name: &str,
     save_file: &PathBuf,
     delimiter: u8,
-    cancellation: Option<&std::sync::atomic::AtomicBool>,
+    cancellation: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> AppResult<()> {
     let check_cancelled = || -> AppResult<()> {
         if cancellation.is_some_and(|token| token.load(std::sync::atomic::Ordering::Relaxed)) {
-            Err(AppError::from("Operation cancelled"))
+            Err(AppError::Cancelled)
         } else {
             Ok(())
         }
@@ -276,5 +299,22 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn malformed_csv_retains_parser_error_and_file_context() {
+        use std::error::Error;
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("broken.csv");
+        std::fs::write(&path, "a,b\none,two\nbad\n").unwrap();
+        let connection = Connection::open_in_memory().unwrap();
+        let error = insert_csv_data_database(path.clone(), &connection).unwrap_err();
+        assert!(error.to_string().contains(path.to_str().unwrap()));
+        let source = error.source().unwrap();
+        assert!(source
+            .source()
+            .unwrap()
+            .downcast_ref::<csv::Error>()
+            .is_some());
+        assert!(connection.is_autocommit());
     }
 }

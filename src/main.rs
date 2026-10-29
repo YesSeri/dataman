@@ -1,26 +1,15 @@
-#![allow(unreachable_code)]
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-#![allow(unused_mut)]
-#![allow(unused_assignments)]
 use std::io::Write;
 
-use crossterm::terminal::disable_raw_mode;
+use dataman::{controller::controller_impl::Controller, tui::TUI, Cli};
 use env_logger::{Builder, Env};
 
-use dataman::{
-    controller::controller_impl::Controller, error::AppError, model::database::Database, tui::TUI,
-    Cli,
-};
-use rusqlite::Connection;
-
-fn main() -> Result<(), AppError> {
-    // if not release mode, print logs
-    // if release mode, logs are not printed
+fn main() -> color_eyre::Result<()> {
+    color_eyre::install()?;
     TUI::install_panic_hook();
     setup_logging();
     let cli = <Cli as clap::Parser>::parse();
-    Controller::run_paths(cli.paths, TUI::default())
+    Controller::run_paths(cli.paths, TUI::new()?)
+        .map_err(|error| color_eyre::eyre::Report::new(error).wrap_err("Dataman failed"))
 }
 
 fn setup_logging() {

@@ -86,8 +86,8 @@ impl RenderState {
             busy_frame: 0,
         }
     }
-    pub(crate) fn from_controller(controller: &Controller) -> Self {
-        Self {
+    pub(crate) fn from_controller(controller: &Controller) -> AppResult<Self> {
+        Ok(Self {
             ui: controller.ui.clone(),
             view: controller.view.clone(),
             selected_rows: controller.selected_rows.clone(),
@@ -108,8 +108,7 @@ impl RenderState {
                 .collect(),
             total_rows: controller
                 .database
-                .count_rows(&controller.view.table_name)
-                .unwrap_or(0),
+                .count_rows(&controller.view.table_name)?,
             busy: false,
             busy_phase: "Working",
             busy_frame: 0,
@@ -118,7 +117,7 @@ impl RenderState {
                 &controller.view.rows,
                 &controller.view.column_indexes,
             ),
-        }
+        })
     }
 }
 
@@ -146,30 +145,40 @@ enum DatabaseResponse {
         id: OperationId,
         generation: ViewGeneration,
         state: RenderState,
+        error: Option<AppError>,
+    },
+    OperationFailed {
+        id: OperationId,
+        generation: ViewGeneration,
+        error: AppError,
     },
     Progress {
         id: OperationId,
         phase: &'static str,
     },
-    Failed(String),
+    Failed(AppError),
 }
 
 fn serve(
     mut controller: Controller,
     requests: Receiver<DatabaseRequest>,
     responses: SyncSender<DatabaseResponse>,
-) {
-    if let Err(error) = controller.refresh_page(100) {
-        let _ = responses.send(DatabaseResponse::Failed(error.to_string()));
-        return;
-    }
-    if responses
-        .send(DatabaseResponse::Ready(RenderState::from_controller(
-            &controller,
-        )))
-        .is_err()
-    {
-        return;
+) -> AppResult<()> {
+    let initial = controller
+        .refresh_page(100)
+        .and_then(|()| RenderState::from_controller(&controller));
+    match initial {
+        Ok(state) => {
+            if responses.send(DatabaseResponse::Ready(state)).is_err() {
+                return controller.shutdown();
+            }
+        }
+        Err(error) => {
+            let _ = responses.send(DatabaseResponse::Failed(
+                error.context("Loading initial page"),
+            ));
+            return controller.shutdown();
+        }
     }
     while let Ok(request) = requests.recv() {
         let DatabaseRequest::Execute(operation) = request;
@@ -196,16 +205,20 @@ fn serve(
             break;
         }
         let result = if operation.cancellation.load(Ordering::Relaxed) {
-            Err(AppError::from("Operation cancelled"))
+            Err(AppError::Cancelled)
         } else if let Some(inputs) = operation.inputs {
-            controller.execute_inputs(operation.command, inputs)
+            controller.execute_inputs(operation.command.clone(), inputs)
         } else {
-            controller.dispatch(operation.command, operation.height)
+            controller.dispatch(operation.command.clone(), operation.height)
         };
-        if let Err(error) = result {
-            controller.ui.last_command =
-                PreviousCommand::new(Command::IllegalOperation, Some(error.to_string()));
-        }
+        let error = result.err().map(|error| {
+            error
+                .normalize_cancelled(operation.cancellation.load(Ordering::Relaxed))
+                .context(format!(
+                    "Executing {} on '{}'",
+                    operation.command, controller.view.table_name
+                ))
+        });
         // Cancellation belongs to execution, not the refresh following a committed command.
         operation.cancellation.store(false, Ordering::Relaxed);
         controller.defer_refresh = false;
@@ -218,21 +231,34 @@ fn serve(
         ) {
             break;
         }
-        if let Err(error) = controller.refresh_page(100) {
-            controller.view.rows = Arc::default();
-            if controller.ui.last_command.command != Command::IllegalOperation {
-                controller.ui.last_command.message =
-                    Some(format!("Command completed; page unavailable: {error}"));
-            }
-        }
-        if responses
-            .send(DatabaseResponse::Completed {
+        let snapshot = controller
+            .refresh_page(100)
+            .and_then(|()| RenderState::from_controller(&controller));
+        let response = match snapshot {
+            Ok(state) => DatabaseResponse::Completed {
                 id: operation.id,
                 generation: operation.generation,
-                state: RenderState::from_controller(&controller),
-            })
-            .is_err()
-        {
+                state,
+                error,
+            },
+            Err(refresh) => {
+                let refresh = refresh.context(if error.is_some() {
+                    "Loading page after failed command"
+                } else {
+                    "Command completed; page could not be loaded"
+                });
+                let error = match error {
+                    Some(error) => error.with_cleanup(refresh),
+                    None => refresh,
+                };
+                DatabaseResponse::OperationFailed {
+                    id: operation.id,
+                    generation: operation.generation,
+                    error,
+                }
+            }
+        };
+        if responses.send(response).is_err() {
             break;
         }
     }
@@ -240,13 +266,22 @@ fn serve(
         .database
         .cancellation
         .store(false, Ordering::Relaxed);
-    controller.shutdown();
+    controller.shutdown()
 }
 
 pub(super) fn run(
     load: impl FnOnce(Arc<AtomicBool>) -> AppResult<Controller> + Send + 'static,
     mut tui: TUI,
 ) -> AppResult<()> {
+    let height = match TUI::get_table_height() {
+        Ok(height) => height.min(100),
+        Err(error) => {
+            return crate::error::finish(
+                Err(error.context("Reading terminal size")),
+                tui.shutdown(),
+            )
+        }
+    };
     let (requests, worker_requests) = mpsc::sync_channel(1);
     let (worker_responses, responses) = mpsc::sync_channel(1);
     let startup_cancellation = Arc::new(AtomicBool::new(false));
@@ -256,15 +291,25 @@ pub(super) fn run(
         .spawn(move || match load(startup_token) {
             Ok(controller) => serve(controller, worker_requests, worker_responses),
             Err(error) => {
-                let _ = worker_responses.send(DatabaseResponse::Failed(error.to_string()));
+                let _ = worker_responses.send(DatabaseResponse::Failed(error));
+                Ok(())
             }
-        })?;
+        });
+    let worker = match worker {
+        Ok(worker) => worker,
+        Err(error) => {
+            return crate::error::finish(
+                Err(AppError::from(error).context("Starting database worker")),
+                tui.shutdown(),
+            )
+        }
+    };
     let mut frontend = Frontend {
         state: RenderState::loading(),
         requests,
         responses,
         next_id: 0,
-        height: TUI::get_table_height()?.min(100),
+        height,
         active: Some((OperationId(0), ViewGeneration(0), startup_cancellation)),
         deferred: None,
         generation: ViewGeneration(0),
@@ -280,9 +325,10 @@ pub(super) fn run(
     drop(frontend);
     let joined = worker
         .join()
-        .map_err(|_| AppError::from("Database worker failed"));
+        .map_err(|_| AppError::from("Database worker failed"))
+        .and_then(|result| result);
     let shutdown = tui.shutdown();
-    result.and(joined).and(shutdown)
+    crate::error::finish(crate::error::finish(result, joined), shutdown)
 }
 
 struct Frontend {
@@ -312,8 +358,31 @@ impl Frontend {
                     Ok(DatabaseResponse::Completed {
                         id,
                         generation,
-                        state,
-                    }) => self.complete(id, generation, state),
+                        mut state,
+                        error,
+                    }) => {
+                        if self
+                            .active
+                            .as_ref()
+                            .is_some_and(|(active, _, _)| *active == id)
+                            && generation == self.generation
+                        {
+                            if let Some(error) = error {
+                                state.ui.last_command = PreviousCommand::new(
+                                    Command::IllegalOperation,
+                                    Some(error.present()),
+                                );
+                            }
+                        }
+                        self.complete(id, generation, state);
+                    }
+                    Ok(DatabaseResponse::OperationFailed {
+                        id,
+                        generation,
+                        error,
+                    }) => {
+                        self.fail(id, generation, error);
+                    }
                     Ok(DatabaseResponse::Progress { id, phase }) => {
                         if self
                             .active
@@ -328,7 +397,7 @@ impl Frontend {
                         if self.quitting {
                             return Ok(());
                         }
-                        return Err(AppError::from(error.as_str()));
+                        return Err(error);
                     }
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => {
@@ -372,6 +441,22 @@ impl Frontend {
             }
         }
     }
+    fn fail(&mut self, id: OperationId, generation: ViewGeneration, error: AppError) {
+        if !self
+            .active
+            .as_ref()
+            .is_some_and(|(active, _, _)| *active == id)
+        {
+            return;
+        }
+        self.active = None;
+        self.state.busy = false;
+        if generation == self.generation {
+            self.state.ui.last_command =
+                PreviousCommand::new(Command::IllegalOperation, Some(error.present()));
+        }
+        self.dirty = true;
+    }
     fn complete(&mut self, id: OperationId, generation: ViewGeneration, mut state: RenderState) {
         if !self
             .active
@@ -381,6 +466,8 @@ impl Frontend {
             return;
         }
         self.active = None;
+        self.state.busy = false;
+        state.busy = false;
         if generation == self.generation {
             if self.moved_while_busy
                 && state.view.table_name == self.state.view.table_name
@@ -444,11 +531,9 @@ impl Frontend {
         }
         if self.active.is_some() {
             if key.code == KeyCode::Esc {
-                self.active
-                    .as_ref()
-                    .unwrap()
-                    .2
-                    .store(true, Ordering::Relaxed);
+                if let Some((_, _, token)) = &self.active {
+                    token.store(true, Ordering::Relaxed);
+                }
                 self.state.ui.last_command.message = Some("Cancelling…".into());
             } else if let Command::Move(direction) = command {
                 if !self.move_cached(direction) {
@@ -575,8 +660,8 @@ impl Frontend {
                     .input
                     .char_indices()
                     .nth(ui.character_index - 1)
-                    .unwrap()
-                    .0;
+                    .map(|(index, _)| index)
+                    .ok_or_else(|| AppError::invalid_input("Input cursor is out of bounds"))?;
                 ui.input.replace_range(previous..byte, "");
                 ui.character_index -= 1;
             }
@@ -589,7 +674,7 @@ impl Frontend {
                     ui.character_index = input.chars().count();
                     ui.input = input;
                 }
-                Err(error) => ui.last_command.message = Some(error.to_string()),
+                Err(error) => ui.last_command.message = Some(error.present()),
             },
             KeyCode::Enter => {
                 let queued = ui
@@ -602,7 +687,10 @@ impl Frontend {
                 queued.inputs.push(std::mem::take(&mut ui.input));
                 ui.character_index = 0;
                 if !template {
-                    let queued = ui.queued_command.take().unwrap();
+                    let queued = ui
+                        .queued_command
+                        .take()
+                        .ok_or_else(|| AppError::from("Missing command"))?;
                     ui.input_mode_state_machine
                         .transition(input::Event::FinishEditing)?;
                     ui.input_mode_state_machine
@@ -626,7 +714,7 @@ mod tests {
     fn controller() -> Controller {
         let connection = Connection::open_in_memory().unwrap();
         connection.execute_batch("CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO t VALUES(1,'one'),(2,'two');").unwrap();
-        Controller::new(Database::new(connection).unwrap())
+        Controller::new(Database::new(connection).unwrap()).unwrap()
     }
     fn operation(
         id: u64,
@@ -696,10 +784,10 @@ mod tests {
         started.recv_timeout(Duration::from_secs(5)).unwrap();
         cancellation.store(true, Ordering::Relaxed);
         barrier.wait();
-        let DatabaseResponse::Completed { state, .. } = receive(&receive_results) else {
+        let DatabaseResponse::Completed { state, error, .. } = receive(&receive_results) else {
             panic!("missing completion");
         };
-        assert_eq!(state.ui.last_command.command, Command::IllegalOperation);
+        assert!(error.unwrap().is_cancelled());
         assert_eq!(state.view.rows[0][1], DataItem::Text("one".into()));
         send.send(operation(
             2,
@@ -724,7 +812,7 @@ mod tests {
         };
         assert_eq!(state.view.rows[0][1], DataItem::Text("one".into()));
         drop(send);
-        worker.join().unwrap();
+        worker.join().unwrap().unwrap();
     }
     fn frontend() -> (Frontend, Receiver<DatabaseRequest>) {
         let (requests, receiver) = mpsc::sync_channel(1);
@@ -733,7 +821,7 @@ mod tests {
         controller.refresh_page(100).unwrap();
         (
             Frontend {
-                state: RenderState::from_controller(&controller),
+                state: RenderState::from_controller(&controller).unwrap(),
                 requests,
                 responses,
                 next_id: 1,
@@ -878,10 +966,72 @@ mod tests {
             .to_owned();
         let (sender, requests) = mpsc::sync_channel(1);
         let (responses, receiver) = mpsc::sync_channel(1);
-        let worker = thread::spawn(move || serve(Controller::new(database), requests, responses));
+        let worker =
+            thread::spawn(move || serve(Controller::new(database).unwrap(), requests, responses));
         assert!(matches!(receive(&receiver), DatabaseResponse::Ready(_)));
         drop(sender);
-        worker.join().unwrap();
+        worker.join().unwrap().unwrap();
         assert!(!session.exists());
+    }
+    #[test]
+    fn snapshot_count_errors_are_fallible() {
+        use rusqlite::hooks::{AuthContext, Authorization};
+        let mut controller = controller();
+        controller.refresh_page(100).unwrap();
+        controller
+            .database
+            .connection
+            .authorizer(Some(|_: AuthContext<'_>| Authorization::Deny));
+        assert!(RenderState::from_controller(&controller).is_err());
+    }
+
+    #[test]
+    fn snapshot_failure_keeps_previous_page_and_clears_busy_state() {
+        let (mut frontend, _requests) = frontend();
+        let rows = frontend.state.view.rows.clone();
+        frontend.state.busy = true;
+        frontend.fail(OperationId(99), ViewGeneration(1), AppError::from("stale"));
+        assert!(frontend.active.is_some());
+        frontend.fail(
+            OperationId(1),
+            ViewGeneration(1),
+            AppError::from("page unavailable"),
+        );
+        assert!(Arc::ptr_eq(&rows, &frontend.state.view.rows));
+        assert!(!frontend.state.busy);
+        assert!(frontend.active.is_none());
+        frontend.submit(Command::Sort, None).unwrap();
+        assert!(frontend.active.is_some());
+    }
+
+    #[test]
+    fn worker_reports_committed_command_refresh_failure_and_recovers() {
+        let controller = controller();
+        let (send, requests) = mpsc::sync_channel(1);
+        let (responses, receiver) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || serve(controller, requests, responses));
+        assert!(matches!(receive(&receiver), DatabaseResponse::Ready(_)));
+        send.send(operation(
+            1,
+            Command::SqlQuery,
+            Some(vec!["DROP TABLE t".into()]),
+            Arc::new(AtomicBool::new(false)),
+        ))
+        .unwrap();
+        let DatabaseResponse::OperationFailed { id, error, .. } = receive(&receiver) else {
+            panic!("missing refresh failure")
+        };
+        assert_eq!(id, OperationId(1));
+        assert!(error
+            .to_string()
+            .contains("Command completed; page could not be loaded"));
+        send.send(operation(2, Command::SqlQuery, Some(vec!["CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO t VALUES(1,'recovered')".into()]), Arc::new(AtomicBool::new(false)))).unwrap();
+        let DatabaseResponse::Completed { state, error, .. } = receive(&receiver) else {
+            panic!("missing recovery")
+        };
+        assert!(error.is_none());
+        assert_eq!(state.view.rows[0][1], DataItem::Text("recovered".into()));
+        drop(send);
+        worker.join().unwrap().unwrap();
     }
 }

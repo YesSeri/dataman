@@ -76,7 +76,7 @@ fn workflows(c: &mut Criterion) {
             );
         })
     });
-    let mut controller = Controller::new(fixture.database);
+    let mut controller = Controller::new(fixture.database).unwrap();
     controller
         .execute(Command::Move(Direction::Right), vec![])
         .unwrap();
