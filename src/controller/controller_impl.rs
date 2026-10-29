@@ -30,6 +30,9 @@ pub struct Controller {
     pub(crate) selected_sheets: HashSet<String>,
     column_layouts: HashMap<String, ColumnLayout>,
     sheet_order: Vec<String>,
+    frequency_sources: HashMap<String, (String, String)>,
+    frequency_selection_baselines: HashMap<String, Selection>,
+    drilldown_return_sheet: Option<String>,
     sheet_views: HashMap<String, SheetView>,
     previous_sheet: Option<String>,
     page_key: Option<(String, String, u32, u32, u64, ColumnLayout)>,
@@ -137,6 +140,9 @@ impl Controller {
             selected_sheets: HashSet::new(),
             column_layouts: HashMap::new(),
             sheet_order,
+            frequency_sources: HashMap::new(),
+            frequency_selection_baselines: HashMap::new(),
+            drilldown_return_sheet: None,
             sheet_views: HashMap::new(),
             previous_sheet: None,
             page_key: None,
@@ -544,6 +550,13 @@ impl Controller {
         if target == self.view.table_name {
             return Ok(());
         }
+        if self
+            .drilldown_return_sheet
+            .as_ref()
+            .is_some_and(|return_to| return_to != &target)
+        {
+            self.drilldown_return_sheet = None;
+        }
         let current = self.view.table_name.clone();
         self.sheet_views.insert(
             current.clone(),
@@ -651,12 +664,19 @@ impl Controller {
         let source = self.view.table_name.clone();
         let result = if frequency {
             let column = self.selected_column()?;
-            self.database.frequency_table(&source, &column)?
+            let (result, membership) = self
+                .database
+                .frequency_table_with_members(&source, &column)?;
+            self.frequency_sources
+                .insert(result.clone(), (source.clone(), membership));
+            self.frequency_selection_baselines
+                .insert(result.clone(), self.selected_rows.clone());
+            result
         } else {
             self.database.describe_table(&source)?
         };
         let hidden_name = self.database.internal_table_name()?;
-        self.view.table_name = result.clone();
+        self.switch_sheet(result.clone())?;
         self.view.column = 0;
         self.view.row = 0;
         self.view.row_offset = 0;
@@ -739,6 +759,7 @@ impl Controller {
         if !self.selected_rows.insert(id) {
             self.selected_rows.remove(&id);
         }
+        self.sync_frequency_source_selection()?;
         self.ui.last_command = PreviousCommand::new(
             Command::ToggleSelection,
             Some(format!("{} rows selected", self.selected_rows.len())),
@@ -756,8 +777,82 @@ impl Controller {
             return Ok(());
         }
         self.selected_rows.clear();
+        self.sync_frequency_source_selection()?;
         self.ui.last_command =
             PreviousCommand::new(Command::ClearSelection, Some("Selection cleared".into()));
+        Ok(())
+    }
+
+    fn sync_frequency_source_selection(&mut self) -> AppResult<()> {
+        let Some((source, membership)) = self.frequency_sources.get(&self.view.table_name).cloned()
+        else {
+            return Ok(());
+        };
+        let mut selected = self
+            .frequency_selection_baselines
+            .get(&self.view.table_name)
+            .cloned()
+            .unwrap_or_default();
+        for group_id in &*self.selected_rows {
+            selected.extend(
+                self.database
+                    .frequency_group_members(&membership, *group_id)?,
+            );
+        }
+        if let Some(source_view) = self.sheet_views.get_mut(&source) {
+            source_view.selection = selected;
+        }
+        Ok(())
+    }
+
+    fn drill_into_frequency_group(&mut self) -> AppResult<()> {
+        let current = self.view.table_name.clone();
+        let Some((source, membership)) = self.frequency_sources.get(&current).cloned() else {
+            return Ok(());
+        };
+        let row = self
+            .view
+            .rows
+            .get(self.view.row)
+            .ok_or_else(|| app_error_other!("No frequency group is highlighted"))?;
+        let group_id = row
+            .get(
+                *self
+                    .view
+                    .column_indexes
+                    .first()
+                    .ok_or_else(|| app_error_other!("Frequency ID column is hidden"))?,
+            )
+            .ok_or_else(|| app_error_other!("Frequency ID is unavailable"))?
+            .to_string()
+            .parse::<i64>()
+            .map_err(|error| app_error_other!(error.to_string()))?;
+        let members = self
+            .database
+            .frequency_group_members(&membership, group_id)?;
+        let mut selection = self
+            .frequency_selection_baselines
+            .get(&current)
+            .cloned()
+            .unwrap_or_default();
+        selection.extend(members);
+        if let Some(source_view) = self.sheet_views.get_mut(&source) {
+            source_view.selection = selection;
+        }
+        self.switch_sheet(source)?;
+        self.drilldown_return_sheet = Some(current);
+        self.ui.last_command = PreviousCommand::new(
+            Command::HistoryReplay,
+            Some("Source rows highlighted; Esc returns to frequencies".into()),
+        );
+        Ok(())
+    }
+
+    fn leave_frequency_drilldown(&mut self) -> AppResult<()> {
+        let Some(target) = self.drilldown_return_sheet.take() else {
+            return self.previous_sheet();
+        };
+        self.switch_sheet(target)?;
         Ok(())
     }
     fn select_sql(&mut self, inputs: Vec<String>) -> AppResult<()> {
@@ -1100,6 +1195,30 @@ impl Controller {
             }
             return Ok(());
         }
+        if self.drilldown_return_sheet.is_some()
+            && matches!(
+                &command,
+                Command::Edit
+                    | Command::RegexTransform
+                    | Command::RegexFilter
+                    | Command::SqlQuery
+                    | Command::TextToInt
+                    | Command::IntToText
+                    | Command::DeleteColumn
+                    | Command::DeleteTable
+                    | Command::MathOperation
+                    | Command::RenameTable
+                    | Command::RenameColumn
+                    | Command::BulkEdit
+                    | Command::DeleteSelected
+                    | Command::Copy
+                    | Command::Undo
+                    | Command::Redo
+                    | Command::HistoryReplay
+            )
+        {
+            return Err(app_error_other!("Frequency source rows are read-only"));
+        }
         let before_command = self.view_snapshot();
         self.ui.last_command = PreviousCommand::new(command.clone(), None);
         let result = match command {
@@ -1135,6 +1254,9 @@ impl Controller {
             Command::Move(direction) => self.move_cursor(direction, height),
             Command::NextTable => self.change_table(true),
             Command::PrevTable => self.change_table(false),
+            Command::PreviousSheet if self.drilldown_return_sheet.is_some() => {
+                self.leave_frequency_drilldown()
+            }
             Command::PreviousSheet => self.previous_sheet(),
             Command::TextToInt => self.text_to_int(),
             Command::IntToText => self.int_to_text(),
@@ -1143,6 +1265,11 @@ impl Controller {
             Command::ToggleMetadataTable => self.toggle_metadata_table(),
             Command::HistoryReplay if self.view.table_name == "table_of_tables" => {
                 self.open_highlighted_table()
+            }
+            Command::HistoryReplay
+                if self.frequency_sources.contains_key(&self.view.table_name) =>
+            {
+                self.drill_into_frequency_group()
             }
             Command::Undo | Command::Redo => self.dispatch_history_command(command.clone()), // Command::Join(_) => todo!(),
             Command::Summary => self.show_analysis(false),
@@ -1171,6 +1298,9 @@ impl Controller {
                 self.ui.history_view = true;
                 self.ui.history_cursor = self.command_history.len().saturating_sub(1);
                 Ok(())
+            }
+            Command::HistoryClose if self.drilldown_return_sheet.is_some() => {
+                self.leave_frequency_drilldown()
             }
             Command::HistoryClose if self.view.table_name == "table_of_tables" => {
                 self.previous_sheet()
@@ -2312,6 +2442,56 @@ mod history_tests {
         assert!(controller.view.headers.contains(&"distinct_count".into()));
         controller.undo().unwrap();
         assert_eq!(controller.view.table_name, "t");
+    }
+
+    #[test]
+    fn frequency_group_selection_propagates_to_source_and_clear_restores_baseline() {
+        let mut controller = controller();
+        controller.selected_rows.insert(2);
+        controller.show_analysis(true).unwrap();
+        let frequency = controller.view.table_name.clone();
+        let row = controller
+            .view
+            .rows
+            .iter()
+            .position(|row| row.get(1) == Some(&DataItem::Text("abc".into())))
+            .unwrap();
+        controller.view.row = row;
+        controller.toggle_selection().unwrap();
+        assert!(controller.sheet_views["t"].selection.contains(&1));
+        assert!(controller.sheet_views["t"].selection.contains(&2));
+
+        controller.clear_selection().unwrap();
+        assert!(!controller.sheet_views["t"].selection.contains(&1));
+        assert!(controller.sheet_views["t"].selection.contains(&2));
+        controller.switch_sheet("t".into()).unwrap();
+        assert!(controller.selected_rows.contains(&2));
+        assert!(!controller.selected_rows.contains(&1));
+        assert_eq!(
+            controller.previous_sheet.as_deref(),
+            Some(frequency.as_str())
+        );
+    }
+
+    #[test]
+    fn frequency_enter_opens_highlighted_source_rows_read_only_and_escape_returns() {
+        let mut controller = controller();
+        controller.show_analysis(true).unwrap();
+        let frequency = controller.view.table_name.clone();
+        let row = controller
+            .view
+            .rows
+            .iter()
+            .position(|row| row.get(1) == Some(&DataItem::Text("abc".into())))
+            .unwrap();
+        controller.view.row = row;
+        controller.dispatch(Command::HistoryReplay, 10).unwrap();
+        assert_eq!(controller.view.table_name, "t");
+        assert!(controller.selected_rows.contains(&1));
+        assert!(controller.dispatch(Command::DeleteSelected, 10).is_err());
+        assert_eq!(controller.database.count_rows("t"), Some(2));
+        controller.dispatch(Command::HistoryClose, 10).unwrap();
+        assert_eq!(controller.view.table_name, frequency);
     }
 
     #[test]

@@ -48,7 +48,8 @@ This checklist is the supported workflow target and release gate.
 - [ ] Stable sheet IDs and dependency-aware stale state for derived sheets.
 - [ ] Logical type configuration and persistent conversion error records. `#` now makes a strict, undoable integer-derived column and leaves invalid input null.
 - [x] `V` creates an all-column Describe sheet with null, invalid, distinct, min/max, sum, and average statistics.
-- [ ] Frequency provenance, source-row drill-down, and selection propagation.
+- [ ] Frequency stale-state refresh after source edits.
+- Frequency results already include percentages and source metadata; Enter highlights matching source rows, and selected groups propagate their row selection to the source.
 - [ ] Grouping, aggregations, and pivots.
 - [ ] Multi-key joins and schema-aligned append.
 

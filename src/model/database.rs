@@ -944,6 +944,53 @@ impl Database {
         Ok(result)
     }
 
+    pub(crate) fn frequency_table_with_members(
+        &self,
+        table: &str,
+        column: &str,
+    ) -> AppResult<(String, String)> {
+        let frequency = self.find_unused_table_name(&format!("{table}_frequency"))?;
+        let members = self.internal_table_name()?;
+        let source_table = table.replace('\'', "''");
+        let source_column = column.replace('\'', "''");
+        let query = format!(
+            "CREATE TABLE {} AS SELECT ROW_NUMBER() OVER () AS id, {} AS value, COUNT(*) AS count, 100.0 * COUNT(*) / NULLIF((SELECT COUNT(*) FROM {}), 0) AS percentage, '{}' AS source_table, '{}' AS source_column FROM {} GROUP BY {} ORDER BY count DESC; CREATE TABLE {} (group_id INTEGER NOT NULL, source_id INTEGER NOT NULL); INSERT INTO {} (group_id, source_id) SELECT frequency.id, source.id FROM {} AS source JOIN {} AS frequency ON source.{} IS frequency.value;",
+            quote_identifier(&frequency),
+            quote_identifier(column),
+            quote_identifier(table),
+            source_table,
+            source_column,
+            quote_identifier(table),
+            quote_identifier(column),
+            quote_identifier(&members),
+            quote_identifier(&members),
+            quote_identifier(table),
+            quote_identifier(&frequency),
+            quote_identifier(column),
+        );
+        self.atomic(|| {
+            self.connection.execute_batch(&query)?;
+            Ok(())
+        })?;
+        self.invalidate();
+        Ok((frequency, members))
+    }
+
+    pub(crate) fn frequency_group_members(
+        &self,
+        membership_table: &str,
+        group_id: i64,
+    ) -> AppResult<std::collections::HashSet<i64>> {
+        let mut statement = self.prepare(&format!(
+            "SELECT source_id FROM {} WHERE group_id = ?1",
+            quote_identifier(membership_table)
+        ))?;
+        let members = statement
+            .query_map([group_id], |row| row.get(0))?
+            .collect::<Result<std::collections::HashSet<_>, _>>()?;
+        Ok(members)
+    }
+
     pub(crate) fn summary_table(&self, table: &str, column: &str) -> AppResult<String> {
         let result = self.find_unused_table_name(&format!("{table}_summary"))?;
         let query = format!(
@@ -1428,6 +1475,58 @@ mod tests {
         assert_eq!(label[8], DataItem::Text("z".into()));
         assert_eq!(label[9], DataItem::Null);
         assert_eq!(label[10], DataItem::Null);
+    }
+
+    #[test]
+    fn frequency_memberships_keep_duplicate_and_null_group_rows() {
+        let database = setup_database();
+        database
+            .execute_batch("CREATE TABLE sample (id INTEGER PRIMARY KEY, value TEXT); INSERT INTO sample(value) VALUES ('a'), ('a'), (NULL), ('b');")
+            .unwrap();
+        let (frequency, memberships) = database
+            .frequency_table_with_members("sample", "value")
+            .unwrap();
+        let rows = database.get(10, 0, &frequency, "").unwrap().1;
+        for row in rows {
+            let group_id = match row[0] {
+                DataItem::Integer(id) => id,
+                _ => panic!("expected group id"),
+            };
+            let value = &row[1];
+            let expected = match value {
+                DataItem::Text(value) if value == "a" => [1, 2].into_iter().collect(),
+                DataItem::Text(value) if value == "b" => [4].into_iter().collect(),
+                DataItem::Null => [3].into_iter().collect(),
+                _ => panic!("unexpected frequency value"),
+            };
+            assert_eq!(
+                database
+                    .frequency_group_members(&memberships, group_id)
+                    .unwrap(),
+                expected
+            );
+        }
+        assert!(!database.get_table_names().unwrap().contains(&memberships));
+    }
+
+    #[test]
+    fn cancelled_frequency_with_members_rolls_back_both_tables() {
+        let database = setup_database();
+        database.execute_batch("CREATE TABLE sample (id INTEGER PRIMARY KEY, value TEXT); INSERT INTO sample(value) VALUES ('a'), ('b');").unwrap();
+        database
+            .cancellation
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(database
+            .frequency_table_with_members("sample", "value")
+            .is_err());
+        database
+            .cancellation
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let names = database.get_table_names().unwrap();
+        assert!(!names
+            .iter()
+            .any(|name| name.starts_with("sample_frequency")));
+        assert!(!names.iter().any(|name| name.starts_with(INTERNAL_PREFIX)));
     }
 
     #[test]
