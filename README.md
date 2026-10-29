@@ -45,10 +45,10 @@ This checklist is the supported workflow target and release gate.
 
 - [x] The `M` sheet list opens the highlighted table with Enter, supports Space/`U` selection, `R` rename, `D`/`d` delete, and `[`/`]` navigation order. Batch deletion is one undoable operation.
 - [x] Preserve cursor, sort order, and row selection independently for each table while switching; `Ctrl+6` (also `Ctrl+^`) returns to the previously visited table.
-- [ ] Stable sheet IDs and dependency-aware stale state for derived sheets.
+- [ ] Stable sheet IDs (derived sheets now track source names and become stale after source edits or SQL changes).
 - [ ] Logical type configuration and persistent conversion error records. `#` now makes a strict, undoable integer-derived column and leaves invalid input null.
 - [x] `V` creates an all-column Describe sheet with null, invalid, distinct, min/max, sum, and average statistics.
-- [ ] Frequency stale-state refresh after source edits.
+- [x] Refresh stale derived sheets with `F5`; source edits mark dependent frequency, Describe, grouped, pivot, join, and append results stale. Refresh rebuilds the sheet atomically and retains its name.
 - Frequency results already include percentages and source metadata; Enter highlights matching source rows, and selected groups propagate their row selection to the source.
 - [ ] Grouped-result row provenance, drill-down, and source-selection propagation.
 - Grouping/pivot generation is available with `!` row keys, `+` column aggregators, `F3`, and `F4`; pivots reject more than 1,000 generated columns.

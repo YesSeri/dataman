@@ -8,10 +8,12 @@
 - [ ] Add horizontal scrolling for tables wider than the terminal.
 - [ ] Add commands to hide, show, and reorder columns.
 - [ ] Improve status and error messages so command results and failures are visible in the TUI.
-- [ ] Add a column summary view with useful statistics for each column.
-- [ ] Add frequency tables that group rows by column values and summarize groups.
+- [x] Add a column summary view with useful statistics for each column.
+- [x] Add frequency tables that group rows by column values and summarize groups.
 - [ ] Add support for opening and saving TSV and SQLite files through a common path-based input workflow.
-- [ ] Add joins between tables, starting with a table-of-tables workflow.
+- [x] Add joins between tables, starting with a table-of-tables workflow.
+- [x] Add grouping and pivot tables with configured aggregations.
+- [x] Mark derived sheets stale after source changes and refresh them with `F5`.
 
 ## Less priority
 
