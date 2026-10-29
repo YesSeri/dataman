@@ -14,7 +14,9 @@ pub(crate) fn create_table_of_tables(conn: &Connection) -> AppResult<()> {
             col_count INTEGER,
             text_col_count INTEGER,
             int_col_count INTEGER,
-            source_names TEXT
+            source_names TEXT,
+            sheet_kind TEXT,
+            stale INTEGER
         )",
         [],
     )?;
@@ -96,7 +98,7 @@ pub(crate) fn populate_table_of_tables(conn: &Connection) -> AppResult<()> {
         let text_col_count = get_table_kind_col_count(conn, &table, ColumnKind::Text)?;
 
         conn.execute(
-            r#"REPLACE INTO table_of_tables (table_name, row_count, col_count, text_col_count, int_col_count, source_names) VALUES (?1, ?2, ?3, ?4, ?5, '')"#,
+            r#"REPLACE INTO table_of_tables (table_name, row_count, col_count, text_col_count, int_col_count, source_names, sheet_kind, stale) VALUES (?1, ?2, ?3, ?4, ?5, '', 'table', 0)"#,
             params![table, row_count, col_count,text_col_count, int_col_count],
         )?;
     }

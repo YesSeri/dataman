@@ -68,6 +68,7 @@ pub enum Command {
     ConfigureAggregator,
     Group,
     Pivot,
+    RefreshDerived,
     ToggleSelection,
     BulkEdit,
     HideColumn,
@@ -112,7 +113,10 @@ impl Command {
             | Command::Join
             | Command::CombineTables
             | Command::ToggleJoinKey => true,
-            Command::ConfigureAggregator | Command::Group | Command::Pivot => true,
+            Command::ConfigureAggregator
+            | Command::Group
+            | Command::Pivot
+            | Command::RefreshDerived => true,
             Command::BulkEdit | Command::ToggleSelection => true,
             Command::HideColumn
             | Command::ShowColumns
@@ -168,6 +172,7 @@ impl Command {
             Command::ConfigureAggregator => "Choose Aggregator".to_string(),
             Command::Group => "Group Rows".to_string(),
             Command::Pivot => "Pivot Rows".to_string(),
+            Command::RefreshDerived => "Refresh Derived Sheet".to_string(),
             Command::ToggleSelection => "Toggle Row Selection".to_string(),
             Command::BulkEdit => "Bulk Edit".to_string(),
             Command::HideColumn => "Hide Column".to_string(),
@@ -224,6 +229,7 @@ impl From<KeyEvent> for Command {
             "configure_aggregator" => Command::ConfigureAggregator,
             "group" => Command::Group,
             "pivot" => Command::Pivot,
+            "refresh_derived" => Command::RefreshDerived,
             "toggle_selection" => Command::ToggleSelection,
             "bulk_edit" => Command::BulkEdit,
             "hide_column" => Command::HideColumn,
@@ -317,6 +323,10 @@ mod keybinding_tests {
         assert_eq!(
             Command::from(KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE)),
             Command::Pivot
+        );
+        assert_eq!(
+            Command::from(KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE)),
+            Command::RefreshDerived
         );
         assert_eq!(
             Command::from(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL)),

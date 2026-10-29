@@ -28,6 +28,7 @@
 "+" = "configure_aggregator"
 "f3" = "group"
 "f4" = "pivot"
+"f5" = "refresh_derived"
 "space" = "toggle_selection"
 "B" = "bulk_edit"
 "|" = "select_sql"

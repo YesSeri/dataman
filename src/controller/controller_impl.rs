@@ -20,6 +20,37 @@ use super::input::StateMachine;
 
 const HISTORY_LIMIT: usize = 100;
 
+#[derive(Debug, Clone)]
+enum DerivedSpec {
+    Describe {
+        source: String,
+    },
+    Frequency {
+        source: String,
+        column: String,
+    },
+    Group {
+        source: String,
+        keys: Vec<String>,
+        aggregations: Vec<(String, Aggregator)>,
+    },
+    Pivot {
+        source: String,
+        keys: Vec<String>,
+        column: String,
+        aggregations: Vec<(String, Aggregator)>,
+    },
+    Append {
+        sources: Vec<String>,
+    },
+    Join {
+        left: String,
+        right: String,
+        keys: Vec<(String, String)>,
+        kind: JoinKind,
+    },
+}
+
 #[derive(Debug)]
 pub struct Controller {
     pub(crate) database: Database,
@@ -33,6 +64,8 @@ pub struct Controller {
     pub(crate) join_keys: HashMap<String, Vec<String>>,
     table_sources: HashMap<String, Vec<String>>,
     aggregators: HashMap<String, Vec<(String, Aggregator)>>,
+    derived_specs: HashMap<String, DerivedSpec>,
+    stale_derived: HashSet<String>,
     frequency_sources: HashMap<String, (String, String)>,
     frequency_selection_baselines: HashMap<String, Selection>,
     drilldown_return_sheet: Option<String>,
@@ -71,6 +104,8 @@ struct ViewSnapshot {
     join_keys: HashMap<String, Vec<String>>,
     table_sources: HashMap<String, Vec<String>>,
     aggregators: HashMap<String, Vec<(String, Aggregator)>>,
+    derived_specs: HashMap<String, DerivedSpec>,
+    stale_derived: HashSet<String>,
 }
 
 #[derive(Debug)]
@@ -152,6 +187,8 @@ impl Controller {
             join_keys: HashMap::new(),
             table_sources: HashMap::new(),
             aggregators: HashMap::new(),
+            derived_specs: HashMap::new(),
+            stale_derived: HashSet::new(),
             sheet_views: HashMap::new(),
             previous_sheet: None,
             page_key: None,
@@ -204,6 +241,8 @@ impl Controller {
             join_keys: self.join_keys.clone(),
             table_sources: self.table_sources.clone(),
             aggregators: self.aggregators.clone(),
+            derived_specs: self.derived_specs.clone(),
+            stale_derived: self.stale_derived.clone(),
         }
     }
 
@@ -215,6 +254,8 @@ impl Controller {
         self.join_keys = snapshot.join_keys.clone();
         self.table_sources = snapshot.table_sources.clone();
         self.aggregators = snapshot.aggregators.clone();
+        self.derived_specs = snapshot.derived_specs.clone();
+        self.stale_derived = snapshot.stale_derived.clone();
         self.view.table_name = snapshot.table_name;
         self.view.column = snapshot.column;
         self.view.row = snapshot.row;
@@ -264,6 +305,7 @@ impl Controller {
                 | Command::History
                 | Command::HistoryReplay
                 | Command::HistoryClose
+                | Command::RefreshDerived
                 | Command::ToggleSelection
                 | Command::ToggleJoinKey
                 | Command::DeleteSelected
@@ -312,6 +354,7 @@ impl Controller {
             Command::CombineTables => self.combine_selected_tables(entry.inputs.clone()),
             Command::Group => self.create_grouped_sheet(),
             Command::Pivot => self.create_pivot_sheet(),
+            Command::RefreshDerived => self.refresh_derived_sheet(),
             Command::ConfigureAggregator => self.configure_aggregator(entry.inputs.clone()),
             Command::Summary => self.show_analysis(false),
             Command::Frequency => self.show_analysis(true),
@@ -669,12 +712,68 @@ impl Controller {
         self.database.view_metadata_table()?;
         for (table, sources) in &self.table_sources {
             self.database.connection.execute(
-                "UPDATE table_of_tables SET source_names = ?1 WHERE table_name = ?2",
-                rusqlite::params![sources.join(", "), table],
+                "UPDATE table_of_tables SET source_names = ?1, sheet_kind = ?2, stale = ?3 WHERE table_name = ?4",
+                rusqlite::params![
+                    sources.join(", "),
+                    match self.derived_specs.get(table) {
+                        Some(DerivedSpec::Describe { .. }) => "describe",
+                        Some(DerivedSpec::Frequency { .. }) => "frequency",
+                        Some(DerivedSpec::Group { .. }) => "group",
+                        Some(DerivedSpec::Pivot { .. }) => "pivot",
+                        Some(DerivedSpec::Append { .. }) => "append",
+                        Some(DerivedSpec::Join { .. }) => "join",
+                        None => "table",
+                    },
+                    self.stale_derived.contains(table) as i64,
+                    table,
+                ],
             )?;
         }
         self.database.invalidate();
         Ok(())
+    }
+
+    fn derived_sources(spec: &DerivedSpec) -> Vec<&str> {
+        match spec {
+            DerivedSpec::Describe { source }
+            | DerivedSpec::Frequency { source, .. }
+            | DerivedSpec::Group { source, .. }
+            | DerivedSpec::Pivot { source, .. } => vec![source],
+            DerivedSpec::Append { sources } => sources.iter().map(String::as_str).collect(),
+            DerivedSpec::Join { left, right, .. } => vec![left, right],
+        }
+    }
+
+    fn mark_source_stale(&mut self, source: &str) {
+        let affected = self
+            .derived_specs
+            .iter()
+            .filter(|(_, spec)| Self::derived_sources(spec).contains(&source))
+            .map(|(name, _)| name.clone())
+            .collect::<Vec<_>>();
+        self.stale_derived.extend(affected);
+    }
+
+    fn mark_all_derived_stale(&mut self) {
+        self.stale_derived
+            .extend(self.derived_specs.keys().cloned());
+    }
+
+    fn command_mutates_source(command: &Command) -> bool {
+        matches!(
+            command,
+            Command::Copy
+                | Command::RegexTransform
+                | Command::Edit
+                | Command::TextToInt
+                | Command::IntToText
+                | Command::DeleteColumn
+                | Command::MathOperation
+                | Command::RenameColumn
+                | Command::BulkEdit
+                | Command::DeleteSelected
+                | Command::DeleteTable
+        )
     }
 
     fn normalize_sort_column(&mut self) -> AppResult<()> {
@@ -694,7 +793,7 @@ impl Controller {
     fn show_analysis(&mut self, frequency: bool) -> AppResult<()> {
         let before = self.view_snapshot();
         let source = self.view.table_name.clone();
-        let result = if frequency {
+        let (result, spec) = if frequency {
             let column = self.selected_column()?;
             let (result, membership) = self
                 .database
@@ -703,12 +802,25 @@ impl Controller {
                 .insert(result.clone(), (source.clone(), membership));
             self.frequency_selection_baselines
                 .insert(result.clone(), self.selected_rows.clone());
-            result
+            (
+                result,
+                DerivedSpec::Frequency {
+                    source: source.clone(),
+                    column,
+                },
+            )
         } else {
-            self.database.describe_table(&source)?
+            (
+                self.database.describe_table(&source)?,
+                DerivedSpec::Describe {
+                    source: source.clone(),
+                },
+            )
         };
         self.table_sources
             .insert(result.clone(), vec![source.clone()]);
+        self.derived_specs.insert(result.clone(), spec);
+        self.stale_derived.remove(&result);
         let hidden_name = self.database.internal_table_name()?;
         self.switch_sheet(result.clone())?;
         self.view.column = 0;
@@ -749,6 +861,16 @@ impl Controller {
             .join_tables(&left, &left_column, right, right_column)?;
         self.table_sources
             .insert(result.clone(), vec![left.clone(), right.to_string()]);
+        self.derived_specs.insert(
+            result.clone(),
+            DerivedSpec::Join {
+                left: left.clone(),
+                right: right.to_string(),
+                keys: vec![(left_column.clone(), right_column.to_string())],
+                kind: JoinKind::Inner,
+            },
+        );
+        self.stale_derived.remove(&result);
         let hidden_name = self.database.internal_table_name()?;
         self.view.table_name = result.clone();
         self.view.column = 0;
@@ -842,6 +964,27 @@ impl Controller {
                 .join_tables_with_keys(&tables[0], &tables[1], &keys, kind)?
         };
         self.table_sources.insert(result.clone(), tables.clone());
+        let spec = if action == "append" {
+            DerivedSpec::Append {
+                sources: tables.clone(),
+            }
+        } else {
+            let left_keys = self.join_keys.get(&tables[0]).cloned().unwrap_or_default();
+            let right_keys = self.join_keys.get(&tables[1]).cloned().unwrap_or_default();
+            let kind = match action.as_str() {
+                "inner" => JoinKind::Inner,
+                "left" => JoinKind::Left,
+                _ => JoinKind::Full,
+            };
+            DerivedSpec::Join {
+                left: tables[0].clone(),
+                right: tables[1].clone(),
+                keys: left_keys.into_iter().zip(right_keys).collect(),
+                kind,
+            }
+        };
+        self.derived_specs.insert(result.clone(), spec);
+        self.stale_derived.remove(&result);
         let hidden_name = self.database.internal_table_name()?;
         self.selected_sheets.clear();
         self.switch_sheet(result.clone())?;
@@ -905,6 +1048,15 @@ impl Controller {
         let result = self.database.grouped_table(&source, &keys, &aggregations)?;
         self.table_sources
             .insert(result.clone(), vec![source.clone()]);
+        self.derived_specs.insert(
+            result.clone(),
+            DerivedSpec::Group {
+                source: source.clone(),
+                keys,
+                aggregations,
+            },
+        );
+        self.stale_derived.remove(&result);
         self.open_created_result(result, source, before, Command::Group)
     }
 
@@ -924,6 +1076,16 @@ impl Controller {
             .pivot_table(&source, &keys, &pivot_column, &aggregations)?;
         self.table_sources
             .insert(result.clone(), vec![source.clone()]);
+        self.derived_specs.insert(
+            result.clone(),
+            DerivedSpec::Pivot {
+                source: source.clone(),
+                keys,
+                column: pivot_column,
+                aggregations,
+            },
+        );
+        self.stale_derived.remove(&result);
         self.open_created_result(result, source, before, Command::Pivot)
     }
 
@@ -952,6 +1114,94 @@ impl Controller {
         );
         self.ui.last_command =
             PreviousCommand::new(command, Some(format!("Created result from {source}")));
+        if !self.defer_refresh {
+            self.refresh_page(100)?;
+        }
+        Ok(())
+    }
+
+    fn refresh_derived_sheet(&mut self) -> AppResult<()> {
+        let name = self.view.table_name.clone();
+        let Some(spec) = self.derived_specs.get(&name).cloned() else {
+            return Err(app_error_other!(
+                "The current sheet has no refreshable source"
+            ));
+        };
+        if !self.stale_derived.contains(&name) {
+            self.ui.last_command = PreviousCommand::new(
+                Command::RefreshDerived,
+                Some("Derived sheet is already up to date".into()),
+            );
+            return Ok(());
+        }
+        let old_membership = self
+            .frequency_sources
+            .get(&name)
+            .map(|(_, membership)| membership.clone());
+        let new_membership = self.database.atomic(|| {
+            let (generated, membership) = match &spec {
+                DerivedSpec::Describe { source } => (self.database.describe_table(source)?, None),
+                DerivedSpec::Frequency { source, column } => {
+                    let (table, membership) =
+                        self.database.frequency_table_with_members(source, column)?;
+                    (table, Some(membership))
+                }
+                DerivedSpec::Group {
+                    source,
+                    keys,
+                    aggregations,
+                } => (
+                    self.database.grouped_table(source, keys, aggregations)?,
+                    None,
+                ),
+                DerivedSpec::Pivot {
+                    source,
+                    keys,
+                    column,
+                    aggregations,
+                } => (
+                    self.database
+                        .pivot_table(source, keys, column, aggregations)?,
+                    None,
+                ),
+                DerivedSpec::Append { sources } => (self.database.append_tables(sources)?, None),
+                DerivedSpec::Join {
+                    left,
+                    right,
+                    keys,
+                    kind,
+                } => (
+                    self.database
+                        .join_tables_with_keys(left, right, keys, *kind)?,
+                    None,
+                ),
+            };
+            if let Some(membership) = &old_membership {
+                self.database.connection.execute_batch(&format!(
+                    "DROP TABLE IF EXISTS \"{}\";",
+                    membership.replace('"', "\"\"")
+                ))?;
+            }
+            self.database.connection.execute_batch(&format!(
+                "DROP TABLE IF EXISTS \"{}\";",
+                name.replace('"', "\"\"")
+            ))?;
+            self.database.invalidate();
+            self.database.rename_table(&generated, &name)?;
+            Ok(membership)
+        })?;
+        if let Some(membership) = new_membership {
+            if let Some((source, _)) = self.frequency_sources.get(&name).cloned() {
+                self.frequency_sources
+                    .insert(name.clone(), (source, membership));
+            }
+        }
+        self.stale_derived.remove(&name);
+        self.ui.last_command = PreviousCommand::new(
+            Command::RefreshDerived,
+            Some("Rebuilt derived sheet from its sources".into()),
+        );
+        self.refresh_sheet_list()?;
         if !self.defer_refresh {
             self.refresh_page(100)?;
         }
@@ -1445,6 +1695,8 @@ impl Controller {
         {
             return Err(app_error_other!("Frequency source rows are read-only"));
         }
+        let mutation_source = self.view.table_name.clone();
+        let revision_before = self.database.revision();
         let before_command = self.view_snapshot();
         self.ui.last_command = PreviousCommand::new(command.clone(), None);
         let result = match command {
@@ -1492,6 +1744,7 @@ impl Controller {
             Command::ToggleJoinKey => self.toggle_join_key(),
             Command::Group => self.create_grouped_sheet(),
             Command::Pivot => self.create_pivot_sheet(),
+            Command::RefreshDerived => self.refresh_derived_sheet(),
             Command::DeleteTable => self.delete_table(),
             Command::ToggleMetadataTable => self.toggle_metadata_table(),
             Command::HistoryReplay if self.view.table_name == "table_of_tables" => {
@@ -1538,6 +1791,14 @@ impl Controller {
             }
             Command::HistoryReplay | Command::HistoryClose => Ok(()),
         };
+        if result.is_ok() && self.database.revision() != revision_before {
+            if command == Command::SqlQuery {
+                self.mark_all_derived_stale();
+            } else if Self::command_mutates_source(&command) {
+                self.mark_source_stale(&mutation_source);
+            }
+            self.refresh_sheet_list()?;
+        }
         match command {
             Command::RenameTable => {
                 let old_table_name = if self.view.table_name == "table_of_tables" {
@@ -1639,13 +1900,24 @@ impl Controller {
         if inputs.is_empty() {
             return Err(AppError::from("Command input is required"));
         }
+        let mutation_source = self.view.table_name.clone();
+        let revision_before = self.database.revision();
         let before_command = self.view_snapshot();
         self.ui.queued_command = Some(QueuedCommand {
             command: command.clone(),
             inputs: inputs.clone(),
         });
-        self.execute_queued_command()?;
+        let result = self.execute_queued_command();
         self.ui.queued_command = None;
+        result?;
+        if self.database.revision() != revision_before {
+            if command == Command::SqlQuery {
+                self.mark_all_derived_stale();
+            } else if Self::command_mutates_source(&command) {
+                self.mark_source_stale(&mutation_source);
+            }
+            self.refresh_sheet_list()?;
+        }
         if self.ui.last_command.command != Command::IllegalOperation {
             if command == Command::SqlQuery {
                 self.ui.last_command = PreviousCommand::new(
@@ -2119,6 +2391,7 @@ impl Controller {
                 | Command::ToggleJoinKey
                 | Command::Group
                 | Command::Pivot
+                | Command::RefreshDerived
                 | Command::DeleteSelected
                 | Command::CopySelected
                 | Command::ClearSelection
@@ -2905,6 +3178,59 @@ mod history_tests {
         assert_eq!(controller.database.count_rows("t"), Some(2));
         controller.dispatch(Command::HistoryClose, 10).unwrap();
         assert_eq!(controller.view.table_name, frequency);
+    }
+
+    #[test]
+    fn refresh_rebuilds_stale_frequency_sheet_after_source_edit() {
+        let mut controller = controller();
+        controller.show_analysis(true).unwrap();
+        let frequency = controller.view.table_name.clone();
+
+        controller.switch_sheet("t".into()).unwrap();
+        controller.refresh_page(20).unwrap();
+        controller.view.column = 1;
+        controller.view.row = 0;
+        controller
+            .execute_inputs(Command::Edit, vec!["changed".into()])
+            .unwrap();
+        assert!(controller.stale_derived.contains(&frequency));
+        let stale: i64 = controller
+            .database
+            .connection
+            .query_row(
+                "SELECT stale FROM table_of_tables WHERE table_name = ?1",
+                [&frequency],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stale, 1);
+
+        controller.switch_sheet(frequency.clone()).unwrap();
+        controller.dispatch(Command::RefreshDerived, 20).unwrap();
+        assert!(!controller.stale_derived.contains(&frequency));
+        let stale: i64 = controller
+            .database
+            .connection
+            .query_row(
+                "SELECT stale FROM table_of_tables WHERE table_name = ?1",
+                [&frequency],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stale, 0);
+        let changed_count: i64 = controller
+            .database
+            .connection
+            .query_row(
+                &format!(
+                    "SELECT count FROM \"{}\" WHERE value = 'changed'",
+                    frequency
+                ),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(changed_count, 1);
     }
 
     #[test]
