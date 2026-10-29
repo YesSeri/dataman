@@ -245,13 +245,20 @@ impl TUI {
         // mark current header
 
         let header = Row::new(headers[window.clone()].iter().enumerate().map(|(i, h)| {
+            let label = if controller.marked_join_keys.iter().any(|key| key == h) {
+                format!("!{h}")
+            } else {
+                h.clone()
+            };
             if current_header == window.start + i {
                 Cell::from(Span::styled(
-                    h.as_str(),
+                    label,
                     Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
                 ))
+            } else if controller.marked_join_keys.iter().any(|key| key == h) {
+                Cell::from(Span::styled(label, Style::default().fg(Color::Yellow)))
             } else {
-                Cell::from(h.as_str())
+                Cell::from(label)
             }
         }))
         .height(1);

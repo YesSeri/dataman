@@ -50,8 +50,8 @@ This checklist is the supported workflow target and release gate.
 - [x] `V` creates an all-column Describe sheet with null, invalid, distinct, min/max, sum, and average statistics.
 - [ ] Frequency stale-state refresh after source edits.
 - Frequency results already include percentages and source metadata; Enter highlights matching source rows, and selected groups propagate their row selection to the source.
-- [ ] Grouping, aggregations, and pivots.
-- [ ] Join/append chooser and undoable UI workflow; the database model now supports composite inner/left/full joins and schema-aligned append.
+- [ ] Grouping and pivots.
+- [x] Select tables in the sheet list and press `&` to append them, or choose inner/left/full join for two tables. Mark ordered join keys with `!`; creation is undoable. Source names appear in the sheet list.
 
 Unchecked items above are planned work and are not supported by the current release.
 
@@ -73,6 +73,8 @@ The following are some of the more commonly used key commands in the TUI applica
 | `V`                  | Describe All Columns |
 | `v`                  | Value Frequencies  |
 | `J`                  | Join Tables        |
+| `!`                  | Mark/unmark the current column as an ordered join key |
+| `&`                  | Combine selected tables (append, inner, left, or full) |
 | `Space`              | Toggle row/table selection |
 | `B`                  | Bulk edit selected rows in current column |
 | `|`                  | Add rows matching a SQLite `WHERE` expression (for example `amount > 20`) |

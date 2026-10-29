@@ -63,6 +63,8 @@ pub enum Command {
     Summary,
     Frequency,
     Join,
+    CombineTables,
+    ToggleJoinKey,
     ToggleSelection,
     BulkEdit,
     HideColumn,
@@ -104,7 +106,9 @@ impl Command {
             | Command::Redo
             | Command::Summary
             | Command::Frequency
-            | Command::Join => true,
+            | Command::Join
+            | Command::CombineTables
+            | Command::ToggleJoinKey => true,
             Command::BulkEdit | Command::ToggleSelection => true,
             Command::HideColumn
             | Command::ShowColumns
@@ -155,6 +159,8 @@ impl Command {
             Command::Summary => "Column Summary".to_string(),
             Command::Frequency => "Value Frequencies".to_string(),
             Command::Join => "Join Tables".to_string(),
+            Command::CombineTables => "Combine Selected Tables".to_string(),
+            Command::ToggleJoinKey => "Toggle Join Key".to_string(),
             Command::ToggleSelection => "Toggle Row Selection".to_string(),
             Command::BulkEdit => "Bulk Edit".to_string(),
             Command::HideColumn => "Hide Column".to_string(),
@@ -206,6 +212,8 @@ impl From<KeyEvent> for Command {
             "summary" => Command::Summary,
             "frequency" => Command::Frequency,
             "join" => Command::Join,
+            "combine_tables" => Command::CombineTables,
+            "toggle_join_key" => Command::ToggleJoinKey,
             "toggle_selection" => Command::ToggleSelection,
             "bulk_edit" => Command::BulkEdit,
             "hide_column" => Command::HideColumn,
@@ -278,6 +286,14 @@ mod keybinding_tests {
         assert_eq!(
             Command::from(KeyEvent::new(KeyCode::Char('6'), KeyModifiers::CONTROL)),
             Command::PreviousSheet
+        );
+        assert_eq!(
+            Command::from(KeyEvent::new(KeyCode::Char('&'), KeyModifiers::NONE)),
+            Command::CombineTables
+        );
+        assert_eq!(
+            Command::from(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE)),
+            Command::ToggleJoinKey
         );
         assert_eq!(
             Command::from(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL)),

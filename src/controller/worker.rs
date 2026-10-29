@@ -40,6 +40,7 @@ pub(crate) struct RenderState {
     pub(crate) view: ViewState,
     pub(crate) selected_rows: Selection,
     pub(crate) selected_sheets: HashSet<String>,
+    pub(crate) marked_join_keys: Vec<String>,
     pub(crate) command_history: Vec<HistoryLine>,
     pub(crate) total_rows: u32,
     pub(crate) busy: bool,
@@ -76,6 +77,7 @@ impl RenderState {
             },
             selected_rows: Selection::default(),
             selected_sheets: HashSet::new(),
+            marked_join_keys: vec![],
             command_history: vec![],
             total_rows: 0,
             busy: true,
@@ -90,6 +92,11 @@ impl RenderState {
             view: controller.view.clone(),
             selected_rows: controller.selected_rows.clone(),
             selected_sheets: controller.selected_sheets.clone(),
+            marked_join_keys: controller
+                .join_keys
+                .get(&controller.view.table_name)
+                .cloned()
+                .unwrap_or_default(),
             command_history: controller
                 .command_history
                 .iter()
@@ -621,6 +628,7 @@ pub(super) fn prompted(command: &Command) -> bool {
             | Command::MathOperation
             | Command::RenameTable
             | Command::Join
+            | Command::CombineTables
             | Command::BulkEdit
             | Command::SelectSql
             | Command::SelectRegex

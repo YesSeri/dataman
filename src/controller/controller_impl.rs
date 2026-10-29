@@ -4,7 +4,7 @@ use crate::controller::command::{Command, PreviousCommand};
 use crate::controller::input::{self, InputMode};
 use crate::error::{AppError, AppResult};
 use crate::io::savers;
-use crate::model::database::{Database, UndoRecord, INTERNAL_PREFIX};
+use crate::model::database::{Database, JoinKind, UndoRecord, INTERNAL_PREFIX};
 use crate::model::datarow::{DataItem, DataTable};
 use crate::navigation::Direction;
 use crate::tui::TUI;
@@ -30,6 +30,8 @@ pub struct Controller {
     pub(crate) selected_sheets: HashSet<String>,
     column_layouts: HashMap<String, ColumnLayout>,
     sheet_order: Vec<String>,
+    pub(crate) join_keys: HashMap<String, Vec<String>>,
+    table_sources: HashMap<String, Vec<String>>,
     frequency_sources: HashMap<String, (String, String)>,
     frequency_selection_baselines: HashMap<String, Selection>,
     drilldown_return_sheet: Option<String>,
@@ -65,6 +67,8 @@ struct ViewSnapshot {
     selected_rows: Selection,
     selected_sheets: HashSet<String>,
     sheet_order: Vec<String>,
+    join_keys: HashMap<String, Vec<String>>,
+    table_sources: HashMap<String, Vec<String>>,
 }
 
 #[derive(Debug)]
@@ -143,6 +147,8 @@ impl Controller {
             frequency_sources: HashMap::new(),
             frequency_selection_baselines: HashMap::new(),
             drilldown_return_sheet: None,
+            join_keys: HashMap::new(),
+            table_sources: HashMap::new(),
             sheet_views: HashMap::new(),
             previous_sheet: None,
             page_key: None,
@@ -192,6 +198,8 @@ impl Controller {
             selected_rows: self.selected_rows.clone(),
             selected_sheets: self.selected_sheets.clone(),
             sheet_order: self.sheet_order.clone(),
+            join_keys: self.join_keys.clone(),
+            table_sources: self.table_sources.clone(),
         }
     }
 
@@ -200,6 +208,8 @@ impl Controller {
         self.selected_rows = snapshot.selected_rows.clone();
         self.selected_sheets = snapshot.selected_sheets.clone();
         self.sheet_order = snapshot.sheet_order.clone();
+        self.join_keys = snapshot.join_keys.clone();
+        self.table_sources = snapshot.table_sources.clone();
         self.view.table_name = snapshot.table_name;
         self.view.column = snapshot.column;
         self.view.row = snapshot.row;
@@ -250,6 +260,7 @@ impl Controller {
                 | Command::HistoryReplay
                 | Command::HistoryClose
                 | Command::ToggleSelection
+                | Command::ToggleJoinKey
                 | Command::DeleteSelected
                 | Command::CopySelected
                 | Command::ClearSelection
@@ -293,6 +304,7 @@ impl Controller {
             Command::MathOperation => self.math_operation(entry.inputs.clone()),
             Command::ExactSearch => self.exact_search(entry.inputs.clone()),
             Command::Join => self.join_table(entry.inputs.clone()),
+            Command::CombineTables => self.combine_selected_tables(entry.inputs.clone()),
             Command::Summary => self.show_analysis(false),
             Command::Frequency => self.show_analysis(true),
             Command::BulkEdit => self.bulk_edit(entry.inputs.clone()),
@@ -345,7 +357,7 @@ impl Controller {
         }
         self.restore_view(entry.before.clone());
         if self.view.table_name == "table_of_tables" {
-            self.database.view_metadata_table()?;
+            self.refresh_sheet_list()?;
         }
         self.history.redo.push_back(entry);
         self.ui.last_command =
@@ -365,7 +377,7 @@ impl Controller {
         }
         self.restore_view(entry.after.clone());
         if self.view.table_name == "table_of_tables" {
-            self.database.view_metadata_table()?;
+            self.refresh_sheet_list()?;
         }
         self.history.undo.push_back(entry);
         self.ui.last_command = PreviousCommand::new(Command::Redo, Some("Redid command".into()));
@@ -645,6 +657,18 @@ impl Controller {
         Ok(())
     }
 
+    fn refresh_sheet_list(&mut self) -> AppResult<()> {
+        self.database.view_metadata_table()?;
+        for (table, sources) in &self.table_sources {
+            self.database.connection.execute(
+                "UPDATE table_of_tables SET source_names = ?1 WHERE table_name = ?2",
+                rusqlite::params![sources.join(", "), table],
+            )?;
+        }
+        self.database.invalidate();
+        Ok(())
+    }
+
     fn normalize_sort_column(&mut self) -> AppResult<()> {
         let headers = self.database.get_headers(&self.view.table_name)?;
         if !self
@@ -675,6 +699,8 @@ impl Controller {
         } else {
             self.database.describe_table(&source)?
         };
+        self.table_sources
+            .insert(result.clone(), vec![source.clone()]);
         let hidden_name = self.database.internal_table_name()?;
         self.switch_sheet(result.clone())?;
         self.view.column = 0;
@@ -713,6 +739,8 @@ impl Controller {
         let result = self
             .database
             .join_tables(&left, &left_column, right, right_column)?;
+        self.table_sources
+            .insert(result.clone(), vec![left.clone(), right.to_string()]);
         let hidden_name = self.database.internal_table_name()?;
         self.view.table_name = result.clone();
         self.view.column = 0;
@@ -728,6 +756,99 @@ impl Controller {
                 is_visible: true,
             },
             before,
+        );
+        if !self.defer_refresh {
+            self.refresh_page(100)?;
+        }
+        Ok(())
+    }
+
+    fn toggle_join_key(&mut self) -> AppResult<()> {
+        if self.view.table_name == "table_of_tables" {
+            return Err(app_error_other!("Mark join keys in each source table"));
+        }
+        let table = self.view.table_name.clone();
+        let column = self.selected_column()?;
+        let keys = self.join_keys.entry(table).or_default();
+        if let Some(index) = keys.iter().position(|key| key == &column) {
+            keys.remove(index);
+            self.ui.last_command = PreviousCommand::new(
+                Command::ToggleJoinKey,
+                Some(format!("Unmarked {column} as a join key")),
+            );
+        } else {
+            keys.push(column.clone());
+            self.ui.last_command = PreviousCommand::new(
+                Command::ToggleJoinKey,
+                Some(format!("Marked {column} as join key #{}", keys.len())),
+            );
+        }
+        Ok(())
+    }
+
+    fn combine_selected_tables(&mut self, inputs: Vec<String>) -> AppResult<()> {
+        if self.view.table_name != "table_of_tables" {
+            return Err(app_error_other!(
+                "Open the sheet list and select tables first"
+            ));
+        }
+        let tables = self
+            .sheet_order
+            .iter()
+            .filter(|name| self.selected_sheets.contains(*name))
+            .cloned()
+            .collect::<Vec<_>>();
+        if tables.len() < 2 {
+            return Err(app_error_other!(
+                "Select at least two tables in the sheet list"
+            ));
+        }
+        let action = inputs
+            .first()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .ok_or_else(|| app_error_other!("Choose append, inner, left, or full"))?;
+        let before = self.view_snapshot();
+        let result = if action == "append" {
+            self.database.append_tables(&tables)?
+        } else {
+            if tables.len() != 2 {
+                return Err(app_error_other!(
+                    "Joins require exactly two selected tables"
+                ));
+            }
+            let left_keys = self.join_keys.get(&tables[0]).cloned().unwrap_or_default();
+            let right_keys = self.join_keys.get(&tables[1]).cloned().unwrap_or_default();
+            if left_keys.is_empty() || left_keys.len() != right_keys.len() {
+                return Err(app_error_other!(
+                    "Mark the same number of ordered join keys on both tables"
+                ));
+            }
+            let keys = left_keys.into_iter().zip(right_keys).collect::<Vec<_>>();
+            let kind = match action.as_str() {
+                "inner" => JoinKind::Inner,
+                "left" => JoinKind::Left,
+                "full" => JoinKind::Full,
+                _ => return Err(app_error_other!("Choose append, inner, left, or full")),
+            };
+            self.database
+                .join_tables_with_keys(&tables[0], &tables[1], &keys, kind)?
+        };
+        self.table_sources.insert(result.clone(), tables.clone());
+        let hidden_name = self.database.internal_table_name()?;
+        self.selected_sheets.clear();
+        self.switch_sheet(result.clone())?;
+        self.record_history(
+            UndoRecord::Visibility {
+                table: None,
+                visible_name: result,
+                hidden_name,
+                is_visible: true,
+            },
+            before,
+        );
+        self.ui.last_command = PreviousCommand::new(
+            Command::CombineTables,
+            Some(format!("Created result from {} tables", tables.len())),
         );
         if !self.defer_refresh {
             self.refresh_page(100)?;
@@ -995,7 +1116,7 @@ impl Controller {
                 })
                 .collect();
             self.selected_sheets.clear();
-            self.database.view_metadata_table()?;
+            self.refresh_sheet_list()?;
             self.record_history(UndoRecord::Group(records), before);
             self.ui.last_command = PreviousCommand::new(
                 Command::DeleteTable,
@@ -1076,7 +1197,7 @@ impl Controller {
             self.view.row_offset = 0;
             return Ok(());
         }
-        self.database.view_metadata_table()?;
+        self.refresh_sheet_list()?;
         self.reconcile_sheet_order()?;
         self.view.table_before_metadata = Some(self.view.table_name.clone());
         self.view.table_name = "table_of_tables".into();
@@ -1232,6 +1353,7 @@ impl Controller {
             | Command::MathOperation
             | Command::RenameTable
             | Command::Join
+            | Command::CombineTables
             | Command::BulkEdit => {
                 self.ui.queued_command = Some(QueuedCommand::new(command.clone()));
                 self.ui
@@ -1261,6 +1383,7 @@ impl Controller {
             Command::TextToInt => self.text_to_int(),
             Command::IntToText => self.int_to_text(),
             Command::DeleteColumn => self.delete_column(),
+            Command::ToggleJoinKey => self.toggle_join_key(),
             Command::DeleteTable => self.delete_table(),
             Command::ToggleMetadataTable => self.toggle_metadata_table(),
             Command::HistoryReplay if self.view.table_name == "table_of_tables" => {
@@ -1321,6 +1444,9 @@ impl Controller {
             Command::RenameColumn => {
                 log::info!("testing 2");
             }
+            Command::CombineTables => {
+                self.ui.last_command.message = Some("Type append, inner, left, or full".into());
+            }
             _ => {}
         }
 
@@ -1336,6 +1462,7 @@ impl Controller {
                 | Command::MathOperation
                 | Command::RenameTable
                 | Command::Join
+                | Command::CombineTables
                 | Command::BulkEdit
                 | Command::SelectSql
                 | Command::SelectRegex
@@ -1741,6 +1868,9 @@ impl Controller {
         let hidden_name = self
             .database
             .delete_column(&self.view.table_name, &column)?;
+        if let Some(keys) = self.join_keys.get_mut(&table) {
+            keys.retain(|key| key != &column);
+        }
         if self.view.order_column.as_deref() == Some(&column) {
             self.view.order_column = None;
         }
@@ -1774,6 +1904,13 @@ impl Controller {
         let old_column = self.selected_column()?;
         self.database
             .rename_column(&self.view.table_name, &old_column, &new_column)?;
+        if let Some(keys) = self.join_keys.get_mut(&table) {
+            for key in keys {
+                if key == &old_column {
+                    *key = new_column.clone();
+                }
+            }
+        }
         let layout = self.column_layouts.entry(table.clone()).or_default();
         for header in &mut layout.order {
             if header == &old_column {
@@ -1838,6 +1975,7 @@ impl Controller {
                 }
                 Command::MathOperation => self.math_operation(inputs),
                 Command::Join => self.join_table(inputs),
+                Command::CombineTables => self.combine_selected_tables(inputs),
                 Command::BulkEdit => self.bulk_edit(inputs),
                 Command::SelectSql => self.select_sql(inputs),
                 Command::SelectRegex => self.select_regex(inputs),
@@ -1864,6 +2002,7 @@ impl Controller {
                 | Command::Summary
                 | Command::Frequency
                 | Command::ToggleSelection
+                | Command::ToggleJoinKey
                 | Command::DeleteSelected
                 | Command::CopySelected
                 | Command::ClearSelection
@@ -1929,8 +2068,18 @@ impl Controller {
         if self.selected_sheets.remove(&old_table_name) {
             self.selected_sheets.insert(new_table_name.clone());
         }
+        if let Some(sources) = self.table_sources.remove(&old_table_name) {
+            self.table_sources.insert(new_table_name.clone(), sources);
+        }
+        for sources in self.table_sources.values_mut() {
+            for source in sources {
+                if source == &old_table_name {
+                    *source = new_table_name.clone();
+                }
+            }
+        }
         if from_sheet_list {
-            self.database.view_metadata_table()?;
+            self.refresh_sheet_list()?;
         } else {
             self.view.table_name = new_table_name;
         }
@@ -2122,6 +2271,104 @@ mod history_tests {
         controller.view.table_name = "t".into();
         controller.change_table(true).unwrap();
         assert_eq!(controller.view.table_name, "other");
+    }
+
+    #[test]
+    fn combine_selected_tables_appends_in_navigation_order_and_undoes() {
+        let mut controller = controller();
+        controller
+            .database
+            .execute_batch("CREATE TABLE other (id INTEGER PRIMARY KEY, extra TEXT); INSERT INTO other(extra) VALUES ('x'), ('y');")
+            .unwrap();
+        controller.toggle_metadata_table().unwrap();
+        controller.refresh_page(20).unwrap();
+        for name in ["t", "other"] {
+            let row = controller
+                .view
+                .rows
+                .iter()
+                .position(|values| values[0] == DataItem::Text(name.into()))
+                .unwrap();
+            controller.view.row = row;
+            controller.toggle_selection().unwrap();
+        }
+        controller
+            .combine_selected_tables(vec!["append".into()])
+            .unwrap();
+        let result = controller.view.table_name.clone();
+        assert_eq!(controller.view.table_name, result);
+        assert_eq!(controller.database.count_rows(&result), Some(4));
+        assert_eq!(
+            controller.database.get_headers(&result).unwrap(),
+            vec!["id", "name", "extra"]
+        );
+        controller.toggle_metadata_table().unwrap();
+        let sources: String = controller
+            .database
+            .connection
+            .query_row(
+                "SELECT source_names FROM table_of_tables WHERE table_name = ?1",
+                [&result],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(sources, "t, other");
+        controller.undo().unwrap();
+        assert!(!controller
+            .database
+            .get_table_names()
+            .unwrap()
+            .contains(&result));
+        controller.redo().unwrap();
+        assert!(controller
+            .database
+            .get_table_names()
+            .unwrap()
+            .contains(&result));
+    }
+
+    #[test]
+    fn marked_composite_keys_join_selected_tables_through_controller() {
+        let mut controller = controller();
+        controller
+            .database
+            .execute_batch("CREATE TABLE lefts (id INTEGER PRIMARY KEY, key TEXT, value TEXT); INSERT INTO lefts(key,value) VALUES ('x','l1'), ('y','l2'); CREATE TABLE rights (id INTEGER PRIMARY KEY, key TEXT, value TEXT); INSERT INTO rights(key,value) VALUES ('x','r1'), ('z','r2');")
+            .unwrap();
+        controller.toggle_metadata_table().unwrap();
+        controller.refresh_page(20).unwrap();
+        for name in ["lefts", "rights"] {
+            let row = controller
+                .view
+                .rows
+                .iter()
+                .position(|values| values[0] == DataItem::Text(name.into()))
+                .unwrap();
+            controller.view.row = row;
+            controller.toggle_selection().unwrap();
+            controller.switch_sheet(name.into()).unwrap();
+            controller.refresh_page(20).unwrap();
+            controller.view.column = 1;
+            controller.toggle_join_key().unwrap();
+            controller.switch_sheet("table_of_tables".into()).unwrap();
+            controller.refresh_page(20).unwrap();
+        }
+        controller
+            .combine_selected_tables(vec!["full".into()])
+            .unwrap();
+        assert_eq!(
+            controller.database.count_rows(&controller.view.table_name),
+            Some(3)
+        );
+        assert!(controller
+            .database
+            .get_headers(&controller.view.table_name)
+            .unwrap()
+            .contains(&"lefts_value".into()));
+        assert!(controller
+            .database
+            .get_headers(&controller.view.table_name)
+            .unwrap()
+            .contains(&"rights_value".into()));
     }
 
     #[test]
