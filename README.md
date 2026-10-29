@@ -59,6 +59,10 @@ The following are some of the more commonly used key commands in the TUI applica
 | `J`                  | Join Tables        |
 | `Space`              | Toggle row selection |
 | `B`                  | Bulk edit selected rows in current column |
+| `|`                  | Add rows matching a SQLite `WHERE` expression (for example `amount > 20`) |
+| `\\`                 | Add rows matching a regex in the current column |
+| `d` / `C`            | Delete selected rows / open copies in a new table |
+| `U`                  | Clear row selection |
 | `h` / `o`            | Hide current column / show all columns |
 | `[` / `]`            | Move current column left / right |
 | `L`                  | Review history; arrows select, Enter replays |

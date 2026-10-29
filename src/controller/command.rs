@@ -71,6 +71,11 @@ pub enum Command {
     History,
     HistoryReplay,
     HistoryClose,
+    SelectSql,
+    SelectRegex,
+    DeleteSelected,
+    CopySelected,
+    ClearSelection,
 }
 
 impl Command {
@@ -106,6 +111,11 @@ impl Command {
             | Command::History
             | Command::HistoryReplay
             | Command::HistoryClose => true,
+            Command::SelectSql
+            | Command::SelectRegex
+            | Command::DeleteSelected
+            | Command::CopySelected
+            | Command::ClearSelection => true,
             Command::None
             | Command::IllegalOperation
             | Command::Save
@@ -151,6 +161,11 @@ impl Command {
             Command::History => "Command History".to_string(),
             Command::HistoryReplay => "Replay History Command".to_string(),
             Command::HistoryClose => "Close Command History".to_string(),
+            Command::SelectSql => "Select Rows by SQL".to_string(),
+            Command::SelectRegex => "Select Rows by Regex".to_string(),
+            Command::DeleteSelected => "Delete Selected Rows".to_string(),
+            Command::CopySelected => "Copy Selected Rows".to_string(),
+            Command::ClearSelection => "Clear Selection".to_string(),
         }
     }
 }
@@ -196,6 +211,11 @@ impl From<KeyEvent> for Command {
             "history" => Command::History,
             "history_replay" => Command::HistoryReplay,
             "history_close" => Command::HistoryClose,
+            "select_sql" => Command::SelectSql,
+            "select_regex" => Command::SelectRegex,
+            "delete_selected" => Command::DeleteSelected,
+            "copy_selected" => Command::CopySelected,
+            "clear_selection" => Command::ClearSelection,
             "move_left" => Command::Move(Direction::Left),
             "move_right" => Command::Move(Direction::Right),
             "move_up" => Command::Move(Direction::Up),

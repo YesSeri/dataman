@@ -40,6 +40,7 @@ struct ViewSnapshot {
     ascending: bool,
     table_before_metadata: Option<String>,
     layout: ColumnLayout,
+    selected_rows: HashSet<i32>,
 }
 
 #[derive(Debug)]
@@ -146,11 +147,13 @@ impl Controller {
             ascending: self.view.ascending,
             table_before_metadata: self.view.table_before_metadata.clone(),
             layout,
+            selected_rows: self.selected_rows.clone(),
         }
     }
 
     fn restore_view(&mut self, snapshot: ViewSnapshot) {
         let layout = snapshot.layout.clone();
+        self.selected_rows = snapshot.selected_rows.clone();
         self.view.table_name = snapshot.table_name;
         self.view.column = snapshot.column;
         self.view.row = snapshot.row;
@@ -200,6 +203,9 @@ impl Controller {
                 | Command::HistoryReplay
                 | Command::HistoryClose
                 | Command::ToggleSelection
+                | Command::DeleteSelected
+                | Command::CopySelected
+                | Command::ClearSelection
         ) {
             return;
         }
@@ -453,6 +459,7 @@ impl Controller {
                 (index + names.len() - 1) % names.len()
             };
             self.view.table_name = names[target].clone();
+            self.selected_rows.clear();
             self.view.column = 0;
             self.view.row = 0;
             self.view.row_offset = 0;
@@ -567,6 +574,180 @@ impl Controller {
             Command::ToggleSelection,
             Some(format!("{} rows selected", self.selected_rows.len())),
         );
+        Ok(())
+    }
+
+    fn clear_selection(&mut self) -> AppResult<()> {
+        self.selected_rows.clear();
+        self.ui.last_command =
+            PreviousCommand::new(Command::ClearSelection, Some("Selection cleared".into()));
+        Ok(())
+    }
+    fn select_sql(&mut self, inputs: Vec<String>) -> AppResult<()> {
+        let condition = inputs
+            .first()
+            .ok_or_else(|| app_error_other!("Enter a SQL condition"))?;
+        let table = self.view.table_name.replace('"', "\"\"");
+        let mut stmt = self
+            .database
+            .connection
+            .prepare(&format!("SELECT id FROM \"{table}\" WHERE {condition}"))?;
+        let ids = stmt
+            .query_map([], |row| row.get::<_, i32>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        self.selected_rows.extend(ids);
+        self.ui.last_command = PreviousCommand::new(
+            Command::SelectSql,
+            Some(format!("{} rows selected", self.selected_rows.len())),
+        );
+        Ok(())
+    }
+    fn select_regex(&mut self, inputs: Vec<String>) -> AppResult<()> {
+        let pattern = inputs
+            .first()
+            .ok_or_else(|| app_error_other!("Enter a regex"))?;
+        let regex = regex::Regex::new(pattern)?;
+        let col = self.selected_column()?;
+        let idx = self
+            .database
+            .get_headers(&self.view.table_name)?
+            .iter()
+            .position(|h| h == &col)
+            .ok_or_else(|| app_error_other!("Column not found"))?;
+        let (_, rows) = self
+            .database
+            .get(1_000_000, 0, &self.view.table_name, &self.ordering())?;
+        let mut ids = Vec::new();
+        for row in rows {
+            if row
+                .get(idx)
+                .is_some_and(|v| !v.is_empty() && regex.is_match(&v.to_string()))
+            {
+                if let Some(DataItem::Integer(id)) = row.first() {
+                    ids.push(*id as i32);
+                }
+            }
+        }
+        self.selected_rows.extend(ids);
+        self.ui.last_command = PreviousCommand::new(
+            Command::SelectRegex,
+            Some(format!("{} rows selected", self.selected_rows.len())),
+        );
+        Ok(())
+    }
+    fn delete_selected(&mut self) -> AppResult<()> {
+        if self.selected_rows.is_empty() {
+            return Err(app_error_other!("No rows selected"));
+        }
+        let table = self.view.table_name.clone();
+        let headers = self.database.get_headers(&table)?;
+        let (_, all) = self.database.get(1_000_000, 0, &table, "")?;
+        let rows = all
+            .into_iter()
+            .filter(|r| {
+                r.first()
+                    .and_then(|x| x.to_string().parse::<i32>().ok())
+                    .is_some_and(|id| self.selected_rows.contains(&id))
+            })
+            .collect::<Vec<_>>();
+        let before = self.view_snapshot();
+        for row in &rows {
+            let id = row[0].to_string();
+            self.database.execute_batch(&format!(
+                "DELETE FROM \"{}\" WHERE id={id};",
+                table.replace('"', "\"\"")
+            ))?;
+        }
+        self.record_history(
+            UndoRecord::DeletedRows {
+                table,
+                headers,
+                rows,
+                is_deleted: true,
+            },
+            before,
+        );
+        self.get_headers_and_rows(100)?;
+        self.ui.last_command = PreviousCommand::new(
+            Command::DeleteSelected,
+            Some("Deleted selected rows".into()),
+        );
+        Ok(())
+    }
+    fn copy_selected(&mut self) -> AppResult<()> {
+        if self.selected_rows.is_empty() {
+            return Err(app_error_other!("No rows selected"));
+        }
+        let source = self.view.table_name.clone();
+        let mut target = format!("{source}_selected");
+        let names = self.database.get_table_names()?;
+        let base = target.clone();
+        let mut n = 2;
+        while names.contains(&target) {
+            target = format!("{base}_{n}");
+            n += 1;
+        }
+        let (_, rows) = self.database.get(1_000_000, 0, &source, &self.ordering())?;
+        let ids = rows
+            .into_iter()
+            .filter_map(|r| {
+                let id = r.first()?.to_string().parse::<i32>().ok()?;
+                self.selected_rows.contains(&id).then_some(id)
+            })
+            .collect::<Vec<_>>();
+        let src = source.replace('"', "\"\"");
+        let dst = target.replace('"', "\"\"");
+        let headers = self.database.get_headers(&source)?;
+        let mut stmt = self
+            .database
+            .connection
+            .prepare(&format!("PRAGMA table_info(\"{src}\")"))?;
+        let types = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        let declarations = types
+            .iter()
+            .filter(|(h, _)| h != "id")
+            .map(|(h, t)| format!("\"{}\" {}", h.replace('"', "\"\""), t))
+            .collect::<Vec<_>>();
+        let mut defs = vec!["\"id\" INTEGER PRIMARY KEY".to_string()];
+        defs.extend(declarations);
+        self.database
+            .execute_batch(&format!("CREATE TABLE \"{dst}\" ({});", defs.join(",")))?;
+        let cols = headers
+            .iter()
+            .filter(|h| *h != "id")
+            .map(|h| format!("\"{}\"", h.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(",");
+        for id in ids {
+            if cols.is_empty() {
+                self.database
+                    .execute_batch(&format!("INSERT INTO \"{dst}\" DEFAULT VALUES;"))?;
+            } else {
+                self.database.execute_batch(&format!(
+                    "INSERT INTO \"{dst}\" ({cols}) SELECT {cols} FROM \"{src}\" WHERE id={id};"
+                ))?;
+            }
+        }
+        let hidden = self.database.internal_table_name()?;
+        let before = self.view_snapshot();
+        self.view.table_name = target.clone();
+        self.selected_rows.clear();
+        self.view.row = 0;
+        self.view.row_offset = 0;
+        self.view.column = 0;
+        self.record_history(
+            UndoRecord::Visibility {
+                table: None,
+                visible_name: target,
+                hidden_name: hidden,
+                is_visible: true,
+            },
+            before,
+        );
+        self.get_headers_and_rows(100)?;
         Ok(())
     }
 
@@ -695,8 +876,11 @@ impl Controller {
 
     fn submit_message(&mut self) {
         if let Some(queued_command) = &mut self.ui.queued_command {
-            if queued_command.command != Command::RegexTransform || queued_command.inputs.len() == 1
-            {
+            let needs_transform_template = queued_command.command == Command::RegexTransform
+                && queued_command.inputs.is_empty()
+                && regex::Regex::new(&self.ui.input)
+                    .is_ok_and(|regex| regex.capture_names().len() > 1);
+            if !needs_transform_template {
                 self.ui
                     .input_mode_state_machine
                     .transition(input::Event::FinishEditing)
@@ -840,6 +1024,13 @@ impl Controller {
                                 .transition(input::Event::StartEditing)?;
                             Ok(())
                         }
+                        Command::SelectSql | Command::SelectRegex => {
+                            self.ui.queued_command = Some(QueuedCommand::new(command.clone()));
+                            self.ui
+                                .input_mode_state_machine
+                                .transition(input::Event::StartEditing)?;
+                            Ok(())
+                        }
                         Command::Quit => Ok(()),
                         Command::Copy => self.copy(),
                         Command::IllegalOperation => Ok(()),
@@ -861,6 +1052,9 @@ impl Controller {
                         Command::Summary => self.show_analysis(false),
                         Command::Frequency => self.show_analysis(true),
                         Command::ToggleSelection => self.toggle_selection(),
+                        Command::ClearSelection => self.clear_selection(),
+                        Command::DeleteSelected => self.delete_selected(),
+                        Command::CopySelected => self.copy_selected(),
                         Command::HideColumn => self.hide_selected_column(),
                         Command::ShowColumns => {
                             self.show_all_columns();
@@ -901,6 +1095,8 @@ impl Controller {
                             | Command::RenameTable
                             | Command::Join
                             | Command::BulkEdit
+                            | Command::SelectSql
+                            | Command::SelectRegex
                     );
                     if result.is_ok() && !prompted {
                         self.log_command(command.clone(), Vec::new(), before_command);
@@ -1273,6 +1469,15 @@ impl Controller {
         let old_column = self.selected_column()?;
         self.database
             .rename_column(&self.view.table_name, &old_column, &new_column)?;
+        let layout = self.column_layouts.entry(table.clone()).or_default();
+        for header in &mut layout.order {
+            if header == &old_column {
+                *header = new_column.clone();
+            }
+        }
+        if layout.hidden.remove(&old_column) {
+            layout.hidden.insert(new_column.clone());
+        }
         if self.view.order_column.as_deref() == Some(&old_column) {
             self.view.order_column = Some(new_column.clone());
         }
@@ -1286,6 +1491,7 @@ impl Controller {
             },
             before,
         );
+        self.get_headers_and_rows(100)?;
         Ok(())
     }
 
@@ -1326,6 +1532,8 @@ impl Controller {
                 Command::MathOperation => self.math_operation(inputs),
                 Command::Join => self.join_table(inputs),
                 Command::BulkEdit => self.bulk_edit(inputs),
+                Command::SelectSql => self.select_sql(inputs),
+                Command::SelectRegex => self.select_regex(inputs),
                 // _ => {
                 //     log::error!("Command not implemented: {:?}", queued_command.command);
                 //     Err(AppError::from("Command not implemented"))
@@ -1348,6 +1556,9 @@ impl Controller {
                 | Command::Summary
                 | Command::Frequency
                 | Command::ToggleSelection
+                | Command::DeleteSelected
+                | Command::CopySelected
+                | Command::ClearSelection
                 | Command::HideColumn
                 | Command::ShowColumns
                 | Command::ColumnLeft
@@ -1522,6 +1733,45 @@ mod history_tests {
     }
 
     #[test]
+    fn regex_transform_only_prompts_again_for_capture_templates() {
+        let mut controller = controller();
+        controller
+            .ui
+            .input_mode_state_machine
+            .transition(input::Event::StartEditing)
+            .unwrap();
+        controller.ui.queued_command = Some(QueuedCommand::new(Command::RegexTransform));
+        controller.ui.input = ".+".into();
+        controller.submit_message();
+        assert_eq!(
+            controller.ui.input_mode_state_machine.get_state(),
+            InputMode::Finish
+        );
+
+        controller
+            .ui
+            .input_mode_state_machine
+            .transition(input::Event::Reset)
+            .unwrap();
+        controller
+            .ui
+            .input_mode_state_machine
+            .transition(input::Event::StartEditing)
+            .unwrap();
+        controller.ui.queued_command = Some(QueuedCommand::new(Command::RegexTransform));
+        controller.ui.input = "(.+)".into();
+        controller.submit_message();
+        assert_eq!(
+            controller.ui.input_mode_state_machine.get_state(),
+            InputMode::Editing
+        );
+        assert_eq!(
+            controller.ui.queued_command.as_ref().unwrap().inputs,
+            vec!["(.+)"]
+        );
+    }
+
+    #[test]
     fn editing_the_row_id_is_rejected_without_history() {
         let mut controller = controller();
         controller.view.column = 0;
@@ -1548,6 +1798,19 @@ mod history_tests {
             .contains(&"name".into()));
         controller.redo().unwrap();
         assert!(controller
+            .database
+            .get_headers("t")
+            .unwrap()
+            .contains(&"label".into()));
+    }
+
+    #[test]
+    fn rename_then_delete_uses_the_refreshed_column_name() {
+        let mut controller = controller();
+        controller.rename_column(vec!["label".into()]).unwrap();
+        assert_eq!(controller.selected_column().unwrap(), "label");
+        controller.delete_column().unwrap();
+        assert!(!controller
             .database
             .get_headers("t")
             .unwrap()
@@ -1734,6 +1997,20 @@ mod history_tests {
             .get_headers("t")
             .unwrap()
             .contains(&"name".into()));
+    }
+
+    #[test]
+    fn id_column_cannot_be_deleted() {
+        let mut controller = controller();
+        controller.view.column = 0;
+
+        assert!(controller.delete_column().is_err());
+        assert!(controller
+            .database
+            .get_headers("t")
+            .unwrap()
+            .contains(&"id".into()));
+        assert!(controller.history.undo.is_empty());
     }
 
     #[test]

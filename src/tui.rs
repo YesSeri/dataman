@@ -297,7 +297,8 @@ impl TUI {
         let table_height = rects[0].height;
         let text = vec![Line::from(vec![Span::raw(format!(
             // "last command: {last_command} current header: {a} selected: {b} offset: {offset} "
-            "row: {row}, total rows: {total_rows},  last command: {last_command} {status}, height: {table_height}",
+            "row: {row}, total rows: {total_rows}, selected: {}, last command: {last_command} {status}, height: {table_height}",
+            controller.selected_rows.len(),
         ))])];
         let paragraph = Paragraph::new(text);
 

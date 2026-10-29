@@ -61,6 +61,12 @@ pub(crate) enum UndoRecord {
         is_visible: bool,
     },
     ViewChange,
+    DeletedRows {
+        table: String,
+        headers: Vec<String>,
+        rows: Vec<Vec<DataItem>>,
+        is_deleted: bool,
+    },
 }
 
 #[derive(Debug)]
@@ -233,6 +239,14 @@ impl Database {
                 is_visible,
             } => {
                 let (from, to) = if *is_visible {
+                    // A replayed command can create a new undo record while an older
+                    // redo record still refers to a reserved name. Allocate at toggle
+                    // time as well, so stale records can never collide with a live
+                    // column created since the record was captured.
+                    if let Some(table) = table {
+                        let available_name = self.internal_column_name(table)?;
+                        *hidden_name = available_name;
+                    }
                     (visible_name, hidden_name)
                 } else {
                     (hidden_name, visible_name)
@@ -244,6 +258,49 @@ impl Database {
                 *is_visible = !*is_visible;
             }
             UndoRecord::ViewChange => {}
+            UndoRecord::DeletedRows {
+                table,
+                headers,
+                rows,
+                is_deleted,
+            } => {
+                if *is_deleted {
+                    let columns = headers
+                        .iter()
+                        .map(|h| quote_identifier(h))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    let placeholders = (0..headers.len())
+                        .map(|_| "?")
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    for values in rows {
+                        let sql = format!(
+                            "INSERT INTO {} ({columns}) VALUES ({placeholders})",
+                            quote_identifier(table)
+                        );
+                        let params = values.iter().map(data_item_value).collect::<Vec<_>>();
+                        self.connection
+                            .execute(&sql, rusqlite::params_from_iter(params))?;
+                    }
+                } else {
+                    let ids = rows
+                        .iter()
+                        .filter_map(|r| r.first())
+                        .filter_map(|v| match v {
+                            DataItem::Integer(i) => Some(*i),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>();
+                    for id in ids {
+                        self.connection.execute(
+                            &format!("DELETE FROM {} WHERE id=?", quote_identifier(table)),
+                            [id],
+                        )?;
+                    }
+                }
+                *is_deleted = !*is_deleted;
+            }
         }
         Ok(())
     }
@@ -705,6 +762,11 @@ impl Database {
     }
 
     pub(crate) fn delete_column(&self, table_name: &str, column: &str) -> AppResult<String> {
+        if column == "id" {
+            return Err(AppError::from(
+                "The id column is required and cannot be deleted",
+            ));
+        }
         let hidden = self.internal_column_name(table_name)?;
         self.rename_column(table_name, column, &hidden)?;
         Ok(hidden)
@@ -716,6 +778,11 @@ impl Database {
         column: &str,
         new_column: &str,
     ) -> AppResult<()> {
+        if column == "id" || new_column == "id" {
+            return Err(AppError::from(
+                "The id column is required and cannot be renamed",
+            ));
+        }
         let queries = sql_queries::build::rename_column_query(&table_name, &column, new_column);
         self.execute_batch(&queries)
     }
@@ -879,6 +946,32 @@ mod tests {
             .unwrap();
         let database = Database::new(connection).unwrap();
         assert_eq!(database.get_cell("t", 1, "count").unwrap(), "42");
+    }
+
+    #[test]
+    fn visibility_history_reallocates_a_stale_internal_column_name() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute("CREATE TABLE t (id INTEGER PRIMARY KEY, value TEXT);", [])
+            .unwrap();
+        let database = Database::new(connection).unwrap();
+        database
+            .execute_batch("ALTER TABLE t ADD COLUMN __dataman_undo_column_0 TEXT;")
+            .unwrap();
+        let mut record = UndoRecord::Visibility {
+            table: Some("t".into()),
+            visible_name: "value".into(),
+            hidden_name: "__dataman_undo_column_0".into(),
+            is_visible: true,
+        };
+
+        database.toggle_history_record(&mut record).unwrap();
+        assert!(database
+            .raw_headers("t")
+            .unwrap()
+            .contains(&"__dataman_undo_column_1".into()));
+        database.toggle_history_record(&mut record).unwrap();
+        assert!(database.get_headers("t").unwrap().contains(&"value".into()));
     }
 
     #[test]
