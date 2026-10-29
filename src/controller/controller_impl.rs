@@ -4,7 +4,7 @@ use crate::controller::command::{Command, PreviousCommand};
 use crate::controller::input::{self, InputMode};
 use crate::error::{AppError, AppResult};
 use crate::io::savers;
-use crate::model::database::{Database, JoinKind, UndoRecord, INTERNAL_PREFIX};
+use crate::model::database::{Aggregator, Database, JoinKind, UndoRecord, INTERNAL_PREFIX};
 use crate::model::datarow::{DataItem, DataTable};
 use crate::navigation::Direction;
 use crate::tui::TUI;
@@ -32,6 +32,7 @@ pub struct Controller {
     sheet_order: Vec<String>,
     pub(crate) join_keys: HashMap<String, Vec<String>>,
     table_sources: HashMap<String, Vec<String>>,
+    aggregators: HashMap<String, Vec<(String, Aggregator)>>,
     frequency_sources: HashMap<String, (String, String)>,
     frequency_selection_baselines: HashMap<String, Selection>,
     drilldown_return_sheet: Option<String>,
@@ -69,6 +70,7 @@ struct ViewSnapshot {
     sheet_order: Vec<String>,
     join_keys: HashMap<String, Vec<String>>,
     table_sources: HashMap<String, Vec<String>>,
+    aggregators: HashMap<String, Vec<(String, Aggregator)>>,
 }
 
 #[derive(Debug)]
@@ -149,6 +151,7 @@ impl Controller {
             drilldown_return_sheet: None,
             join_keys: HashMap::new(),
             table_sources: HashMap::new(),
+            aggregators: HashMap::new(),
             sheet_views: HashMap::new(),
             previous_sheet: None,
             page_key: None,
@@ -200,6 +203,7 @@ impl Controller {
             sheet_order: self.sheet_order.clone(),
             join_keys: self.join_keys.clone(),
             table_sources: self.table_sources.clone(),
+            aggregators: self.aggregators.clone(),
         }
     }
 
@@ -210,6 +214,7 @@ impl Controller {
         self.sheet_order = snapshot.sheet_order.clone();
         self.join_keys = snapshot.join_keys.clone();
         self.table_sources = snapshot.table_sources.clone();
+        self.aggregators = snapshot.aggregators.clone();
         self.view.table_name = snapshot.table_name;
         self.view.column = snapshot.column;
         self.view.row = snapshot.row;
@@ -305,6 +310,9 @@ impl Controller {
             Command::ExactSearch => self.exact_search(entry.inputs.clone()),
             Command::Join => self.join_table(entry.inputs.clone()),
             Command::CombineTables => self.combine_selected_tables(entry.inputs.clone()),
+            Command::Group => self.create_grouped_sheet(),
+            Command::Pivot => self.create_pivot_sheet(),
+            Command::ConfigureAggregator => self.configure_aggregator(entry.inputs.clone()),
             Command::Summary => self.show_analysis(false),
             Command::Frequency => self.show_analysis(true),
             Command::BulkEdit => self.bulk_edit(entry.inputs.clone()),
@@ -856,6 +864,100 @@ impl Controller {
         Ok(())
     }
 
+    fn configure_aggregator(&mut self, inputs: Vec<String>) -> AppResult<()> {
+        let column = self.selected_column()?;
+        let label = inputs
+            .first()
+            .map(|value| value.trim().to_ascii_lowercase())
+            .ok_or_else(|| app_error_other!("Choose count, distinct, sum, average, min, or max"))?;
+        let aggregator = match label.as_str() {
+            "count" => Aggregator::Count,
+            "distinct" | "distinct_count" => Aggregator::DistinctCount,
+            "sum" => Aggregator::Sum,
+            "avg" | "average" => Aggregator::Average,
+            "min" => Aggregator::Min,
+            "max" => Aggregator::Max,
+            _ => {
+                return Err(app_error_other!(
+                    "Choose count, distinct, sum, average, min, or max"
+                ))
+            }
+        };
+        let table = self.view.table_name.clone();
+        let columns = self.aggregators.entry(table).or_default();
+        if let Some(existing) = columns.iter_mut().find(|(name, _)| name == &column) {
+            existing.1 = aggregator;
+        } else {
+            columns.push((column.clone(), aggregator));
+        }
+        self.ui.last_command = PreviousCommand::new(
+            Command::ConfigureAggregator,
+            Some(format!("{} configured for {column}", aggregator.name())),
+        );
+        Ok(())
+    }
+
+    fn create_grouped_sheet(&mut self) -> AppResult<()> {
+        let source = self.view.table_name.clone();
+        let keys = self.join_keys.get(&source).cloned().unwrap_or_default();
+        let aggregations = self.aggregators.get(&source).cloned().unwrap_or_default();
+        let before = self.view_snapshot();
+        let result = self.database.grouped_table(&source, &keys, &aggregations)?;
+        self.table_sources
+            .insert(result.clone(), vec![source.clone()]);
+        self.open_created_result(result, source, before, Command::Group)
+    }
+
+    fn create_pivot_sheet(&mut self) -> AppResult<()> {
+        let source = self.view.table_name.clone();
+        let pivot_column = self.selected_column()?;
+        let keys = self.join_keys.get(&source).cloned().unwrap_or_default();
+        if keys.contains(&pivot_column) {
+            return Err(app_error_other!(
+                "The pivot column cannot also be a row key"
+            ));
+        }
+        let aggregations = self.aggregators.get(&source).cloned().unwrap_or_default();
+        let before = self.view_snapshot();
+        let result = self
+            .database
+            .pivot_table(&source, &keys, &pivot_column, &aggregations)?;
+        self.table_sources
+            .insert(result.clone(), vec![source.clone()]);
+        self.open_created_result(result, source, before, Command::Pivot)
+    }
+
+    fn open_created_result(
+        &mut self,
+        result: String,
+        source: String,
+        before: ViewSnapshot,
+        command: Command,
+    ) -> AppResult<()> {
+        let hidden_name = self.database.internal_table_name()?;
+        self.switch_sheet(result.clone())?;
+        self.view.column = 0;
+        self.view.row = 0;
+        self.view.row_offset = 0;
+        self.view.order_column = Some("id".into());
+        self.view.ascending = true;
+        self.record_history(
+            UndoRecord::Visibility {
+                table: None,
+                visible_name: result.clone(),
+                hidden_name,
+                is_visible: true,
+            },
+            before,
+        );
+        self.ui.last_command =
+            PreviousCommand::new(command, Some(format!("Created result from {source}")));
+        if !self.defer_refresh {
+            self.refresh_page(100)?;
+        }
+        Ok(())
+    }
+
     fn toggle_selection(&mut self) -> AppResult<()> {
         if self.view.table_name == "table_of_tables" {
             let name = self.highlighted_table_name()?;
@@ -1336,6 +1438,9 @@ impl Controller {
                     | Command::Undo
                     | Command::Redo
                     | Command::HistoryReplay
+                    | Command::ConfigureAggregator
+                    | Command::Group
+                    | Command::Pivot
             )
         {
             return Err(app_error_other!("Frequency source rows are read-only"));
@@ -1354,6 +1459,7 @@ impl Controller {
             | Command::RenameTable
             | Command::Join
             | Command::CombineTables
+            | Command::ConfigureAggregator
             | Command::BulkEdit => {
                 self.ui.queued_command = Some(QueuedCommand::new(command.clone()));
                 self.ui
@@ -1384,6 +1490,8 @@ impl Controller {
             Command::IntToText => self.int_to_text(),
             Command::DeleteColumn => self.delete_column(),
             Command::ToggleJoinKey => self.toggle_join_key(),
+            Command::Group => self.create_grouped_sheet(),
+            Command::Pivot => self.create_pivot_sheet(),
             Command::DeleteTable => self.delete_table(),
             Command::ToggleMetadataTable => self.toggle_metadata_table(),
             Command::HistoryReplay if self.view.table_name == "table_of_tables" => {
@@ -1447,6 +1555,10 @@ impl Controller {
             Command::CombineTables => {
                 self.ui.last_command.message = Some("Type append, inner, left, or full".into());
             }
+            Command::ConfigureAggregator => {
+                self.ui.last_command.message =
+                    Some("Type count, distinct, sum, average, min, or max".into());
+            }
             _ => {}
         }
 
@@ -1463,6 +1575,7 @@ impl Controller {
                 | Command::RenameTable
                 | Command::Join
                 | Command::CombineTables
+                | Command::ConfigureAggregator
                 | Command::BulkEdit
                 | Command::SelectSql
                 | Command::SelectRegex
@@ -1976,6 +2089,7 @@ impl Controller {
                 Command::MathOperation => self.math_operation(inputs),
                 Command::Join => self.join_table(inputs),
                 Command::CombineTables => self.combine_selected_tables(inputs),
+                Command::ConfigureAggregator => self.configure_aggregator(inputs),
                 Command::BulkEdit => self.bulk_edit(inputs),
                 Command::SelectSql => self.select_sql(inputs),
                 Command::SelectRegex => self.select_regex(inputs),
@@ -2003,6 +2117,8 @@ impl Controller {
                 | Command::Frequency
                 | Command::ToggleSelection
                 | Command::ToggleJoinKey
+                | Command::Group
+                | Command::Pivot
                 | Command::DeleteSelected
                 | Command::CopySelected
                 | Command::ClearSelection
@@ -2369,6 +2485,56 @@ mod history_tests {
             .get_headers(&controller.view.table_name)
             .unwrap()
             .contains(&"rights_value".into()));
+    }
+
+    #[test]
+    fn controller_creates_grouped_and_pivoted_sheets_from_key_and_aggregate_markers() {
+        let mut controller = controller();
+        controller.database.execute_batch("ALTER TABLE t ADD COLUMN customer TEXT; ALTER TABLE t ADD COLUMN month TEXT; ALTER TABLE t ADD COLUMN amount INTEGER; UPDATE t SET customer='A', month=CASE id WHEN 1 THEN 'Jan' ELSE 'Feb' END, amount=CASE id WHEN 1 THEN 10 ELSE 20 END;").unwrap();
+        controller.get_headers_and_rows(10).unwrap();
+        controller.view.column = controller
+            .view
+            .headers
+            .iter()
+            .position(|header| header == "customer")
+            .unwrap();
+        controller.toggle_join_key().unwrap();
+        controller.view.column = controller
+            .view
+            .headers
+            .iter()
+            .position(|header| header == "amount")
+            .unwrap();
+        controller.configure_aggregator(vec!["sum".into()]).unwrap();
+
+        controller.create_grouped_sheet().unwrap();
+        let grouped = controller.view.table_name.clone();
+        let group_row = controller
+            .database
+            .get(10, 0, &grouped, "")
+            .unwrap()
+            .1
+            .remove(0);
+        assert_eq!(group_row[1], DataItem::Text("A".into()));
+        assert_eq!(group_row[2], DataItem::Integer(30));
+
+        controller.switch_sheet("t".into()).unwrap();
+        controller.get_headers_and_rows(10).unwrap();
+        controller.view.column = controller
+            .view
+            .headers
+            .iter()
+            .position(|header| header == "month")
+            .unwrap();
+        controller.create_pivot_sheet().unwrap();
+        let headers = controller
+            .database
+            .get_headers(&controller.view.table_name)
+            .unwrap();
+        assert!(headers.contains(&"sum_amount_Jan".into()));
+        assert!(headers.contains(&"sum_amount_Feb".into()));
+        controller.undo().unwrap();
+        assert_eq!(controller.view.table_name, "t");
     }
 
     #[test]

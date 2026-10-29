@@ -82,6 +82,29 @@ pub(crate) enum JoinKind {
     Full,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Aggregator {
+    Count,
+    DistinctCount,
+    Sum,
+    Average,
+    Min,
+    Max,
+}
+
+impl Aggregator {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Count => "count",
+            Self::DistinctCount => "distinct_count",
+            Self::Sum => "sum",
+            Self::Average => "average",
+            Self::Min => "min",
+            Self::Max => "max",
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Database {
     pub(crate) connection: Connection,
@@ -1233,6 +1256,199 @@ impl Database {
         Ok(result)
     }
 
+    pub(crate) fn grouped_table(
+        &self,
+        table: &str,
+        keys: &[String],
+        aggregations: &[(String, Aggregator)],
+    ) -> AppResult<String> {
+        if keys.is_empty() || aggregations.is_empty() {
+            return Err(AppError::from(
+                "Grouping needs at least one key and one aggregation",
+            ));
+        }
+        let headers = self.get_headers(table)?;
+        if keys.iter().any(|key| key == "id" || !headers.contains(key))
+            || aggregations
+                .iter()
+                .any(|(column, _)| !headers.contains(column))
+        {
+            return Err(AppError::from(
+                "Grouping column does not exist or is reserved",
+            ));
+        }
+        let mut output_names = HashSet::new();
+        let mut select = vec!["ROW_NUMBER() OVER () AS id".to_string()];
+        for key in keys {
+            output_names.insert(key.clone());
+            select.push(quote_identifier(key));
+        }
+        for (column, aggregator) in aggregations {
+            let expression = self.aggregate_expression(table, column, *aggregator)?;
+            let base = format!("{}_{}", aggregator.name(), column);
+            let alias = Self::unique_output_name(base, &mut output_names);
+            select.push(format!("{expression} AS {}", quote_identifier(&alias)));
+        }
+        let group_by = keys
+            .iter()
+            .map(|key| quote_identifier(key))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let result = self.find_unused_table_name(&format!("{table}_grouped"))?;
+        let query = format!(
+            "CREATE TABLE {} AS SELECT {} FROM {} GROUP BY {};",
+            quote_identifier(&result),
+            select.join(", "),
+            quote_identifier(table),
+            group_by
+        );
+        self.execute_batch(&query)?;
+        Ok(result)
+    }
+
+    pub(crate) fn pivot_table(
+        &self,
+        table: &str,
+        row_keys: &[String],
+        pivot_column: &str,
+        aggregations: &[(String, Aggregator)],
+    ) -> AppResult<String> {
+        if row_keys.is_empty() || aggregations.is_empty() {
+            return Err(AppError::from(
+                "Pivot needs at least one row key and one aggregation",
+            ));
+        }
+        let headers = self.get_headers(table)?;
+        if row_keys
+            .iter()
+            .any(|key| key == "id" || !headers.contains(key))
+            || !headers.contains(&pivot_column.to_owned())
+            || aggregations
+                .iter()
+                .any(|(column, _)| !headers.contains(column))
+        {
+            return Err(AppError::from("Pivot column does not exist or is reserved"));
+        }
+        let mut statement = self.connection.prepare(&format!(
+            "SELECT DISTINCT {} FROM {} ORDER BY {}",
+            quote_identifier(pivot_column),
+            quote_identifier(table),
+            quote_identifier(pivot_column)
+        ))?;
+        let categories = statement
+            .query_map([], |row| Ok(DataItem::from(row.get_ref(0)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        if categories.len().saturating_mul(aggregations.len()) > 1_000 {
+            return Err(AppError::from(
+                "Pivot would create more than 1,000 columns; filter the source first",
+            ));
+        }
+        let mut output_names = HashSet::new();
+        let mut select = vec!["ROW_NUMBER() OVER () AS id".to_string()];
+        for key in row_keys {
+            output_names.insert(key.clone());
+            select.push(quote_identifier(key));
+        }
+        for category in &categories {
+            let literal = Self::sql_literal(category);
+            let condition = format!("{} IS {literal}", quote_identifier(pivot_column));
+            for (column, aggregator) in aggregations {
+                let aggregate = self.aggregate_expression_with_condition(
+                    table,
+                    column,
+                    *aggregator,
+                    Some(&condition),
+                )?;
+                let base = format!("{}_{}_{}", aggregator.name(), column, category);
+                let alias = Self::unique_output_name(base, &mut output_names);
+                select.push(format!(
+                    "CASE WHEN SUM(CASE WHEN {condition} THEN 1 ELSE 0 END) = 0 THEN NULL ELSE {aggregate} END AS {}",
+                    quote_identifier(&alias)
+                ));
+            }
+        }
+        let group_by = row_keys
+            .iter()
+            .map(|key| quote_identifier(key))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let result = self.find_unused_table_name(&format!("{table}_pivot"))?;
+        let query = format!(
+            "CREATE TABLE {} AS SELECT {} FROM {} GROUP BY {};",
+            quote_identifier(&result),
+            select.join(", "),
+            quote_identifier(table),
+            group_by
+        );
+        self.execute_batch(&query)?;
+        Ok(result)
+    }
+
+    fn aggregate_expression(
+        &self,
+        table: &str,
+        column: &str,
+        aggregator: Aggregator,
+    ) -> AppResult<String> {
+        self.aggregate_expression_with_condition(table, column, aggregator, None)
+    }
+
+    fn aggregate_expression_with_condition(
+        &self,
+        table: &str,
+        column: &str,
+        aggregator: Aggregator,
+        condition: Option<&str>,
+    ) -> AppResult<String> {
+        let quoted = quote_identifier(column);
+        let declared = self.column_declared_type(table, column)?;
+        let numeric = Self::type_affinity(&declared) == "numeric";
+        if matches!(aggregator, Aggregator::Sum | Aggregator::Average) && !numeric {
+            return Err(AppError::from("Sum and average require a numeric column"));
+        }
+        let value = if numeric {
+            format!("CASE WHEN typeof({quoted}) IN ('integer','real') THEN {quoted} END")
+        } else {
+            quoted.clone()
+        };
+        let value = if let Some(condition) = condition {
+            format!("CASE WHEN {condition} THEN {value} END")
+        } else {
+            value
+        };
+        Ok(match aggregator {
+            Aggregator::Count => format!("COUNT({value})"),
+            Aggregator::DistinctCount => format!("COUNT(DISTINCT {value})"),
+            Aggregator::Sum => format!("SUM({value})"),
+            Aggregator::Average => format!("AVG({value})"),
+            Aggregator::Min => format!("MIN({value})"),
+            Aggregator::Max => format!("MAX({value})"),
+        })
+    }
+
+    fn unique_output_name(base: String, names: &mut HashSet<String>) -> String {
+        let mut candidate = base.clone();
+        let mut suffix = 1;
+        while !names.insert(candidate.clone()) {
+            candidate = format!("{base}_{suffix}");
+            suffix += 1;
+        }
+        candidate
+    }
+
+    fn sql_literal(value: &DataItem) -> String {
+        match value {
+            DataItem::Null => "NULL".into(),
+            DataItem::Integer(value) => value.to_string(),
+            DataItem::Float(value) => value.to_string(),
+            DataItem::Text(value) => format!("'{}'", value.replace('\'', "''")),
+            DataItem::Blob(value) => format!(
+                "X'{}'",
+                value.iter().map(|b| format!("{b:02x}")).collect::<String>()
+            ),
+        }
+    }
+
     fn column_declared_type(&self, table: &str, column: &str) -> AppResult<String> {
         let mut statement = self
             .connection
@@ -1811,6 +2027,76 @@ mod tests {
             .get_table_names()
             .unwrap()
             .contains(&"append".into()));
+    }
+
+    #[test]
+    fn grouping_and_pivot_aggregate_without_coercing_invalid_numeric_values() {
+        let database = setup_database();
+        database.execute_batch("CREATE TABLE sales (id INTEGER PRIMARY KEY, customer TEXT, month TEXT, amount INTEGER); INSERT INTO sales(customer,month,amount) VALUES ('A','Jan',10), ('A','Feb',20), ('A','Jan',5), ('B','Jan','bad'), ('B',NULL,3);").unwrap();
+        let grouped = database
+            .grouped_table(
+                "sales",
+                &["customer".into()],
+                &[("amount".into(), Aggregator::Sum)],
+            )
+            .unwrap();
+        let grouped_rows = database.get(10, 0, &grouped, "").unwrap().1;
+        let customer_a = grouped_rows
+            .iter()
+            .find(|row| row[1] == DataItem::Text("A".into()))
+            .unwrap();
+        assert_eq!(customer_a[2], DataItem::Integer(35));
+
+        let pivot = database
+            .pivot_table(
+                "sales",
+                &["customer".into()],
+                "month",
+                &[("amount".into(), Aggregator::Sum)],
+            )
+            .unwrap();
+        let headers = database.get_headers(&pivot).unwrap();
+        assert!(headers.contains(&"sum_amount_Jan".into()));
+        assert!(headers.contains(&"sum_amount_Feb".into()));
+        let rows = database.get(10, 0, &pivot, "").unwrap().1;
+        let a = rows
+            .iter()
+            .find(|row| row[1] == DataItem::Text("A".into()))
+            .unwrap();
+        let jan = headers
+            .iter()
+            .position(|header| header == "sum_amount_Jan")
+            .unwrap();
+        let feb = headers
+            .iter()
+            .position(|header| header == "sum_amount_Feb")
+            .unwrap();
+        assert_eq!(a[jan], DataItem::Integer(15));
+        assert_eq!(a[feb], DataItem::Integer(20));
+        let b = rows
+            .iter()
+            .find(|row| row[1] == DataItem::Text("B".into()))
+            .unwrap();
+        assert_eq!(b[jan], DataItem::Null);
+    }
+
+    #[test]
+    fn pivot_rejects_more_than_one_thousand_generated_columns_before_creation() {
+        let database = setup_database();
+        database.execute_batch("CREATE TABLE wide (id INTEGER PRIMARY KEY, row_key TEXT, category INTEGER, amount INTEGER); WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x < 1001) INSERT INTO wide(row_key,category,amount) SELECT 'one',x,x FROM n;").unwrap();
+        assert!(database
+            .pivot_table(
+                "wide",
+                &["row_key".into()],
+                "category",
+                &[("amount".into(), Aggregator::Sum)]
+            )
+            .is_err());
+        assert!(!database
+            .get_table_names()
+            .unwrap()
+            .iter()
+            .any(|name| name.starts_with("wide_pivot")));
     }
 
     #[test]

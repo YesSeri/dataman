@@ -65,6 +65,9 @@ pub enum Command {
     Join,
     CombineTables,
     ToggleJoinKey,
+    ConfigureAggregator,
+    Group,
+    Pivot,
     ToggleSelection,
     BulkEdit,
     HideColumn,
@@ -109,6 +112,7 @@ impl Command {
             | Command::Join
             | Command::CombineTables
             | Command::ToggleJoinKey => true,
+            Command::ConfigureAggregator | Command::Group | Command::Pivot => true,
             Command::BulkEdit | Command::ToggleSelection => true,
             Command::HideColumn
             | Command::ShowColumns
@@ -161,6 +165,9 @@ impl Command {
             Command::Join => "Join Tables".to_string(),
             Command::CombineTables => "Combine Selected Tables".to_string(),
             Command::ToggleJoinKey => "Toggle Join Key".to_string(),
+            Command::ConfigureAggregator => "Choose Aggregator".to_string(),
+            Command::Group => "Group Rows".to_string(),
+            Command::Pivot => "Pivot Rows".to_string(),
             Command::ToggleSelection => "Toggle Row Selection".to_string(),
             Command::BulkEdit => "Bulk Edit".to_string(),
             Command::HideColumn => "Hide Column".to_string(),
@@ -214,6 +221,9 @@ impl From<KeyEvent> for Command {
             "join" => Command::Join,
             "combine_tables" => Command::CombineTables,
             "toggle_join_key" => Command::ToggleJoinKey,
+            "configure_aggregator" => Command::ConfigureAggregator,
+            "group" => Command::Group,
+            "pivot" => Command::Pivot,
             "toggle_selection" => Command::ToggleSelection,
             "bulk_edit" => Command::BulkEdit,
             "hide_column" => Command::HideColumn,
@@ -245,6 +255,7 @@ fn normalized_key(key: &KeyEvent) -> String {
         KeyCode::Left => "left".to_owned(),
         KeyCode::Up => "up".to_owned(),
         KeyCode::Down => "down".to_owned(),
+        KeyCode::F(number) => format!("f{number}"),
         KeyCode::Enter => "enter".to_owned(),
         KeyCode::Esc => "esc".to_owned(),
         _ => return String::new(),
@@ -294,6 +305,18 @@ mod keybinding_tests {
         assert_eq!(
             Command::from(KeyEvent::new(KeyCode::Char('!'), KeyModifiers::NONE)),
             Command::ToggleJoinKey
+        );
+        assert_eq!(
+            Command::from(KeyEvent::new(KeyCode::Char('+'), KeyModifiers::NONE)),
+            Command::ConfigureAggregator
+        );
+        assert_eq!(
+            Command::from(KeyEvent::new(KeyCode::F(3), KeyModifiers::NONE)),
+            Command::Group
+        );
+        assert_eq!(
+            Command::from(KeyEvent::new(KeyCode::F(4), KeyModifiers::NONE)),
+            Command::Pivot
         );
         assert_eq!(
             Command::from(KeyEvent::new(KeyCode::Char('z'), KeyModifiers::CONTROL)),

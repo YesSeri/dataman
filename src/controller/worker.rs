@@ -629,6 +629,7 @@ pub(super) fn prompted(command: &Command) -> bool {
             | Command::RenameTable
             | Command::Join
             | Command::CombineTables
+            | Command::ConfigureAggregator
             | Command::BulkEdit
             | Command::SelectSql
             | Command::SelectRegex
