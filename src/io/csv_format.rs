@@ -84,70 +84,43 @@ pub(crate) fn insert_delimited_cancellable(
     cancellation: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
 ) -> AppResult<()> {
     let context = format!("Importing '{}'", path.display());
-    let owns_transaction = connection.is_autocommit();
-    let mut transaction = None;
-    let result = (|| -> AppResult<()> {
-        if cancellation.is_some_and(|token| token.load(std::sync::atomic::Ordering::Relaxed)) {
-            return Err(AppError::Cancelled);
-        }
-        let mut csv = csv::ReaderBuilder::new()
-            .delimiter(delimiter)
-            .from_path(&path)?;
-        let table_name = Database::get_table_name(path)
-            .ok_or(AppError::invalid_input("could not get table name."))?;
-        if owns_transaction {
-            transaction = Some(connection.unchecked_transaction()?);
-        }
-        let query = create_table_query(&mut csv, &table_name)?;
-        connection.execute_batch(&query)?;
-        let columns = get_headers_for_query(&mut csv, &table_name)?;
-        let placeholders = (0..csv.headers()?.len())
-            .map(|_| "?")
-            .collect::<Vec<_>>()
-            .join(",");
-        {
-            let mut insert = connection.prepare(&format!(
-                "INSERT INTO {} ({columns}) VALUES ({placeholders})",
-                quote_identifier(&table_name)
-            ))?;
-            let mut record = StringRecord::new();
-            while csv.read_record(&mut record)? {
-                if cancellation
-                    .is_some_and(|token| token.load(std::sync::atomic::Ordering::Relaxed))
-                {
-                    return Err(AppError::Cancelled);
-                }
-                insert.execute(rusqlite::params_from_iter(record.iter()))?;
+    let result =
+        crate::model::transaction::atomic(connection, cancellation, || -> AppResult<()> {
+            if cancellation.is_some_and(|token| token.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err(AppError::Cancelled);
             }
-        }
-        if cancellation.is_some_and(|token| token.load(std::sync::atomic::Ordering::Relaxed)) {
-            return Err(AppError::Cancelled);
-        }
-        Ok(())
-    })();
-    let result = if let Some(mut transaction) = transaction {
-        if cancellation.is_some() {
-            connection.progress_handler(0, None::<fn() -> bool>);
-        }
-        let result = result.and_then(|()| {
-            connection.execute_batch("COMMIT")?;
+            let mut csv = csv::ReaderBuilder::new()
+                .delimiter(delimiter)
+                .from_path(&path)?;
+            let table_name = Database::get_table_name(path)
+                .ok_or(AppError::invalid_input("could not get table name."))?;
+            let query = create_table_query(&mut csv, &table_name)?;
+            connection.execute_batch(&query)?;
+            let columns = get_headers_for_query(&mut csv, &table_name)?;
+            let placeholders = (0..csv.headers()?.len())
+                .map(|_| "?")
+                .collect::<Vec<_>>()
+                .join(",");
+            {
+                let mut insert = connection.prepare(&format!(
+                    "INSERT INTO {} ({columns}) VALUES ({placeholders})",
+                    quote_identifier(&table_name)
+                ))?;
+                let mut record = StringRecord::new();
+                while csv.read_record(&mut record)? {
+                    if cancellation
+                        .is_some_and(|token| token.load(std::sync::atomic::Ordering::Relaxed))
+                    {
+                        return Err(AppError::Cancelled);
+                    }
+                    insert.execute(rusqlite::params_from_iter(record.iter()))?;
+                }
+            }
+            if cancellation.is_some_and(|token| token.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err(AppError::Cancelled);
+            }
             Ok(())
         });
-        let result = match result {
-            Err(error) if !connection.is_autocommit() => crate::error::finish(
-                Err(error),
-                connection.execute_batch("ROLLBACK").map_err(AppError::from),
-            ),
-            result => result,
-        };
-        transaction.set_drop_behavior(rusqlite::DropBehavior::Ignore);
-        if let Some(token) = cancellation {
-            Database::install_cancellation(connection, token.clone());
-        }
-        result
-    } else {
-        result
-    };
     result.map_err(|error| {
         error
             .normalize_cancelled(

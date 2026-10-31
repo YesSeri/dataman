@@ -1,6 +1,5 @@
 use super::selection::Selection;
 use crate::controller::command::{Command, PreviousCommand};
-use crate::controller::input;
 use crate::error::{AppError, AppResult};
 use crate::io::savers;
 use crate::model::database::{Aggregator, Database, JoinKind, UndoRecord, INTERNAL_PREFIX};
@@ -15,10 +14,60 @@ use std::{
     path::PathBuf,
 };
 
-use super::command::QueuedCommand;
-use super::input::StateMachine;
-
 const HISTORY_LIMIT: usize = 100;
+
+#[derive(Debug)]
+struct PreparedCommand {
+    action: PreparedAction,
+    command: Command,
+    inputs: Vec<String>,
+}
+impl PreparedCommand {
+    fn new(command: Command, inputs: Vec<String>, controller: &Controller) -> AppResult<Self> {
+        command.validate_inputs(&inputs)?;
+        let action = match command {
+            Command::HistoryReplay if controller.view.table_name == "table_of_tables" => {
+                PreparedAction::OpenSheet
+            }
+            Command::HistoryReplay
+                if controller
+                    .sheets
+                    .get(&controller.view.table_name)
+                    .is_some_and(|sheet| sheet.metadata.frequency.is_some()) =>
+            {
+                PreparedAction::DrillFrequency
+            }
+            Command::HistoryClose | Command::PreviousSheet
+                if controller.drilldown_return_sheet.is_some() =>
+            {
+                PreparedAction::LeaveFrequency
+            }
+            Command::HistoryClose if controller.view.table_name == "table_of_tables" => {
+                PreparedAction::PreviousSheet
+            }
+            _ => PreparedAction::Run,
+        };
+        Ok(Self {
+            action,
+            command,
+            inputs,
+        })
+    }
+}
+#[derive(Debug)]
+enum PreparedAction {
+    Run,
+    OpenSheet,
+    DrillFrequency,
+    LeaveFrequency,
+    PreviousSheet,
+}
+
+#[derive(Debug, PartialEq)]
+enum ExecutionMode {
+    Normal,
+    Replay,
+}
 
 #[derive(Debug, Clone)]
 enum DerivedSpec {
@@ -54,28 +103,43 @@ enum DerivedSpec {
 #[derive(Debug)]
 pub struct Controller {
     pub(crate) database: Database,
-    pub(crate) ui: UiState,
+    sheet_list_revision: Option<u64>,
     pub(crate) view: ViewState,
     history: History,
     pub(crate) selected_rows: Selection,
     pub(crate) selected_sheets: HashSet<String>,
-    column_layouts: HashMap<String, ColumnLayout>,
+    sheets: HashMap<String, SheetState>,
     sheet_order: Vec<String>,
-    pub(crate) join_keys: HashMap<String, Vec<String>>,
-    table_sources: HashMap<String, Vec<String>>,
-    aggregators: HashMap<String, Vec<(String, Aggregator)>>,
-    derived_specs: HashMap<String, DerivedSpec>,
-    stale_derived: HashSet<String>,
-    frequency_sources: HashMap<String, (String, String)>,
-    frequency_selection_baselines: HashMap<String, Selection>,
     drilldown_return_sheet: Option<String>,
-    sheet_views: HashMap<String, SheetView>,
     previous_sheet: Option<String>,
     page_key: Option<(String, String, u32, u32, u64, ColumnLayout)>,
     source_page: Option<SourcePage>,
     pub(super) table_height: u32,
-    pub(super) defer_refresh: bool,
     pub(crate) command_history: VecDeque<LoggedCommand>,
+}
+
+/// Registry entries survive undoable deletion. History projects metadata only;
+/// saved navigation and other sheets' layouts keep their established lifetime.
+#[derive(Debug, Clone, Default)]
+struct SheetState {
+    present: bool,
+    layout: ColumnLayout,
+    saved_view: Option<SheetView>,
+    metadata: SheetHistory,
+}
+#[derive(Debug, Clone, Default)]
+struct SheetHistory {
+    keys: Vec<String>,
+    aggregators: Vec<(String, Aggregator)>,
+    derived: Option<DerivedSpec>,
+    stale: bool,
+    frequency: Option<(String, String)>,
+    frequency_baseline: Selection,
+}
+impl From<&SheetState> for SheetHistory {
+    fn from(sheet: &SheetState) -> Self {
+        sheet.metadata.clone()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -101,11 +165,9 @@ struct ViewSnapshot {
     selected_rows: Selection,
     selected_sheets: HashSet<String>,
     sheet_order: Vec<String>,
-    join_keys: HashMap<String, Vec<String>>,
-    table_sources: HashMap<String, Vec<String>>,
-    aggregators: HashMap<String, Vec<(String, Aggregator)>>,
-    derived_specs: HashMap<String, DerivedSpec>,
-    stale_derived: HashSet<String>,
+    sheets: HashMap<String, SheetHistory>,
+    previous_sheet: Option<String>,
+    drilldown_return_sheet: Option<String>,
 }
 
 #[derive(Debug)]
@@ -157,16 +219,23 @@ struct SourcePage {
     rows: Arc<Vec<Vec<DataItem>>>,
 }
 
-/// Terminal interaction state kept out of the SQLite-backed data model.
+/// Data produced by execution, independent of terminal interaction.
 #[derive(Debug, Clone)]
-pub(crate) struct UiState {
-    pub(crate) input: String,
-    pub(crate) character_index: usize,
-    pub(crate) last_command: PreviousCommand,
-    pub(crate) queued_command: Option<QueuedCommand>,
-    pub(crate) input_mode_state_machine: StateMachine,
-    pub(crate) history_view: bool,
-    pub(crate) history_cursor: usize,
+pub(super) struct ExecutionOutcome {
+    pub(crate) status: PreviousCommand,
+    pub(crate) close_history: bool,
+    pub(crate) affected_sources: Vec<String>,
+    undo: Option<UndoRecord>,
+}
+impl Default for ExecutionOutcome {
+    fn default() -> Self {
+        Self {
+            status: PreviousCommand::new(Command::None, None),
+            close_history: false,
+            affected_sources: vec![],
+            undo: None,
+        }
+    }
 }
 
 impl Controller {
@@ -176,27 +245,30 @@ impl Controller {
             .map_err(|error| error.context("Discovering startup sheets"))?;
         sheet_order.retain(|name| name != "table_of_tables" && !name.starts_with(INTERNAL_PREFIX));
         let table_name = sheet_order.first().cloned().unwrap_or_default();
+        let revision = database.revision();
         Ok(Self {
             database,
             history: History::default(),
             selected_rows: Selection::default(),
             selected_sheets: HashSet::new(),
-            column_layouts: HashMap::new(),
+            sheets: sheet_order
+                .iter()
+                .map(|name| {
+                    (
+                        name.clone(),
+                        SheetState {
+                            present: true,
+                            ..SheetState::default()
+                        },
+                    )
+                })
+                .collect(),
             sheet_order,
-            frequency_sources: HashMap::new(),
-            frequency_selection_baselines: HashMap::new(),
             drilldown_return_sheet: None,
-            join_keys: HashMap::new(),
-            table_sources: HashMap::new(),
-            aggregators: HashMap::new(),
-            derived_specs: HashMap::new(),
-            stale_derived: HashSet::new(),
-            sheet_views: HashMap::new(),
             previous_sheet: None,
             page_key: None,
             source_page: None,
             table_height: 20,
-            defer_refresh: false,
             command_history: VecDeque::new(),
             view: ViewState {
                 table_name,
@@ -210,23 +282,15 @@ impl Controller {
                 column_indexes: vec![],
                 table_before_metadata: None,
             },
-            ui: UiState {
-                input: String::new(),
-                character_index: 0,
-                last_command: PreviousCommand::new(Command::None, None),
-                queued_command: None,
-                input_mode_state_machine: StateMachine::new(),
-                history_view: false,
-                history_cursor: 0,
-            },
+            sheet_list_revision: Some(revision),
         })
     }
 
     fn view_snapshot(&self) -> ViewSnapshot {
         let layout = self
-            .column_layouts
+            .sheets
             .get(&self.view.table_name)
-            .cloned()
+            .map(|sheet| sheet.layout.clone())
             .unwrap_or_default();
         ViewSnapshot {
             table_name: self.view.table_name.clone(),
@@ -240,11 +304,14 @@ impl Controller {
             selected_rows: self.selected_rows.clone(),
             selected_sheets: self.selected_sheets.clone(),
             sheet_order: self.sheet_order.clone(),
-            join_keys: self.join_keys.clone(),
-            table_sources: self.table_sources.clone(),
-            aggregators: self.aggregators.clone(),
-            derived_specs: self.derived_specs.clone(),
-            stale_derived: self.stale_derived.clone(),
+            sheets: self
+                .sheets
+                .iter()
+                .filter(|(_, sheet)| sheet.present)
+                .map(|(name, sheet)| (name.clone(), SheetHistory::from(sheet)))
+                .collect(),
+            previous_sheet: self.previous_sheet.clone(),
+            drilldown_return_sheet: self.drilldown_return_sheet.clone(),
         }
     }
 
@@ -253,11 +320,14 @@ impl Controller {
         self.selected_rows = snapshot.selected_rows.clone();
         self.selected_sheets = snapshot.selected_sheets.clone();
         self.sheet_order = snapshot.sheet_order.clone();
-        self.join_keys = snapshot.join_keys.clone();
-        self.table_sources = snapshot.table_sources.clone();
-        self.aggregators = snapshot.aggregators.clone();
-        self.derived_specs = snapshot.derived_specs.clone();
-        self.stale_derived = snapshot.stale_derived.clone();
+        self.previous_sheet = snapshot.previous_sheet.clone();
+        self.drilldown_return_sheet = snapshot.drilldown_return_sheet.clone();
+        for sheet in self.sheets.values_mut() {
+            sheet.metadata = SheetHistory::default();
+        }
+        for (name, metadata) in snapshot.sheets {
+            self.sheets.entry(name).or_default().metadata = metadata;
+        }
         self.view.table_name = snapshot.table_name;
         self.view.column = snapshot.column;
         self.view.row = snapshot.row;
@@ -265,11 +335,13 @@ impl Controller {
         self.view.order_column = snapshot.order_column;
         self.view.ascending = snapshot.ascending;
         self.view.table_before_metadata = snapshot.table_before_metadata;
-        self.column_layouts
-            .insert(self.view.table_name.clone(), layout);
+        self.sheets
+            .entry(self.view.table_name.clone())
+            .or_default()
+            .layout = layout;
     }
 
-    fn record_history(&mut self, record: UndoRecord, before: ViewSnapshot) {
+    fn commit_history(&mut self, record: UndoRecord, before: ViewSnapshot) {
         for entry in self.history.redo.drain(..) {
             if let Err(err) = self.database.discard_hidden_record(&entry.record) {
                 log::warn!("Could not discard redo history artifact: {err}");
@@ -288,6 +360,7 @@ impl Controller {
                 }
             }
         }
+        self.prune_registry();
     }
 
     fn log_command(&mut self, command: Command, inputs: Vec<String>, snapshot: ViewSnapshot) {
@@ -326,63 +399,29 @@ impl Controller {
         while self.command_history.len() > HISTORY_LIMIT {
             self.command_history.pop_front();
         }
-        self.ui.history_cursor = self.command_history.len().saturating_sub(1);
     }
 
-    fn replay_history(&mut self) -> AppResult<()> {
+    fn replay_history(&mut self, index: usize) -> AppResult<ExecutionOutcome> {
+        if self.drilldown_return_sheet.is_some() {
+            return Err(AppError::invalid_input(
+                "Frequency source rows are read-only",
+            ));
+        }
         let entry = self
             .command_history
-            .get(self.ui.history_cursor)
+            .get(index)
             .cloned()
             .ok_or_else(|| AppError::invalid_input("No command selected"))?;
         self.restore_view(entry.snapshot.clone());
         self.selected_rows = entry.selected_rows.clone();
         self.refresh_page(100)?;
-        let result = match entry.command {
-            Command::Copy => self.copy(),
-            Command::Sort => self.sort(),
-            Command::TextToInt => self.text_to_int(),
-            Command::IntToText => self.int_to_text(),
-            Command::DeleteColumn => self.delete_column(),
-            Command::DeleteTable => self.delete_table(),
-            Command::RenameColumn => self.rename_column(entry.inputs.clone()),
-            Command::RenameTable => self.rename_table(entry.inputs.clone()),
-            Command::Edit => self.edit_cell(entry.inputs.clone()),
-            Command::RegexTransform => self.regex_transform(entry.inputs.clone()),
-            Command::RegexFilter => self.regex_filter(entry.inputs.clone()),
-            Command::MathOperation => self.math_operation(entry.inputs.clone()),
-            Command::ExactSearch => self.exact_search(entry.inputs.clone()),
-            Command::Join => self.join_table(entry.inputs.clone()),
-            Command::CombineTables => self.combine_selected_tables(entry.inputs.clone()),
-            Command::Group => self.create_grouped_sheet(),
-            Command::Pivot => self.create_pivot_sheet(),
-            Command::RefreshDerived => self.refresh_derived_sheet(),
-            Command::ConfigureAggregator => self.configure_aggregator(entry.inputs.clone()),
-            Command::Summary => self.show_analysis(false),
-            Command::Frequency => self.show_analysis(true),
-            Command::BulkEdit => self.bulk_edit(entry.inputs.clone()),
-            Command::HideColumn => self.hide_selected_column(),
-            Command::ShowColumns => {
-                self.show_all_columns();
-                Ok(())
-            }
-            Command::ColumnLeft => self.move_column(true),
-            Command::ColumnRight => self.move_column(false),
-            _ => Err(AppError::invalid_input("This command cannot be replayed")),
-        };
-        match result {
-            Ok(()) => {
-                self.ui.history_view = false;
-                self.ui.last_command =
-                    PreviousCommand::new(entry.command, Some("Replayed command".into()));
-                Ok(())
-            }
-            Err(err) => {
-                self.ui.last_command =
-                    PreviousCommand::new(Command::IllegalOperation, Some(err.to_string()));
-                Err(err)
-            }
-        }
+        let mut outcome = self.execute_prepared(
+            PreparedCommand::new(entry.command, entry.inputs, self)?,
+            ExecutionMode::Replay,
+        )?;
+        outcome.close_history = true;
+        outcome.status.message = Some("Replayed command".into());
+        Ok(outcome)
     }
 
     pub(super) fn clear_history(&mut self) -> AppResult<()> {
@@ -399,55 +438,42 @@ impl Controller {
         result
     }
 
-    fn undo(&mut self) -> AppResult<()> {
+    fn undo(&mut self) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         let Some(mut entry) = self.history.undo.pop_back() else {
-            self.ui.last_command =
-                PreviousCommand::new(Command::Undo, Some("Nothing to undo".into()));
-            return Ok(());
+            outcome.status = PreviousCommand::new(Command::Undo, Some("Nothing to undo".into()));
+            return Ok(outcome);
         };
         if let Err(err) = self.database.toggle_history_record(&mut entry.record) {
             self.history.undo.push_back(entry);
             return Err(err);
         }
+        self.apply_registry_history(&entry.record);
         self.restore_view(entry.before.clone());
-        if self.view.table_name == "table_of_tables" {
-            self.refresh_sheet_list()?;
-        }
         self.history.redo.push_back(entry);
-        self.ui.last_command =
-            PreviousCommand::new(Command::Undo, Some("Undid last command".into()));
-        Ok(())
+        outcome.status = PreviousCommand::new(Command::Undo, Some("Undid last command".into()));
+        Ok(outcome)
     }
 
-    fn redo(&mut self) -> AppResult<()> {
+    fn redo(&mut self) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         let Some(mut entry) = self.history.redo.pop_back() else {
-            self.ui.last_command =
-                PreviousCommand::new(Command::Redo, Some("Nothing to redo".into()));
-            return Ok(());
+            outcome.status = PreviousCommand::new(Command::Redo, Some("Nothing to redo".into()));
+            return Ok(outcome);
         };
         if let Err(err) = self.database.toggle_history_record(&mut entry.record) {
             self.history.redo.push_back(entry);
             return Err(err);
         }
+        self.apply_registry_history(&entry.record);
         self.restore_view(entry.after.clone());
-        if self.view.table_name == "table_of_tables" {
-            self.refresh_sheet_list()?;
-        }
         self.history.undo.push_back(entry);
-        self.ui.last_command = PreviousCommand::new(Command::Redo, Some("Redid command".into()));
-        Ok(())
-    }
-
-    fn dispatch_history_command(&mut self, command: Command) -> AppResult<()> {
-        match command {
-            Command::Undo => self.undo(),
-            Command::Redo => self.redo(),
-            _ => unreachable!("only undo/redo commands are dispatched here"),
-        }
+        outcome.status = PreviousCommand::new(Command::Redo, Some("Redid command".into()));
+        Ok(outcome)
     }
 
     pub(crate) fn ordering(&self) -> String {
-        if self.view.table_name == "table_of_tables" {
+        if self.view.table_name == "table_of_tables" && !self.sheet_order.is_empty() {
             let clauses = self
                 .sheet_order
                 .iter()
@@ -522,9 +548,10 @@ impl Controller {
                 "The id column is pinned and cannot be hidden",
             ));
         }
-        self.column_layouts
+        self.sheets
             .entry(self.view.table_name.clone())
             .or_default()
+            .layout
             .hidden
             .insert(name);
         self.view.column = self.view.column.saturating_sub(1);
@@ -532,9 +559,10 @@ impl Controller {
     }
 
     fn show_all_columns(&mut self) {
-        self.column_layouts
+        self.sheets
             .entry(self.view.table_name.clone())
             .or_default()
+            .layout
             .hidden
             .clear();
     }
@@ -554,10 +582,11 @@ impl Controller {
         if target == 0 || target == position {
             return Ok(());
         }
-        let layout = self
-            .column_layouts
+        let layout = &mut self
+            .sheets
             .entry(self.view.table_name.clone())
-            .or_default();
+            .or_default()
+            .layout;
         let current_index = layout
             .order
             .iter()
@@ -605,7 +634,6 @@ impl Controller {
             self.view.row = 0;
             self.view.row_offset = 0;
         }
-        self.normalize_sort_column()?;
         Ok(())
     }
 
@@ -621,20 +649,21 @@ impl Controller {
             self.drilldown_return_sheet = None;
         }
         let current = self.view.table_name.clone();
-        self.sheet_views.insert(
-            current.clone(),
-            SheetView {
-                column: self.view.column,
-                row: self.view.row,
-                row_offset: self.view.row_offset,
-                order_column: self.view.order_column.clone(),
-                ascending: self.view.ascending,
-                selection: self.selected_rows.clone(),
-            },
-        );
+        self.sheets.entry(current.clone()).or_default().saved_view = Some(SheetView {
+            column: self.view.column,
+            row: self.view.row,
+            row_offset: self.view.row_offset,
+            order_column: self.view.order_column.clone(),
+            ascending: self.view.ascending,
+            selection: self.selected_rows.clone(),
+        });
         self.previous_sheet = Some(current);
         self.view.table_name = target.clone();
-        if let Some(saved) = self.sheet_views.get(&target).cloned() {
+        if let Some(saved) = self
+            .sheets
+            .get(&target)
+            .and_then(|sheet| sheet.saved_view.clone())
+        {
             self.view.column = saved.column;
             self.view.row = saved.row;
             self.view.row_offset = saved.row_offset;
@@ -647,7 +676,6 @@ impl Controller {
             self.view.row_offset = 0;
             self.selected_rows.clear();
         }
-        self.normalize_sort_column()?;
         Ok(())
     }
 
@@ -710,14 +738,58 @@ impl Controller {
         Ok(())
     }
 
+    fn reconcile_registry(&mut self) -> AppResult<()> {
+        let names = self.database.get_table_names()?;
+        for sheet in self.sheets.values_mut() {
+            sheet.present = false;
+        }
+        for name in &names {
+            self.sheets.entry(name.clone()).or_default().present = true;
+        }
+        self.sheet_order.retain(|name| names.contains(name));
+        for name in &names {
+            if name != "table_of_tables" && !self.sheet_order.contains(name) {
+                self.sheet_order.push(name.clone());
+            }
+        }
+        self.selected_sheets.retain(|name| names.contains(name));
+        self.prune_registry();
+        for target in [
+            &mut self.previous_sheet,
+            &mut self.drilldown_return_sheet,
+            &mut self.view.table_before_metadata,
+        ] {
+            if target.as_ref().is_some_and(|name| !names.contains(name)) {
+                *target = None;
+            }
+        }
+        Ok(())
+    }
+
+    fn prune_registry(&mut self) {
+        let retained = self
+            .history
+            .undo
+            .iter()
+            .chain(&self.history.redo)
+            .flat_map(|entry| entry.before.sheets.keys().chain(entry.after.sheets.keys()))
+            .collect::<HashSet<_>>();
+        self.sheets
+            .retain(|name, sheet| sheet.present || retained.contains(name));
+    }
+
     fn refresh_sheet_list(&mut self) -> AppResult<()> {
         self.database.view_metadata_table()?;
-        for (table, sources) in &self.table_sources {
+        for (table, sheet) in &self.sheets {
+            let Some(spec) = &sheet.metadata.derived else {
+                continue;
+            };
+            let sources = Self::derived_sources(spec);
             self.database.connection.execute(
                 "UPDATE table_of_tables SET source_names = ?1, sheet_kind = ?2, stale = ?3 WHERE table_name = ?4",
                 rusqlite::params![
                     sources.join(", "),
-                    match self.derived_specs.get(table) {
+                    match sheet.metadata.derived.as_ref() {
                         Some(DerivedSpec::Describe { .. }) => "describe",
                         Some(DerivedSpec::Frequency { .. }) => "frequency",
                         Some(DerivedSpec::Group { .. }) => "group",
@@ -726,7 +798,7 @@ impl Controller {
                         Some(DerivedSpec::Join { .. }) => "join",
                         None => "table",
                     },
-                    self.stale_derived.contains(table) as i64,
+                    sheet.metadata.stale as i64,
                     table,
                 ],
             )?;
@@ -747,18 +819,23 @@ impl Controller {
     }
 
     fn mark_source_stale(&mut self, source: &str) {
-        let affected = self
-            .derived_specs
-            .iter()
-            .filter(|(_, spec)| Self::derived_sources(spec).contains(&source))
-            .map(|(name, _)| name.clone())
-            .collect::<Vec<_>>();
-        self.stale_derived.extend(affected);
+        for sheet in self.sheets.values_mut() {
+            if sheet
+                .metadata
+                .derived
+                .as_ref()
+                .is_some_and(|spec| Self::derived_sources(spec).contains(&source))
+            {
+                sheet.metadata.stale = true;
+            }
+        }
     }
-
     fn mark_all_derived_stale(&mut self) {
-        self.stale_derived
-            .extend(self.derived_specs.keys().cloned());
+        for sheet in self.sheets.values_mut() {
+            if sheet.metadata.derived.is_some() {
+                sheet.metadata.stale = true;
+            }
+        }
     }
 
     fn command_mutates_source(command: &Command) -> bool {
@@ -792,7 +869,7 @@ impl Controller {
         Ok(())
     }
 
-    fn show_analysis(&mut self, frequency: bool) -> AppResult<()> {
+    fn show_analysis(&mut self, frequency: bool) -> AppResult<ExecutionOutcome> {
         let source = self.view.table_name.clone();
         let spec = if frequency {
             DerivedSpec::Frequency {
@@ -812,10 +889,8 @@ impl Controller {
         )
     }
 
-    fn join_table(&mut self, inputs: Vec<String>) -> AppResult<()> {
-        let target = inputs
-            .first()
-            .ok_or_else(|| AppError::invalid_input("Enter a target as table.column"))?;
+    fn join_table(&mut self, input: &str) -> AppResult<ExecutionOutcome> {
+        let target = input;
         let (right, right_column) = target
             .split_once('.')
             .ok_or_else(|| AppError::invalid_input("Join target must use table.column"))?;
@@ -833,7 +908,8 @@ impl Controller {
         )
     }
 
-    fn toggle_join_key(&mut self) -> AppResult<()> {
+    fn toggle_join_key(&mut self) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         if self.view.table_name == "table_of_tables" {
             return Err(AppError::invalid_input(
                 "Mark join keys in each source table",
@@ -841,24 +917,24 @@ impl Controller {
         }
         let table = self.view.table_name.clone();
         let column = self.selected_column()?;
-        let keys = self.join_keys.entry(table).or_default();
+        let keys = &mut self.sheets.entry(table).or_default().metadata.keys;
         if let Some(index) = keys.iter().position(|key| key == &column) {
             keys.remove(index);
-            self.ui.last_command = PreviousCommand::new(
+            outcome.status = PreviousCommand::new(
                 Command::ToggleJoinKey,
                 Some(format!("Unmarked {column} as a join key")),
             );
         } else {
             keys.push(column.clone());
-            self.ui.last_command = PreviousCommand::new(
+            outcome.status = PreviousCommand::new(
                 Command::ToggleJoinKey,
                 Some(format!("Marked {column} as join key #{}", keys.len())),
             );
         }
-        Ok(())
+        Ok(outcome)
     }
 
-    fn combine_selected_tables(&mut self, inputs: Vec<String>) -> AppResult<()> {
+    fn combine_selected_tables(&mut self, input: &str) -> AppResult<ExecutionOutcome> {
         if self.view.table_name != "table_of_tables" {
             return Err(AppError::invalid_input(
                 "Open the sheet list and select tables first",
@@ -875,10 +951,7 @@ impl Controller {
                 "Select at least two tables in the sheet list",
             ));
         }
-        let action = inputs
-            .first()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .ok_or_else(|| AppError::invalid_input("Choose append, inner, left, or full"))?;
+        let action = input.trim().to_ascii_lowercase();
         let spec = if action == "append" {
             DerivedSpec::Append {
                 sources: tables.clone(),
@@ -889,8 +962,16 @@ impl Controller {
                     "Joins require exactly two selected tables",
                 ));
             }
-            let left_keys = self.join_keys.get(&tables[0]).cloned().unwrap_or_default();
-            let right_keys = self.join_keys.get(&tables[1]).cloned().unwrap_or_default();
+            let left_keys = self
+                .sheets
+                .get(&tables[0])
+                .map(|sheet| sheet.metadata.keys.clone())
+                .unwrap_or_default();
+            let right_keys = self
+                .sheets
+                .get(&tables[1])
+                .map(|sheet| sheet.metadata.keys.clone())
+                .unwrap_or_default();
             if left_keys.is_empty() || left_keys.len() != right_keys.len() {
                 return Err(AppError::invalid_input(
                     "Mark the same number of ordered join keys on both tables",
@@ -916,14 +997,10 @@ impl Controller {
         self.create_derived_sheet(spec, Command::CombineTables)
     }
 
-    fn configure_aggregator(&mut self, inputs: Vec<String>) -> AppResult<()> {
+    fn configure_aggregator(&mut self, input: &str) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         let column = self.selected_column()?;
-        let label = inputs
-            .first()
-            .map(|value| value.trim().to_ascii_lowercase())
-            .ok_or_else(|| {
-                AppError::invalid_input("Choose count, distinct, sum, average, min, or max")
-            })?;
+        let label = input.trim().to_ascii_lowercase();
         let aggregator = match label.as_str() {
             "count" => Aggregator::Count,
             "distinct" | "distinct_count" => Aggregator::DistinctCount,
@@ -938,23 +1015,31 @@ impl Controller {
             }
         };
         let table = self.view.table_name.clone();
-        let columns = self.aggregators.entry(table).or_default();
+        let columns = &mut self.sheets.entry(table).or_default().metadata.aggregators;
         if let Some(existing) = columns.iter_mut().find(|(name, _)| name == &column) {
             existing.1 = aggregator;
         } else {
             columns.push((column.clone(), aggregator));
         }
-        self.ui.last_command = PreviousCommand::new(
+        outcome.status = PreviousCommand::new(
             Command::ConfigureAggregator,
             Some(format!("{} configured for {column}", aggregator.name())),
         );
-        Ok(())
+        Ok(outcome)
     }
 
-    fn create_grouped_sheet(&mut self) -> AppResult<()> {
+    fn create_grouped_sheet(&mut self) -> AppResult<ExecutionOutcome> {
         let source = self.view.table_name.clone();
-        let keys = self.join_keys.get(&source).cloned().unwrap_or_default();
-        let aggregations = self.aggregators.get(&source).cloned().unwrap_or_default();
+        let keys = self
+            .sheets
+            .get(&source)
+            .map(|sheet| sheet.metadata.keys.clone())
+            .unwrap_or_default();
+        let aggregations = self
+            .sheets
+            .get(&source)
+            .map(|sheet| sheet.metadata.aggregators.clone())
+            .unwrap_or_default();
         self.create_derived_sheet(
             DerivedSpec::Group {
                 source,
@@ -965,16 +1050,24 @@ impl Controller {
         )
     }
 
-    fn create_pivot_sheet(&mut self) -> AppResult<()> {
+    fn create_pivot_sheet(&mut self) -> AppResult<ExecutionOutcome> {
         let source = self.view.table_name.clone();
         let pivot_column = self.selected_column()?;
-        let keys = self.join_keys.get(&source).cloned().unwrap_or_default();
+        let keys = self
+            .sheets
+            .get(&source)
+            .map(|sheet| sheet.metadata.keys.clone())
+            .unwrap_or_default();
         if keys.contains(&pivot_column) {
             return Err(AppError::invalid_input(
                 "The pivot column cannot also be a row key",
             ));
         }
-        let aggregations = self.aggregators.get(&source).cloned().unwrap_or_default();
+        let aggregations = self
+            .sheets
+            .get(&source)
+            .map(|sheet| sheet.metadata.aggregators.clone())
+            .unwrap_or_default();
         self.create_derived_sheet(
             DerivedSpec::Pivot {
                 source,
@@ -986,8 +1079,12 @@ impl Controller {
         )
     }
 
-    fn create_derived_sheet(&mut self, spec: DerivedSpec, command: Command) -> AppResult<()> {
-        let before = self.view_snapshot();
+    fn create_derived_sheet(
+        &mut self,
+        spec: DerivedSpec,
+        command: Command,
+    ) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         let (result, membership) = self.build_derived_sheet(&spec).map_err(|error| {
             error.context(format!(
                 "Constructing sheet from '{}'",
@@ -999,15 +1096,15 @@ impl Controller {
             .map(str::to_owned)
             .collect::<Vec<_>>();
         if let Some(membership) = membership {
-            self.frequency_sources
-                .insert(result.clone(), (sources[0].clone(), membership));
-            self.frequency_selection_baselines
-                .insert(result.clone(), self.selected_rows.clone());
+            let sheet = self.sheets.entry(result.clone()).or_default();
+            sheet.metadata.frequency = Some((sources[0].clone(), membership));
+            sheet.metadata.frequency_baseline = self.selected_rows.clone();
         }
         let source = sources.join(", ");
-        self.table_sources.insert(result.clone(), sources);
-        self.derived_specs.insert(result.clone(), spec);
-        self.stale_derived.remove(&result);
+        let sheet = self.sheets.entry(result.clone()).or_default();
+        sheet.present = true;
+        sheet.metadata.derived = Some(spec);
+        sheet.metadata.stale = false;
         if command == Command::CombineTables {
             self.selected_sheets.clear();
         }
@@ -1018,21 +1115,15 @@ impl Controller {
         self.view.row_offset = 0;
         self.view.order_column = Some("id".into());
         self.view.ascending = true;
-        self.record_history(
-            UndoRecord::Visibility {
-                table: None,
-                visible_name: result.clone(),
-                hidden_name,
-                is_visible: true,
-            },
-            before,
-        );
-        self.ui.last_command =
+        outcome.undo = Some(UndoRecord::Visibility {
+            table: None,
+            visible_name: result.clone(),
+            hidden_name,
+            is_visible: true,
+        });
+        outcome.status =
             PreviousCommand::new(command, Some(format!("Created result from {source}")));
-        if !self.defer_refresh {
-            self.refresh_page(100)?;
-        }
-        Ok(())
+        Ok(outcome)
     }
 
     fn build_derived_sheet(&self, spec: &DerivedSpec) -> AppResult<(String, Option<String>)> {
@@ -1075,23 +1166,33 @@ impl Controller {
         })
     }
 
-    fn refresh_derived_sheet(&mut self) -> AppResult<()> {
+    fn refresh_derived_sheet(&mut self) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         let name = self.view.table_name.clone();
-        let Some(spec) = self.derived_specs.get(&name).cloned() else {
+        let Some(spec) = self
+            .sheets
+            .get(&name)
+            .and_then(|sheet| sheet.metadata.derived.clone())
+        else {
             return Err(AppError::invalid_input(
                 "The current sheet has no refreshable source",
             ));
         };
-        if !self.stale_derived.contains(&name) {
-            self.ui.last_command = PreviousCommand::new(
+        if !self
+            .sheets
+            .get(&name)
+            .is_some_and(|sheet| sheet.metadata.stale)
+        {
+            outcome.status = PreviousCommand::new(
                 Command::RefreshDerived,
                 Some("Derived sheet is already up to date".into()),
             );
-            return Ok(());
+            return Ok(outcome);
         }
         let old_membership = self
-            .frequency_sources
+            .sheets
             .get(&name)
+            .and_then(|sheet| sheet.metadata.frequency.as_ref())
             .map(|(_, membership)| membership.clone());
         let new_membership = self.database.atomic(|| {
             let (generated, membership) = self.build_derived_sheet(&spec)?;
@@ -1110,34 +1211,38 @@ impl Controller {
             Ok(membership)
         })?;
         if let Some(membership) = new_membership {
-            if let Some((source, _)) = self.frequency_sources.get(&name).cloned() {
-                self.frequency_sources
-                    .insert(name.clone(), (source, membership));
+            if let Some((source, _)) = self
+                .sheets
+                .get(&name)
+                .and_then(|sheet| sheet.metadata.frequency.clone())
+            {
+                self.sheets
+                    .entry(name.clone())
+                    .or_default()
+                    .metadata
+                    .frequency = Some((source, membership));
             }
         }
-        self.stale_derived.remove(&name);
-        self.ui.last_command = PreviousCommand::new(
+        self.sheets.entry(name.clone()).or_default().metadata.stale = false;
+        outcome.status = PreviousCommand::new(
             Command::RefreshDerived,
             Some("Rebuilt derived sheet from its sources".into()),
         );
-        self.refresh_sheet_list()?;
-        if !self.defer_refresh {
-            self.refresh_page(100)?;
-        }
-        Ok(())
+        Ok(outcome)
     }
 
-    fn toggle_selection(&mut self) -> AppResult<()> {
+    fn toggle_selection(&mut self) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         if self.view.table_name == "table_of_tables" {
             let name = self.highlighted_table_name()?;
             if !self.selected_sheets.insert(name.clone()) {
                 self.selected_sheets.remove(&name);
             }
-            self.ui.last_command = PreviousCommand::new(
+            outcome.status = PreviousCommand::new(
                 Command::ToggleSelection,
                 Some(format!("{} tables selected", self.selected_sheets.len())),
             );
-            return Ok(());
+            return Ok(outcome);
         }
         let id = self
             .view
@@ -1152,38 +1257,42 @@ impl Controller {
             self.selected_rows.remove(&id);
         }
         self.sync_frequency_source_selection()?;
-        self.ui.last_command = PreviousCommand::new(
+        outcome.status = PreviousCommand::new(
             Command::ToggleSelection,
             Some(format!("{} rows selected", self.selected_rows.len())),
         );
-        Ok(())
+        Ok(outcome)
     }
 
-    fn clear_selection(&mut self) -> AppResult<()> {
+    fn clear_selection(&mut self) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         if self.view.table_name == "table_of_tables" {
             self.selected_sheets.clear();
-            self.ui.last_command = PreviousCommand::new(
+            outcome.status = PreviousCommand::new(
                 Command::ClearSelection,
                 Some("Table selection cleared".into()),
             );
-            return Ok(());
+            return Ok(outcome);
         }
         self.selected_rows.clear();
         self.sync_frequency_source_selection()?;
-        self.ui.last_command =
+        outcome.status =
             PreviousCommand::new(Command::ClearSelection, Some("Selection cleared".into()));
-        Ok(())
+        Ok(outcome)
     }
 
     fn sync_frequency_source_selection(&mut self) -> AppResult<()> {
-        let Some((source, membership)) = self.frequency_sources.get(&self.view.table_name).cloned()
+        let Some((source, membership)) = self
+            .sheets
+            .get(&self.view.table_name)
+            .and_then(|sheet| sheet.metadata.frequency.clone())
         else {
             return Ok(());
         };
         let mut selected = self
-            .frequency_selection_baselines
+            .sheets
             .get(&self.view.table_name)
-            .cloned()
+            .map(|sheet| sheet.metadata.frequency_baseline.clone())
             .unwrap_or_default();
         for group_id in &*self.selected_rows {
             selected.extend(
@@ -1191,16 +1300,25 @@ impl Controller {
                     .frequency_group_members(&membership, *group_id)?,
             );
         }
-        if let Some(source_view) = self.sheet_views.get_mut(&source) {
+        if let Some(source_view) = self
+            .sheets
+            .get_mut(&source)
+            .and_then(|sheet| sheet.saved_view.as_mut())
+        {
             source_view.selection = selected;
         }
         Ok(())
     }
 
-    fn drill_into_frequency_group(&mut self) -> AppResult<()> {
+    fn drill_into_frequency_group(&mut self) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         let current = self.view.table_name.clone();
-        let Some((source, membership)) = self.frequency_sources.get(&current).cloned() else {
-            return Ok(());
+        let Some((source, membership)) = self
+            .sheets
+            .get(&current)
+            .and_then(|sheet| sheet.metadata.frequency.clone())
+        else {
+            return Ok(outcome);
         };
         let row = self
             .view
@@ -1223,21 +1341,25 @@ impl Controller {
             .database
             .frequency_group_members(&membership, group_id)?;
         let mut selection = self
-            .frequency_selection_baselines
+            .sheets
             .get(&current)
-            .cloned()
+            .map(|sheet| sheet.metadata.frequency_baseline.clone())
             .unwrap_or_default();
         selection.extend(members);
-        if let Some(source_view) = self.sheet_views.get_mut(&source) {
+        if let Some(source_view) = self
+            .sheets
+            .get_mut(&source)
+            .and_then(|sheet| sheet.saved_view.as_mut())
+        {
             source_view.selection = selection;
         }
         self.switch_sheet(source)?;
         self.drilldown_return_sheet = Some(current);
-        self.ui.last_command = PreviousCommand::new(
+        outcome.status = PreviousCommand::new(
             Command::HistoryReplay,
             Some("Source rows highlighted; Esc returns to frequencies".into()),
         );
-        Ok(())
+        Ok(outcome)
     }
 
     fn leave_frequency_drilldown(&mut self) -> AppResult<()> {
@@ -1247,10 +1369,9 @@ impl Controller {
         self.switch_sheet(target)?;
         Ok(())
     }
-    fn select_sql(&mut self, inputs: Vec<String>) -> AppResult<()> {
-        let condition = inputs
-            .first()
-            .ok_or_else(|| AppError::invalid_input("Enter a SQL condition"))?;
+    fn select_sql(&mut self, input: &str) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
+        let condition = input;
         let table = self.view.table_name.replace('"', "\"\"");
         let mut stmt = self
             .database
@@ -1260,46 +1381,43 @@ impl Controller {
             .query_map([], |row| row.get::<_, i64>(0))?
             .collect::<Result<Vec<_>, _>>()?;
         self.selected_rows.extend(ids);
-        self.ui.last_command = PreviousCommand::new(
+        outcome.status = PreviousCommand::new(
             Command::SelectSql,
             Some(format!("{} rows selected", self.selected_rows.len())),
         );
-        Ok(())
+        Ok(outcome)
     }
-    fn select_regex(&mut self, inputs: Vec<String>) -> AppResult<()> {
-        let pattern = inputs
-            .first()
-            .ok_or_else(|| AppError::invalid_input("Enter a regex"))?;
+    fn select_regex(&mut self, input: &str) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
+        let pattern = input;
         let column = self.selected_column()?;
         let ids = self
             .database
             .select_regex(&self.view.table_name, &column, pattern)?;
         self.selected_rows.extend(ids);
-        self.ui.last_command = PreviousCommand::new(
+        outcome.status = PreviousCommand::new(
             Command::SelectRegex,
             Some(format!("{} rows selected", self.selected_rows.len())),
         );
-        Ok(())
+        Ok(outcome)
     }
-    fn delete_selected(&mut self) -> AppResult<()> {
+    fn delete_selected(&mut self) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         if self.selected_rows.is_empty() {
             return Err(AppError::invalid_input("No rows selected"));
         }
         let table = self.view.table_name.clone();
-        let before = self.view_snapshot();
         let record = self.database.delete_selected(&table, &self.selected_rows)?;
-        self.record_history(record, before);
+        outcome.undo = Some(record);
         self.selected_rows.clear();
-        if !self.defer_refresh {
-            self.refresh_page(100)?;
-        }
-        self.ui.last_command = PreviousCommand::new(
+        outcome.status = PreviousCommand::new(
             Command::DeleteSelected,
             Some("Deleted selected rows".into()),
         );
-        Ok(())
+        Ok(outcome)
     }
-    fn copy_selected(&mut self) -> AppResult<()> {
+    fn copy_selected(&mut self) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         if self.selected_rows.is_empty() {
             return Err(AppError::invalid_input("No rows selected"));
         }
@@ -1315,53 +1433,44 @@ impl Controller {
         self.database
             .copy_selected(&source, &target, &self.ordering(), &self.selected_rows)?;
         let hidden = self.database.internal_table_name()?;
-        let before = self.view_snapshot();
         self.view.table_name = target.clone();
         self.selected_rows.clear();
         self.view.row = 0;
         self.view.row_offset = 0;
         self.view.column = 0;
-        self.record_history(
-            UndoRecord::Visibility {
-                table: None,
-                visible_name: target,
-                hidden_name: hidden,
-                is_visible: true,
-            },
-            before,
-        );
-        if !self.defer_refresh {
-            self.refresh_page(100)?;
-        }
-        Ok(())
+        outcome.undo = Some(UndoRecord::Visibility {
+            table: None,
+            visible_name: target,
+            hidden_name: hidden,
+            is_visible: true,
+        });
+        Ok(outcome)
     }
 
-    fn bulk_edit(&mut self, inputs: Vec<String>) -> AppResult<()> {
+    fn bulk_edit(&mut self, input: &str) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         if self.selected_rows.is_empty() {
             return Err(AppError::invalid_input(
                 "Select rows with Space before bulk editing",
             ));
         }
-        let before_view = self.view_snapshot();
         let table = self.view.table_name.clone();
         let column = self.selected_column()?;
         if column == "id" {
             return Err(AppError::invalid_input("The id column is read-only"));
         }
-        let value = inputs
-            .first()
-            .ok_or_else(|| AppError::invalid_input("No value provided"))?;
+        let value = input;
         let record =
             self.database
                 .bulk_edit_selected(&table, &column, &self.selected_rows, value)?;
-        self.record_history(record, before_view);
-        self.ui.last_command =
+        outcome.undo = Some(record);
+        outcome.status =
             PreviousCommand::new(Command::BulkEdit, Some("Updated selected rows".into()));
-        Ok(())
+        Ok(outcome)
     }
 
-    fn delete_table(&mut self) -> AppResult<()> {
-        let before = self.view_snapshot();
+    fn delete_table(&mut self) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         let from_sheet_list = self.view.table_name == "table_of_tables";
         if from_sheet_list {
             let mut tables = self
@@ -1379,6 +1488,7 @@ impl Controller {
                 ));
             }
             let hidden = self.database.delete_tables(&tables)?;
+            outcome.affected_sources = tables.clone();
             let records = hidden
                 .into_iter()
                 .map(|(visible_name, hidden_name)| UndoRecord::Visibility {
@@ -1389,16 +1499,15 @@ impl Controller {
                 })
                 .collect();
             self.selected_sheets.clear();
-            self.refresh_sheet_list()?;
-            self.record_history(UndoRecord::Group(records), before);
-            self.ui.last_command = PreviousCommand::new(
+            outcome.undo = Some(UndoRecord::Group(records));
+            outcome.status = PreviousCommand::new(
                 Command::DeleteTable,
                 Some(format!(
                     "Deleted {} table(s); Ctrl+Z restores them",
                     tables.len()
                 )),
             );
-            return Ok(());
+            return Ok(outcome);
         }
         let table = self.view.table_name.clone();
         if table == "table_of_tables" {
@@ -1407,28 +1516,33 @@ impl Controller {
             ));
         }
         let hidden_name = self.database.delete_table(&table)?;
-        self.change_table(false)?;
-        self.record_history(
-            UndoRecord::Visibility {
-                table: None,
-                visible_name: table.clone(),
-                hidden_name,
-                is_visible: false,
-            },
-            before,
-        );
-        self.ui.last_command = PreviousCommand::new(
+        self.sheet_order.retain(|name| name != &table);
+        if let Some(target) = self.sheet_order.last().cloned() {
+            self.switch_sheet(target)?;
+        } else {
+            self.view.table_name = "table_of_tables".into();
+            self.view.column = 0;
+            self.view.row = 0;
+            self.view.row_offset = 0;
+        }
+        outcome.undo = Some(UndoRecord::Visibility {
+            table: None,
+            visible_name: table.clone(),
+            hidden_name,
+            is_visible: false,
+        });
+        outcome.status = PreviousCommand::new(
             Command::DeleteTable,
             Some(format!("Deleted {table}; Ctrl+Z restores it")),
         );
-        Ok(())
+        Ok(outcome)
     }
 
     fn highlighted_table_name(&self) -> AppResult<String> {
         if self.view.table_name != "table_of_tables" {
             return Err(AppError::invalid_input("The sheet list is not open"));
         }
-        let row = self.view.row.saturating_sub(self.view.row_offset as usize);
+        let row = self.view.row;
         let display_column = self
             .view
             .headers
@@ -1472,8 +1586,8 @@ impl Controller {
             self.view.row_offset = 0;
             return Ok(());
         }
-        self.refresh_sheet_list()?;
         self.reconcile_sheet_order()?;
+        self.sheet_list_revision = None;
         self.view.table_before_metadata = Some(self.view.table_name.clone());
         self.view.table_name = "table_of_tables".into();
         self.view.column = 0;
@@ -1482,30 +1596,21 @@ impl Controller {
         Ok(())
     }
 
-    pub(crate) fn sql_query(&self, inputs: Vec<String>) -> Result<(), AppError> {
-        let query = inputs
-            .first()
-            .ok_or_else(|| AppError::invalid_input("Command input is required"))?
-            .to_owned();
-        self.database.sql_query(&query)
+    fn sql_query(&self, input: &str) -> AppResult<()> {
+        self.database.sql_query(input)
     }
 
-    pub(super) fn dispatch(&mut self, command: Command, height: u32) -> AppResult<()> {
-        if self.ui.history_view {
-            match command {
-                Command::History | Command::HistoryClose => self.ui.history_view = false,
-                Command::Move(Direction::Up) => {
-                    self.ui.history_cursor = self.ui.history_cursor.saturating_sub(1)
-                }
-                Command::Move(Direction::Down) => {
-                    self.ui.history_cursor = (self.ui.history_cursor + 1)
-                        .min(self.command_history.len().saturating_sub(1))
-                }
-                Command::HistoryReplay => self.replay_history()?,
-                _ => {}
-            }
-            return Ok(());
-        }
+    fn execute_prepared(
+        &mut self,
+        prepared: PreparedCommand,
+        mode: ExecutionMode,
+    ) -> AppResult<ExecutionOutcome> {
+        let PreparedCommand {
+            action,
+            command,
+            inputs,
+        } = prepared;
+
         if self.drilldown_return_sheet.is_some()
             && matches!(
                 &command,
@@ -1538,135 +1643,209 @@ impl Controller {
         let mutation_source = self.view.table_name.clone();
         let revision_before = self.database.revision();
         let before_command = self.view_snapshot();
-        self.ui.last_command = PreviousCommand::new(command.clone(), None);
-        let result = match command {
-            _ if command.needs_input() => {
-                self.ui.queued_command = Some(QueuedCommand::new(command.clone()));
-                self.ui
-                    .input_mode_state_machine
-                    .transition(input::Event::StartEditing)?;
-                Ok(())
+        let logged_inputs = inputs.clone();
+        let input = inputs.first().map(String::as_str).unwrap_or_default();
+        let height = self.table_height;
+        let result = match action {
+            PreparedAction::OpenSheet => self
+                .open_highlighted_table()
+                .map(|()| ExecutionOutcome::default()),
+            PreparedAction::DrillFrequency => self.drill_into_frequency_group(),
+            PreparedAction::LeaveFrequency => self
+                .leave_frequency_drilldown()
+                .map(|()| ExecutionOutcome::default()),
+            PreparedAction::PreviousSheet => {
+                self.previous_sheet().map(|()| ExecutionOutcome::default())
             }
-            Command::Quit => Ok(()),
-            Command::Copy => self.copy(),
-            Command::IllegalOperation => Ok(()),
-            Command::None => Ok(()),
-            Command::Sort => self.sort(),
-            Command::Move(direction) => self.move_cursor(direction, height),
-            Command::NextTable => self.change_table(true),
-            Command::PrevTable => self.change_table(false),
-            Command::PreviousSheet if self.drilldown_return_sheet.is_some() => {
-                self.leave_frequency_drilldown()
-            }
-            Command::PreviousSheet => self.previous_sheet(),
-            Command::TextToInt => self.text_to_int(),
-            Command::IntToText => self.int_to_text(),
-            Command::DeleteColumn => self.delete_column(),
-            Command::ToggleJoinKey => self.toggle_join_key(),
-            Command::Group => self.create_grouped_sheet(),
-            Command::Pivot => self.create_pivot_sheet(),
-            Command::RefreshDerived => self.refresh_derived_sheet(),
-            Command::DeleteTable => self.delete_table(),
-            Command::ToggleMetadataTable => self.toggle_metadata_table(),
-            Command::HistoryReplay if self.view.table_name == "table_of_tables" => {
-                self.open_highlighted_table()
-            }
-            Command::HistoryReplay
-                if self.frequency_sources.contains_key(&self.view.table_name) =>
-            {
-                self.drill_into_frequency_group()
-            }
-            Command::Undo | Command::Redo => self.dispatch_history_command(command.clone()), // Command::Join(_) => todo!(),
-            Command::Summary => self.show_analysis(false),
-            Command::Frequency => self.show_analysis(true),
-            Command::ToggleSelection => self.toggle_selection(),
-            Command::ClearSelection => self.clear_selection(),
-            Command::DeleteSelected if self.view.table_name == "table_of_tables" => {
-                self.delete_table()
-            }
-            Command::DeleteSelected => self.delete_selected(),
-            Command::CopySelected => self.copy_selected(),
-            Command::HideColumn => self.hide_selected_column(),
-            Command::ShowColumns => {
-                self.show_all_columns();
-                Ok(())
-            }
-            Command::ColumnLeft if self.view.table_name == "table_of_tables" => {
-                self.move_sheet_order(true)
-            }
-            Command::ColumnRight if self.view.table_name == "table_of_tables" => {
-                self.move_sheet_order(false)
-            }
-            Command::ColumnLeft => self.move_column(true),
-            Command::ColumnRight => self.move_column(false),
-            Command::History => {
-                self.ui.history_view = true;
-                self.ui.history_cursor = self.command_history.len().saturating_sub(1);
-                Ok(())
-            }
-            Command::HistoryClose if self.drilldown_return_sheet.is_some() => {
-                self.leave_frequency_drilldown()
-            }
-            Command::HistoryClose if self.view.table_name == "table_of_tables" => {
-                self.previous_sheet()
-            }
-            Command::HistoryReplay | Command::HistoryClose => Ok(()),
-            _ => unreachable!("input commands are handled above"),
+            PreparedAction::Run => match command {
+                Command::Quit => Ok(ExecutionOutcome::default()),
+                Command::Copy => self.copy_operation(),
+                Command::IllegalOperation => Ok(ExecutionOutcome::default()),
+                Command::None => Ok(ExecutionOutcome::default()),
+                Command::Sort => self.sort(),
+                Command::Move(direction) => self
+                    .move_cursor(direction, height)
+                    .map(|()| ExecutionOutcome::default()),
+                Command::NextTable => self
+                    .change_table(true)
+                    .map(|()| ExecutionOutcome::default()),
+                Command::PrevTable => self
+                    .change_table(false)
+                    .map(|()| ExecutionOutcome::default()),
+                Command::PreviousSheet => {
+                    self.previous_sheet().map(|()| ExecutionOutcome::default())
+                }
+                Command::TextToInt => self.text_to_int(),
+                Command::IntToText => self.int_to_text(),
+                Command::DeleteColumn => self.delete_column(),
+                Command::ToggleJoinKey => self.toggle_join_key(),
+                Command::Group => self.create_grouped_sheet(),
+                Command::Pivot => self.create_pivot_sheet(),
+                Command::RefreshDerived => self.refresh_derived_sheet(),
+                Command::DeleteTable => self.delete_table(),
+                Command::ToggleMetadataTable => self
+                    .toggle_metadata_table()
+                    .map(|()| ExecutionOutcome::default()),
+                Command::Undo => self.undo(),
+                Command::Redo => self.redo(),
+                Command::Summary => self.show_analysis(false),
+                Command::Frequency => self.show_analysis(true),
+                Command::ToggleSelection => self.toggle_selection(),
+                Command::ClearSelection => self.clear_selection(),
+                Command::DeleteSelected if self.view.table_name == "table_of_tables" => {
+                    self.delete_table()
+                }
+                Command::DeleteSelected => self.delete_selected(),
+                Command::CopySelected => self.copy_selected(),
+                Command::HideColumn => self
+                    .hide_selected_column()
+                    .map(|()| ExecutionOutcome::default()),
+                Command::ShowColumns => {
+                    self.show_all_columns();
+                    Ok(ExecutionOutcome::default())
+                }
+                Command::ColumnLeft if self.view.table_name == "table_of_tables" => self
+                    .move_sheet_order(true)
+                    .map(|()| ExecutionOutcome::default()),
+                Command::ColumnRight if self.view.table_name == "table_of_tables" => self
+                    .move_sheet_order(false)
+                    .map(|()| ExecutionOutcome::default()),
+                Command::ColumnLeft => self.move_column(true).map(|()| ExecutionOutcome::default()),
+                Command::ColumnRight => self
+                    .move_column(false)
+                    .map(|()| ExecutionOutcome::default()),
+                Command::History => Ok(ExecutionOutcome::default()),
+                Command::HistoryReplay | Command::HistoryClose => Ok(ExecutionOutcome::default()),
+                Command::RegexTransform => {
+                    self.regex_transform_operation(input, inputs.get(1).map(String::as_str))
+                }
+                Command::Edit => self.edit_cell(input),
+                Command::SqlQuery => self.sql_query(input).map(|()| ExecutionOutcome::default()),
+                Command::RegexFilter => self.regex_filter_operation(input),
+                Command::RenameColumn => self.rename_column(input),
+                Command::RenameTable => self.rename_table(input),
+                Command::ExactSearch => self.exact_search(input),
+                Command::MathOperation => self.math_operation(input),
+                Command::Join => self.join_table(input),
+                Command::CombineTables => self.combine_selected_tables(input),
+                Command::ConfigureAggregator => self.configure_aggregator(input),
+                Command::BulkEdit => self.bulk_edit(input),
+                Command::SelectSql => self.select_sql(input),
+                Command::SelectRegex => self.select_regex(input),
+                Command::Save => self.save(input).map(|()| ExecutionOutcome::default()),
+            },
         };
-        if result.is_ok() && self.database.revision() != revision_before {
+        let mut outcome = result?;
+        outcome.status.command = command.clone();
+        if self.database.revision() != revision_before {
+            if outcome.affected_sources.is_empty() {
+                outcome.affected_sources.push(mutation_source);
+            }
             if command == Command::SqlQuery {
                 self.mark_all_derived_stale();
             } else if Self::command_mutates_source(&command) {
-                self.mark_source_stale(&mutation_source);
+                for source in &outcome.affected_sources {
+                    self.mark_source_stale(source);
+                }
             }
-            self.refresh_sheet_list().map_err(|error| {
-                error.context("Command completed; sheet list could not be loaded")
-            })?;
         }
-        match command {
-            Command::RenameTable => {
-                let old_table_name = if self.view.table_name == "table_of_tables" {
-                    self.highlighted_table_name()?
-                } else {
-                    self.view.table_name.clone()
-                };
-                self.ui.character_index = old_table_name.len();
-                self.ui.input = old_table_name;
-            }
-
-            Command::RenameColumn => {
-                log::info!("testing 2");
-            }
-            Command::CombineTables => {
-                self.ui.last_command.message = Some("Type append, inner, left, or full".into());
-            }
-            Command::ConfigureAggregator => {
-                self.ui.last_command.message =
-                    Some("Type count, distinct, sum, average, min, or max".into());
-            }
-            _ => {}
+        if let Some(record) = outcome.undo.take() {
+            self.sheets
+                .entry(self.view.table_name.clone())
+                .or_default()
+                .present = true;
+            self.commit_history(record, before_command.clone());
         }
-
-        let prompted = command.needs_input();
-        if result.is_ok() && !prompted {
-            self.log_command(command.clone(), Vec::new(), before_command);
+        if command == Command::SqlQuery {
+            self.clear_history()
+                .map_err(|error| error.context("SQL completed; undo history cleanup failed"))?;
+            outcome.status.message =
+                Some("SQL executed; undo history was cleared (SQL is not undoable)".into());
+        } else if mode == ExecutionMode::Normal {
+            self.log_command(command.clone(), logged_inputs, before_command);
         }
-
-        result
+        if outcome.status.message.is_none() && command.needs_input() {
+            outcome.status.message = Some("Completed".into());
+        }
+        Ok(outcome)
     }
-    /// Execute a command synchronously for programmatic callers. The terminal
-    /// uses the worker protocol instead, so this never runs on its UI thread.
-    pub fn execute(&mut self, command: Command, inputs: Vec<String>) -> AppResult<()> {
-        self.refresh_page(100)?;
-        self.ui.last_command = PreviousCommand::new(command.clone(), None);
-        if command.needs_input() {
-            self.execute_inputs(command, inputs)?;
-        } else {
-            self.dispatch(command, self.table_height)?;
+
+    fn save(&self, input: &str) -> AppResult<()> {
+        let path = PathBuf::from(input);
+        match path.extension().and_then(|ext| ext.to_str()).unwrap_or("") {
+            "csv" => savers::csv(&self.database, &self.view.table_name, &path),
+            "tsv" => savers::tsv(&self.database, &self.view.table_name, &path),
+            "sqlite" | "db" | "sql" | "sqlite3" => savers::sqlite(&self.database, &path),
+            _ => Err(AppError::from("Unsupported file format")),
         }
-        self.refresh_page(100)
-            .map_err(|error| error.context("Command completed; page could not be loaded"))?;
-        Ok(())
+    }
+
+    /// Compatibility facade for callers that do not use the database worker.
+    pub fn execute(&mut self, command: Command, inputs: Vec<String>) -> AppResult<()> {
+        // Resolve the initial cursor against the database once. Later executions
+        // must still run if presentation of a previous committed command failed.
+        if self.source_page.is_none() {
+            self.refresh_page(100)?;
+        }
+        let (execution, snapshot) = self.execute_and_snapshot(command, inputs, None);
+        crate::error::finish(execution.map(|_| ()), snapshot.map(|_| ()))
+    }
+
+    pub(super) fn special_selection(&self) -> bool {
+        self.view.table_name == "table_of_tables"
+            || self
+                .sheets
+                .get(&self.view.table_name)
+                .is_some_and(|sheet| sheet.metadata.frequency.is_some())
+    }
+    pub(super) fn prepare_snapshot(&mut self) -> AppResult<super::worker::DatabaseSnapshot> {
+        if self.sheet_list_revision != Some(self.database.revision()) {
+            self.refresh_sheet_list()?;
+            self.reconcile_registry()?;
+            self.sheet_list_revision = Some(self.database.revision());
+        }
+        self.refresh_page(100)?;
+        super::worker::DatabaseSnapshot::from_controller(self)
+    }
+
+    pub(super) fn execute_and_snapshot(
+        &mut self,
+        command: Command,
+        inputs: Vec<String>,
+        replay_index: Option<usize>,
+    ) -> (
+        AppResult<ExecutionOutcome>,
+        AppResult<super::worker::DatabaseSnapshot>,
+    ) {
+        let execution = self
+            .database
+            .check_cancelled()
+            .and_then(|()| {
+                if let Some(index) = replay_index.filter(|_| command == Command::HistoryReplay) {
+                    self.replay_history(index)
+                } else {
+                    PreparedCommand::new(command, inputs, self)
+                        .and_then(|prepared| self.execute_prepared(prepared, ExecutionMode::Normal))
+                }
+            })
+            .map_err(|error| {
+                error.normalize_cancelled(
+                    self.database
+                        .cancellation
+                        .load(std::sync::atomic::Ordering::Relaxed),
+                )
+            });
+        self.database
+            .cancellation
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        let snapshot = self.prepare_snapshot().map_err(|error| {
+            error.context(if execution.is_ok() {
+                "Command completed; page could not be loaded"
+            } else {
+                "Loading page after failed command"
+            })
+        });
+        (execution, snapshot)
     }
 
     pub fn run(self, tui: TUI) -> AppResult<()> {
@@ -1692,54 +1871,13 @@ impl Controller {
         )
     }
 
-    pub(super) fn execute_inputs(
-        &mut self,
-        command: Command,
-        inputs: Vec<String>,
-    ) -> AppResult<()> {
-        if inputs.is_empty() {
-            return Err(AppError::from("Command input is required"));
-        }
-        let mutation_source = self.view.table_name.clone();
-        let revision_before = self.database.revision();
-        let before_command = self.view_snapshot();
-        self.ui.queued_command = Some(QueuedCommand {
-            command: command.clone(),
-            inputs: inputs.clone(),
-        });
-        let result = self.execute_queued_command();
-        self.ui.queued_command = None;
-        result?;
-        if self.database.revision() != revision_before {
-            if command == Command::SqlQuery {
-                self.mark_all_derived_stale();
-            } else if Self::command_mutates_source(&command) {
-                self.mark_source_stale(&mutation_source);
-            }
-            self.refresh_sheet_list().map_err(|error| {
-                error.context("Command completed; sheet list could not be loaded")
-            })?;
-        }
-        if command == Command::SqlQuery {
-            self.ui.last_command = PreviousCommand::new(
-                command,
-                Some("SQL executed; undo history was cleared (SQL is not undoable)".into()),
-            );
-        } else {
-            self.log_command(command.clone(), inputs, before_command);
-            if command != Command::ExactSearch {
-                self.ui.last_command = PreviousCommand::new(command, Some("Completed".into()));
-            }
-        }
-        Ok(())
-    }
-
     pub(super) fn shutdown(&mut self) -> AppResult<()> {
         self.clear_history()
     }
 
     pub fn get_headers_and_rows(&mut self, limit: u32) -> AppResult<DataTable> {
         self.refresh_page(limit)?;
+        self.database.count_rows(&self.view.table_name)?;
         let rows = self
             .view
             .rows
@@ -1756,11 +1894,12 @@ impl Controller {
     }
 
     pub(super) fn refresh_page(&mut self, limit: u32) -> AppResult<()> {
+        self.normalize_sort_column()?;
         let ordering = self.ordering();
         let layout = self
-            .column_layouts
+            .sheets
             .get(&self.view.table_name)
-            .cloned()
+            .map(|sheet| sheet.layout.clone())
             .unwrap_or_default();
         let key = (
             self.view.table_name.clone(),
@@ -1797,10 +1936,11 @@ impl Controller {
             .source_page
             .as_ref()
             .ok_or_else(|| AppError::from("Page cache is unavailable"))?;
-        let layout = self
-            .column_layouts
+        let layout = &mut self
+            .sheets
             .entry(self.view.table_name.clone())
-            .or_default();
+            .or_default()
+            .layout;
         let positions = page
             .headers
             .iter()
@@ -1857,11 +1997,12 @@ impl Controller {
     }
 
     pub fn regex_filter(&mut self, inputs: Vec<String>) -> AppResult<()> {
-        let before = self.view_snapshot();
-        let pattern = inputs
-            .first()
-            .ok_or_else(|| AppError::invalid_input("Command input is required"))?
-            .to_owned();
+        self.execute(Command::RegexFilter, inputs)
+    }
+
+    fn regex_filter_operation(&mut self, input: &str) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
+        let pattern = input.to_owned();
         let header = self.selected_column()?;
         let filtered_table =
             self.database
@@ -1871,64 +2012,59 @@ impl Controller {
         self.view.column = 0;
         self.view.row = 0;
         self.view.row_offset = 0;
-        self.record_history(
-            UndoRecord::Visibility {
-                table: None,
-                visible_name: filtered_table,
-                hidden_name,
-                is_visible: true,
-            },
-            before,
-        );
-        Ok(())
+        outcome.undo = Some(UndoRecord::Visibility {
+            table: None,
+            visible_name: filtered_table,
+            hidden_name,
+            is_visible: true,
+        });
+        Ok(outcome)
     }
 
     /// The user enters a regex and we will derive a new column from that.
     /// If the user enter a capture group we will ask for a second input that shows how the capture group should be transformed.
     /// If the user doesn't enter a capture group we will just copy the regex match.
     pub fn regex_transform(&mut self, inputs: Vec<String>) -> AppResult<()> {
-        let before = self.view_snapshot();
+        self.execute(Command::RegexTransform, inputs)
+    }
+
+    fn regex_transform_operation(
+        &mut self,
+        input: &str,
+        transformation: Option<&str>,
+    ) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         let table = self.view.table_name.clone();
         let old_headers = self.database.get_headers(&table)?;
-        let pattern = inputs
-            .first()
-            .ok_or_else(|| AppError::invalid_input("Command input is required"))?
-            .to_owned();
+        let pattern = input.to_owned();
         let regex = regex::Regex::new(&pattern)?;
         let contains_capture_pattern = regex.capture_names().len() > 1;
         let header = self.selected_column()?;
 
-        if let Some(transformation) = inputs.get(1) {
+        if let Some(transformation) = transformation {
             if contains_capture_pattern && !transformation.is_empty() {
-                // let transformation = if cfg!(debug_assertions) {
-                //     TUI::get_user_input(r"${1}${2}")?
-                // } else {
-                // TUI::get_user_input(
-                //     r"Enter transformation, e.g. '${first} ${second}' or '${1} ${2}' if un-named",
-                // )?
-                // };
                 self.database.regex_capture_group_transform(
                     &self.view.table_name,
                     &pattern,
                     &header,
                     transformation,
                 )?;
-                self.record_added_column(&table, &old_headers, before)?;
-                return Ok(());
+                outcome.undo = self.record_added_column(&table, &old_headers)?.undo;
+                return Ok(outcome);
             }
         }
         self.database
             .regex_no_capture_group_transform(&self.view.table_name, &pattern, &header)?;
-        self.record_added_column(&table, &old_headers, before)?;
-        Ok(())
+        outcome.undo = self.record_added_column(&table, &old_headers)?.undo;
+        Ok(outcome)
     }
 
     fn record_added_column(
         &mut self,
         table: &str,
         old_headers: &[String],
-        before: ViewSnapshot,
-    ) -> AppResult<()> {
+    ) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         let new_column = self
             .database
             .get_headers(table)?
@@ -1936,34 +2072,32 @@ impl Controller {
             .find(|header| !old_headers.contains(header))
             .ok_or_else(|| AppError::invalid_input("Operation did not create a column"))?;
         let hidden_name = self.database.internal_column_name(table)?;
-        self.record_history(
-            UndoRecord::Visibility {
-                table: Some(table.to_owned()),
-                visible_name: new_column,
-                hidden_name,
-                is_visible: true,
-            },
-            before,
-        );
-        if !self.defer_refresh {
-            self.refresh_page(100)?;
-        }
-        Ok(())
+        outcome.undo = Some(UndoRecord::Visibility {
+            table: Some(table.to_owned()),
+            visible_name: new_column,
+            hidden_name,
+            is_visible: true,
+        });
+        Ok(outcome)
     }
 
     pub fn copy(&mut self) -> AppResult<()> {
-        let before = self.view_snapshot();
+        self.execute(Command::Copy, vec![])
+    }
+
+    fn copy_operation(&mut self) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         let table = self.view.table_name.clone();
         let old_headers = self.database.get_headers(&table)?;
         self.database
             .copy(&self.view.table_name, &self.selected_column()?)?;
-        self.record_added_column(&table, &old_headers, before)?;
-        self.ui.last_command = PreviousCommand::new(Command::Copy, None);
-        Ok(())
+        outcome.undo = self.record_added_column(&table, &old_headers)?.undo;
+        outcome.status = PreviousCommand::new(Command::Copy, None);
+        Ok(outcome)
     }
 
-    pub(crate) fn edit_cell(&mut self, inputs: Vec<String>) -> AppResult<()> {
-        let before_view = self.view_snapshot();
+    fn edit_cell(&mut self, input: &str) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         let header = self.selected_column()?;
         if header == "id" {
             return Err(AppError::invalid_input("The id column is read-only"));
@@ -1979,29 +2113,23 @@ impl Controller {
             .parse::<i64>()
             .map_err(|e| AppError::invalid_input(e.to_string()))?;
         let data = self.database.get_cell_item(&table, id, &header)?;
-        let edit_result = inputs
-            .first()
-            .ok_or_else(|| AppError::invalid_input("Command input is required"))?
-            .to_owned();
+        let edit_result = input.to_owned();
 
         self.database
             .update_cell(&self.view.table_name, header.as_str(), id, &edit_result)?;
-        self.record_history(
-            UndoRecord::CellEdit {
-                table,
-                column: header,
-                id,
-                before: data,
-                after: DataItem::Text(edit_result),
-                is_after: true,
-            },
-            before_view,
-        );
-        Ok(())
+        outcome.undo = Some(UndoRecord::CellEdit {
+            table,
+            column: header,
+            id,
+            before: data,
+            after: DataItem::Text(edit_result),
+            is_after: true,
+        });
+        Ok(outcome)
     }
 
-    pub(crate) fn sort(&mut self) -> AppResult<()> {
-        let before = self.view_snapshot();
+    fn sort(&mut self) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         let header = self.selected_column()?;
         if self.view.order_column.as_deref() == Some(&header) {
             self.view.ascending = !self.view.ascending;
@@ -2011,14 +2139,12 @@ impl Controller {
         }
         self.view.row = 0;
         self.view.row_offset = 0;
-        self.record_history(UndoRecord::ViewChange, before);
-        Ok(())
+        outcome.undo = Some(UndoRecord::ViewChange);
+        Ok(outcome)
     }
-    fn exact_search(&mut self, inputs: Vec<String>) -> AppResult<()> {
-        let pattern = inputs
-            .first()
-            .ok_or_else(|| AppError::invalid_input("Command input is required"))?
-            .to_owned();
+    fn exact_search(&mut self, input: &str) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
+        let pattern = input.to_owned();
         let header = self.selected_column()?;
         let current = self.view.row_offset + self.view.row as u32;
         match self.database.exact_search(
@@ -2032,75 +2158,71 @@ impl Controller {
                 let height = self.table_height.max(1);
                 self.view.row = (position % height) as usize;
                 self.view.row_offset = position - position % height;
-                self.ui.last_command =
+                outcome.status =
                     PreviousCommand::new(Command::ExactSearch, Some("Match found".to_string()));
             }
             None => {
-                self.ui.last_command =
+                outcome.status =
                     PreviousCommand::new(Command::ExactSearch, Some("No match found".to_string()));
             }
         }
-        Ok(())
+        Ok(outcome)
     }
 
-    fn text_to_int(&mut self) -> AppResult<()> {
-        let before = self.view_snapshot();
+    fn text_to_int(&mut self) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         let table = self.view.table_name.clone();
         let old_headers = self.database.get_headers(&table)?;
-        self.ui.last_command = PreviousCommand::new(Command::TextToInt, None);
+        outcome.status = PreviousCommand::new(Command::TextToInt, None);
         self.database
             .text_to_int(&table, &self.selected_column()?)?;
-        self.record_added_column(&table, &old_headers, before)
+        self.record_added_column(&table, &old_headers)
     }
 
-    fn int_to_text(&mut self) -> AppResult<()> {
-        let before = self.view_snapshot();
+    fn int_to_text(&mut self) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         let table = self.view.table_name.clone();
         let old_headers = self.database.get_headers(&table)?;
-        self.ui.last_command = PreviousCommand::new(Command::IntToText, None);
+        outcome.status = PreviousCommand::new(Command::IntToText, None);
         self.database
             .int_to_text(&table, &self.selected_column()?)?;
-        self.record_added_column(&table, &old_headers, before)
+        self.record_added_column(&table, &old_headers)
     }
 
-    fn delete_column(&mut self) -> Result<(), AppError> {
-        let before = self.view_snapshot();
+    fn delete_column(&mut self) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         let table = self.view.table_name.clone();
         let column = self.selected_column()?;
         let hidden_name = self
             .database
             .delete_column(&self.view.table_name, &column)?;
-        if let Some(keys) = self.join_keys.get_mut(&table) {
+        if let Some(keys) = self
+            .sheets
+            .get_mut(&table)
+            .map(|sheet| &mut sheet.metadata.keys)
+        {
             keys.retain(|key| key != &column);
         }
         if self.view.order_column.as_deref() == Some(&column) {
             self.view.order_column = None;
         }
-        let count = self.database.count_headers(&self.view.table_name)? as usize;
-        self.view.column = self.view.column.min(count.saturating_sub(1));
-        self.ui.last_command = PreviousCommand::new(
+        outcome.status = PreviousCommand::new(
             Command::DeleteColumn,
             Some(format!("Deleted column {column}")),
         );
-        self.record_history(
-            UndoRecord::Visibility {
-                table: Some(table),
-                visible_name: column,
-                hidden_name,
-                is_visible: false,
-            },
-            before,
-        );
-        Ok(())
+        outcome.undo = Some(UndoRecord::Visibility {
+            table: Some(table),
+            visible_name: column,
+            hidden_name,
+            is_visible: false,
+        });
+        Ok(outcome)
     }
 
-    fn rename_column(&mut self, inputs: Vec<String>) -> Result<(), AppError> {
-        let before = self.view_snapshot();
+    fn rename_column(&mut self, input: &str) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
         let table = self.view.table_name.clone();
-        let new_column = inputs
-            .first()
-            .ok_or_else(|| AppError::invalid_input("Command input is required"))?
-            .to_owned();
+        let new_column = input.to_owned();
         if new_column.starts_with(INTERNAL_PREFIX) {
             return Err(AppError::invalid_input(
                 "Column names using Dataman's reserved undo prefix are not supported",
@@ -2109,106 +2231,185 @@ impl Controller {
         let old_column = self.selected_column()?;
         self.database
             .rename_column(&self.view.table_name, &old_column, &new_column)?;
-        if let Some(keys) = self.join_keys.get_mut(&table) {
-            for key in keys {
-                if key == &old_column {
-                    *key = new_column.clone();
-                }
-            }
-        }
-        let layout = self.column_layouts.entry(table.clone()).or_default();
-        for header in &mut layout.order {
-            if header == &old_column {
-                *header = new_column.clone();
-            }
-        }
-        if layout.hidden.remove(&old_column) {
-            layout.hidden.insert(new_column.clone());
-        }
+        self.rename_column_references(&table, &old_column, &new_column);
         if self.view.order_column.as_deref() == Some(&old_column) {
             self.view.order_column = Some(new_column.clone());
         }
-        self.ui.last_command = PreviousCommand::new(Command::RenameColumn, None);
-        self.record_history(
-            UndoRecord::RenameColumn {
-                table,
-                before: old_column,
-                after: new_column,
-                is_after: true,
-            },
-            before,
-        );
-        if !self.defer_refresh {
-            self.refresh_page(100)?;
-        }
-        Ok(())
+        outcome.status = PreviousCommand::new(Command::RenameColumn, None);
+        outcome.undo = Some(UndoRecord::RenameColumn {
+            table,
+            before: old_column,
+            after: new_column,
+            is_after: true,
+        });
+        Ok(outcome)
     }
 
-    fn math_operation(&mut self, inputs: Vec<String>) -> AppResult<()> {
-        let before = self.view_snapshot();
+    fn math_operation(&mut self, input: &str) -> AppResult<ExecutionOutcome> {
         let table = self.view.table_name.clone();
         let old_headers = self.database.get_headers(&table)?;
-        self.database.math_operation(&table, inputs)?;
-        self.record_added_column(&table, &old_headers, before)
+        self.database
+            .math_operation(&table, vec![input.to_owned()])?;
+        self.record_added_column(&table, &old_headers)
     }
 
-    fn execute_queued_command(&mut self) -> AppResult<()> {
-        if let Some(queued_command) = self.ui.queued_command.clone() {
-            // TODO: this is not good, but makes it a bit easier to read
-            let inputs = queued_command.inputs;
-            let command = queued_command.command;
-            let result: AppResult<()> = match command {
-                Command::RegexTransform => self.regex_transform(inputs),
-                Command::Edit => self.edit_cell(inputs),
-                // CREATE TABLE data2 AS SELECT firstname FROM data WHERE lastname = 'zenkert';
-                Command::SqlQuery => self.sql_query(inputs),
-                Command::RegexFilter => self.regex_filter(inputs),
-                Command::RenameColumn => self.rename_column(inputs),
-                Command::RenameTable => self.rename_table(inputs),
-                Command::ExactSearch => self.exact_search(inputs),
-                Command::Save => {
-                    let filename = inputs
-                        .first()
-                        .ok_or_else(|| AppError::invalid_input("Command input is required"))?
-                        .as_str();
-                    let path = PathBuf::from(filename);
-                    match path.extension().and_then(|ext| ext.to_str()).unwrap_or("") {
-                        "csv" => savers::csv(&self.database, &self.view.table_name, &path),
-                        "tsv" => savers::tsv(&self.database, &self.view.table_name, &path),
-                        "sqlite" | "db" | "sql" | "sqlite3" => {
-                            savers::sqlite(&self.database, &path)
-                        }
-                        _ => Err(AppError::from("Unsupported file format")),
-                    }
+    pub(super) fn marked_join_keys(&self) -> Vec<String> {
+        self.sheets
+            .get(&self.view.table_name)
+            .map(|sheet| sheet.metadata.keys.clone())
+            .unwrap_or_default()
+    }
+
+    fn apply_registry_history(&mut self, record: &UndoRecord) {
+        match record {
+            UndoRecord::RenameTable {
+                before,
+                after,
+                is_after,
+            } => {
+                if *is_after {
+                    self.rename_sheet_references(before, after);
+                } else {
+                    self.rename_sheet_references(after, before);
                 }
-                Command::MathOperation => self.math_operation(inputs),
-                Command::Join => self.join_table(inputs),
-                Command::CombineTables => self.combine_selected_tables(inputs),
-                Command::ConfigureAggregator => self.configure_aggregator(inputs),
-                Command::BulkEdit => self.bulk_edit(inputs),
-                Command::SelectSql => self.select_sql(inputs),
-                Command::SelectRegex => self.select_regex(inputs),
-                _ => {
-                    return Err(AppError::invalid_input(
-                        "This command does not accept input",
-                    ))
+            }
+            UndoRecord::RenameColumn {
+                table,
+                before,
+                after,
+                is_after,
+            } => {
+                if *is_after {
+                    self.rename_column_references(table, before, after);
+                } else {
+                    self.rename_column_references(table, after, before);
                 }
-            };
-            result?;
-            if command == Command::SqlQuery {
-                self.clear_history()
-                    .map_err(|error| error.context("SQL completed; undo history cleanup failed"))?;
+            }
+            UndoRecord::Group(records) => {
+                for record in records {
+                    self.apply_registry_history(record);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn rename_column_references(&mut self, table: &str, old: &str, new: &str) {
+        fn rewrite(value: &mut String, old: &str, new: &str) {
+            if value == old {
+                *value = new.to_owned();
             }
         }
-        Ok(())
+        for (name, sheet) in &mut self.sheets {
+            if name == table {
+                for column in &mut sheet.layout.order {
+                    rewrite(column, old, new);
+                }
+                if sheet.layout.hidden.remove(old) {
+                    sheet.layout.hidden.insert(new.to_owned());
+                }
+                for key in &mut sheet.metadata.keys {
+                    rewrite(key, old, new);
+                }
+                for (column, _) in &mut sheet.metadata.aggregators {
+                    rewrite(column, old, new);
+                }
+                if let Some(saved) = &mut sheet.saved_view {
+                    if let Some(column) = &mut saved.order_column {
+                        rewrite(column, old, new);
+                    }
+                }
+            }
+            match &mut sheet.metadata.derived {
+                Some(DerivedSpec::Frequency { source, column }) if source == table => {
+                    rewrite(column, old, new)
+                }
+                Some(DerivedSpec::Group {
+                    source,
+                    keys,
+                    aggregations,
+                })
+                | Some(DerivedSpec::Pivot {
+                    source,
+                    keys,
+                    aggregations,
+                    ..
+                }) if source == table => {
+                    for key in keys {
+                        rewrite(key, old, new);
+                    }
+                    for (column, _) in aggregations {
+                        rewrite(column, old, new);
+                    }
+                    if let Some(DerivedSpec::Pivot { column, .. }) = &mut sheet.metadata.derived {
+                        rewrite(column, old, new);
+                    }
+                }
+                Some(DerivedSpec::Join {
+                    left, right, keys, ..
+                }) => {
+                    for (left_key, right_key) in keys {
+                        if left == table {
+                            rewrite(left_key, old, new);
+                        }
+                        if right == table {
+                            rewrite(right_key, old, new);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
-    fn rename_table(&mut self, inputs: Vec<String>) -> Result<(), AppError> {
-        let before = self.view_snapshot();
-        let new_table_name = inputs
-            .first()
-            .ok_or_else(|| AppError::invalid_input("Command input is required"))?
-            .to_owned();
+    fn rename_sheet_references(&mut self, old: &str, new: &str) {
+        if let Some(sheet) = self.sheets.remove(old) {
+            self.sheets.insert(new.to_owned(), sheet);
+        }
+        for name in &mut self.sheet_order {
+            if name == old {
+                *name = new.to_owned();
+            }
+        }
+        if self.selected_sheets.remove(old) {
+            self.selected_sheets.insert(new.to_owned());
+        }
+        for target in [
+            &mut self.previous_sheet,
+            &mut self.drilldown_return_sheet,
+            &mut self.view.table_before_metadata,
+        ] {
+            if target.as_deref() == Some(old) {
+                *target = Some(new.to_owned());
+            }
+        }
+        for sheet in self.sheets.values_mut() {
+            if let Some((source, _)) = &mut sheet.metadata.frequency {
+                if source == old {
+                    *source = new.to_owned();
+                }
+            }
+            if let Some(spec) = &mut sheet.metadata.derived {
+                let sources = match spec {
+                    DerivedSpec::Describe { source }
+                    | DerivedSpec::Frequency { source, .. }
+                    | DerivedSpec::Group { source, .. }
+                    | DerivedSpec::Pivot { source, .. } => vec![source],
+                    DerivedSpec::Append { sources } => sources.iter_mut().collect(),
+                    DerivedSpec::Join { left, right, .. } => vec![left, right],
+                };
+                for source in sources {
+                    if source == old {
+                        *source = new.to_owned();
+                    }
+                }
+            }
+        }
+    }
+
+    fn rename_table(&mut self, input: &str) -> AppResult<ExecutionOutcome> {
+        let mut outcome = ExecutionOutcome::default();
+        let new_table_name = input.to_owned();
         let from_sheet_list = self.view.table_name == "table_of_tables";
         let old_table_name = if from_sheet_list {
             self.highlighted_table_name()?
@@ -2228,56 +2429,22 @@ impl Controller {
         self.database
             .rename_table(&old_table_name, &new_table_name)?;
         let renamed_table_name = new_table_name.clone();
-        if let Some(layout) = self.column_layouts.remove(&old_table_name) {
-            self.column_layouts.insert(new_table_name.clone(), layout);
-        }
-        if let Some(sheet_view) = self.sheet_views.remove(&old_table_name) {
-            self.sheet_views.insert(new_table_name.clone(), sheet_view);
-        }
-        if self.previous_sheet.as_deref() == Some(&old_table_name) {
-            self.previous_sheet = Some(new_table_name.clone());
-        }
-        if let Some(position) = self
-            .sheet_order
-            .iter()
-            .position(|name| name == &old_table_name)
-        {
-            self.sheet_order[position] = new_table_name.clone();
-        }
-        if self.selected_sheets.remove(&old_table_name) {
-            self.selected_sheets.insert(new_table_name.clone());
-        }
-        if let Some(sources) = self.table_sources.remove(&old_table_name) {
-            self.table_sources.insert(new_table_name.clone(), sources);
-        }
-        for sources in self.table_sources.values_mut() {
-            for source in sources {
-                if source == &old_table_name {
-                    *source = new_table_name.clone();
-                }
-            }
-        }
-        if from_sheet_list {
-            self.refresh_sheet_list()?;
-        } else {
+        self.rename_sheet_references(&old_table_name, &new_table_name);
+        if !from_sheet_list {
             self.view.table_name = new_table_name;
         }
-        self.ui.last_command = PreviousCommand::new(Command::RenameTable, None);
-        self.record_history(
-            UndoRecord::RenameTable {
-                before: old_table_name,
-                after: if from_sheet_list {
-                    renamed_table_name
-                } else {
-                    self.view.table_name.clone()
-                },
-                is_after: true,
+        outcome.status = PreviousCommand::new(Command::RenameTable, None);
+        outcome.undo = Some(UndoRecord::RenameTable {
+            before: old_table_name,
+            after: if from_sheet_list {
+                renamed_table_name
+            } else {
+                self.view.table_name.clone()
             },
-            before,
-        );
-        Ok(())
+            is_after: true,
+        });
+        Ok(outcome)
     }
-    // Other methods from the Controller struct
 }
 
 #[cfg(test)]
@@ -2386,15 +2553,19 @@ mod history_tests {
     #[test]
     fn sheet_list_opens_highlighted_table_and_deletion_undo_restores_it() {
         let mut controller = controller();
-        controller.toggle_metadata_table().unwrap();
+        controller
+            .execute(Command::ToggleMetadataTable, vec![])
+            .unwrap();
         controller.refresh_page(20).unwrap();
         assert_eq!(controller.highlighted_table_name().unwrap(), "t");
         controller.open_highlighted_table().unwrap();
         assert_eq!(controller.view.table_name, "t");
 
-        controller.toggle_metadata_table().unwrap();
+        controller
+            .execute(Command::ToggleMetadataTable, vec![])
+            .unwrap();
         controller.refresh_page(20).unwrap();
-        controller.delete_table().unwrap();
+        controller.execute(Command::DeleteTable, vec![]).unwrap();
         assert!(!controller
             .database
             .get_table_names()
@@ -2402,7 +2573,7 @@ mod history_tests {
             .contains(&"t".into()));
         assert_eq!(controller.view.table_name, "table_of_tables");
 
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert!(controller
             .database
             .get_table_names()
@@ -2415,16 +2586,20 @@ mod history_tests {
     #[test]
     fn sheet_list_renames_highlighted_table_and_undoes() {
         let mut controller = controller();
-        controller.toggle_metadata_table().unwrap();
+        controller
+            .execute(Command::ToggleMetadataTable, vec![])
+            .unwrap();
         controller.refresh_page(20).unwrap();
-        controller.rename_table(vec!["renamed".into()]).unwrap();
+        controller
+            .execute(Command::RenameTable, vec!["renamed".into()])
+            .unwrap();
         assert_eq!(controller.view.table_name, "table_of_tables");
         assert!(controller
             .database
             .get_table_names()
             .unwrap()
             .contains(&"renamed".into()));
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert!(controller
             .database
             .get_table_names()
@@ -2441,7 +2616,9 @@ mod history_tests {
             .database
             .execute_batch("CREATE TABLE other (id INTEGER PRIMARY KEY, value TEXT);")
             .unwrap();
-        controller.toggle_metadata_table().unwrap();
+        controller
+            .execute(Command::ToggleMetadataTable, vec![])
+            .unwrap();
         controller.refresh_page(20).unwrap();
         controller.view.row = 0;
         controller.toggle_selection().unwrap();
@@ -2449,16 +2626,16 @@ mod history_tests {
         controller.toggle_selection().unwrap();
         assert_eq!(controller.selected_sheets.len(), 2);
 
-        controller.delete_table().unwrap();
+        controller.execute(Command::DeleteTable, vec![]).unwrap();
         let remaining = controller.database.get_table_names().unwrap();
         assert_eq!(remaining, vec!["table_of_tables"]);
         assert!(controller.selected_sheets.is_empty());
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         let restored = controller.database.get_table_names().unwrap();
         assert!(restored.contains(&"t".into()));
         assert!(restored.contains(&"other".into()));
         assert_eq!(controller.selected_sheets.len(), 2);
-        controller.redo().unwrap();
+        controller.execute(Command::Redo, vec![]).unwrap();
         assert_eq!(
             controller.database.get_table_names().unwrap(),
             vec!["table_of_tables"]
@@ -2472,7 +2649,9 @@ mod history_tests {
             .database
             .execute_batch("CREATE TABLE other (id INTEGER PRIMARY KEY, value TEXT);")
             .unwrap();
-        controller.toggle_metadata_table().unwrap();
+        controller
+            .execute(Command::ToggleMetadataTable, vec![])
+            .unwrap();
         controller.refresh_page(20).unwrap();
         let highlighted = controller.highlighted_table_name().unwrap();
         controller.move_sheet_order(false).unwrap();
@@ -2493,7 +2672,9 @@ mod history_tests {
             .database
             .execute_batch("CREATE TABLE other (id INTEGER PRIMARY KEY, extra TEXT); INSERT INTO other(extra) VALUES ('x'), ('y');")
             .unwrap();
-        controller.toggle_metadata_table().unwrap();
+        controller
+            .execute(Command::ToggleMetadataTable, vec![])
+            .unwrap();
         controller.refresh_page(20).unwrap();
         for name in ["t", "other"] {
             let row = controller
@@ -2506,7 +2687,7 @@ mod history_tests {
             controller.toggle_selection().unwrap();
         }
         controller
-            .combine_selected_tables(vec!["append".into()])
+            .execute(Command::CombineTables, vec!["append".into()])
             .unwrap();
         let result = controller.view.table_name.clone();
         assert_eq!(controller.view.table_name, result);
@@ -2515,7 +2696,9 @@ mod history_tests {
             controller.database.get_headers(&result).unwrap(),
             vec!["id", "name", "extra"]
         );
-        controller.toggle_metadata_table().unwrap();
+        controller
+            .execute(Command::ToggleMetadataTable, vec![])
+            .unwrap();
         let sources: String = controller
             .database
             .connection
@@ -2526,13 +2709,13 @@ mod history_tests {
             )
             .unwrap();
         assert_eq!(sources, "t, other");
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert!(!controller
             .database
             .get_table_names()
             .unwrap()
             .contains(&result));
-        controller.redo().unwrap();
+        controller.execute(Command::Redo, vec![]).unwrap();
         assert!(controller
             .database
             .get_table_names()
@@ -2547,7 +2730,9 @@ mod history_tests {
             .database
             .execute_batch("CREATE TABLE lefts (id INTEGER PRIMARY KEY, key TEXT, value TEXT); INSERT INTO lefts(key,value) VALUES ('x','l1'), ('y','l2'); CREATE TABLE rights (id INTEGER PRIMARY KEY, key TEXT, value TEXT); INSERT INTO rights(key,value) VALUES ('x','r1'), ('z','r2');")
             .unwrap();
-        controller.toggle_metadata_table().unwrap();
+        controller
+            .execute(Command::ToggleMetadataTable, vec![])
+            .unwrap();
         controller.refresh_page(20).unwrap();
         for name in ["lefts", "rights"] {
             let row = controller
@@ -2566,7 +2751,7 @@ mod history_tests {
             controller.refresh_page(20).unwrap();
         }
         controller
-            .combine_selected_tables(vec!["full".into()])
+            .execute(Command::CombineTables, vec!["full".into()])
             .unwrap();
         assert_eq!(
             controller
@@ -2605,9 +2790,11 @@ mod history_tests {
             .iter()
             .position(|header| header == "amount")
             .unwrap();
-        controller.configure_aggregator(vec!["sum".into()]).unwrap();
+        controller
+            .execute(Command::ConfigureAggregator, vec!["sum".into()])
+            .unwrap();
 
-        controller.create_grouped_sheet().unwrap();
+        controller.execute(Command::Group, vec![]).unwrap();
         let grouped = controller.view.table_name.clone();
         let group_row = controller
             .database
@@ -2626,29 +2813,31 @@ mod history_tests {
             .iter()
             .position(|header| header == "month")
             .unwrap();
-        controller.create_pivot_sheet().unwrap();
+        controller.execute(Command::Pivot, vec![]).unwrap();
         let headers = controller
             .database
             .get_headers(&controller.view.table_name)
             .unwrap();
         assert!(headers.contains(&"sum_amount_Jan".into()));
         assert!(headers.contains(&"sum_amount_Feb".into()));
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert_eq!(controller.view.table_name, "t");
     }
 
     #[test]
     fn cell_edit_undoes_and_redoes_previous_typed_value() {
         let mut controller = controller();
-        controller.edit_cell(vec!["changed".into()]).unwrap();
+        controller
+            .execute(Command::Edit, vec!["changed".into()])
+            .unwrap();
         assert_eq!(
             controller.database.get_cell("t", 1, "name").unwrap(),
             "changed"
         );
 
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert_eq!(controller.database.get_cell("t", 1, "name").unwrap(), "abc");
-        controller.redo().unwrap();
+        controller.execute(Command::Redo, vec![]).unwrap();
         assert_eq!(
             controller.database.get_cell("t", 1, "name").unwrap(),
             "changed"
@@ -2659,7 +2848,9 @@ mod history_tests {
     fn bulk_edit_undoes_and_redoes_selected_rows() {
         let mut controller = controller();
         controller.selected_rows.extend([1, 2]);
-        controller.bulk_edit(vec!["same".into()]).unwrap();
+        controller
+            .execute(Command::BulkEdit, vec!["same".into()])
+            .unwrap();
         assert_eq!(
             controller.database.get_cell("t", 1, "name").unwrap(),
             "same"
@@ -2668,10 +2859,10 @@ mod history_tests {
             controller.database.get_cell("t", 2, "name").unwrap(),
             "same"
         );
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert_eq!(controller.database.get_cell("t", 1, "name").unwrap(), "abc");
         assert_eq!(controller.database.get_cell("t", 2, "name").unwrap(), "def");
-        controller.redo().unwrap();
+        controller.execute(Command::Redo, vec![]).unwrap();
         assert_eq!(
             controller.database.get_cell("t", 2, "name").unwrap(),
             "same"
@@ -2703,15 +2894,15 @@ mod history_tests {
     fn logged_command_can_be_replayed_after_undo() {
         let mut controller = controller();
         let before = controller.view_snapshot();
-        controller.copy().unwrap();
+        controller.execute(Command::Copy, vec![]).unwrap();
         controller.log_command(Command::Copy, vec![], before);
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert!(!controller
             .database
             .get_headers("t")
             .unwrap()
             .contains(&"name_copy".into()));
-        controller.replay_history().unwrap();
+        controller.replay_history(0).unwrap();
         assert!(controller
             .database
             .get_headers("t")
@@ -2723,7 +2914,9 @@ mod history_tests {
     fn editing_the_row_id_is_rejected_without_history() {
         let mut controller = controller();
         controller.view.column = 0;
-        assert!(controller.edit_cell(vec!["10".into()]).is_err());
+        assert!(controller
+            .execute(Command::Edit, vec!["10".into()])
+            .is_err());
         assert_eq!(controller.database.count_rows("t").unwrap(), 2);
         assert_eq!(controller.database.get_cell("t", 1, "name").unwrap(), "abc");
         assert!(controller.history.undo.is_empty());
@@ -2732,19 +2925,21 @@ mod history_tests {
     #[test]
     fn rename_column_undoes_and_redoes() {
         let mut controller = controller();
-        controller.rename_column(vec!["label".into()]).unwrap();
+        controller
+            .execute(Command::RenameColumn, vec!["label".into()])
+            .unwrap();
         assert!(controller
             .database
             .get_headers("t")
             .unwrap()
             .contains(&"label".into()));
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert!(controller
             .database
             .get_headers("t")
             .unwrap()
             .contains(&"name".into()));
-        controller.redo().unwrap();
+        controller.execute(Command::Redo, vec![]).unwrap();
         assert!(controller
             .database
             .get_headers("t")
@@ -2755,9 +2950,11 @@ mod history_tests {
     #[test]
     fn rename_then_delete_uses_the_refreshed_column_name() {
         let mut controller = controller();
-        controller.rename_column(vec!["label".into()]).unwrap();
+        controller
+            .execute(Command::RenameColumn, vec!["label".into()])
+            .unwrap();
         assert_eq!(controller.selected_column().unwrap(), "label");
-        controller.delete_column().unwrap();
+        controller.execute(Command::DeleteColumn, vec![]).unwrap();
         assert!(!controller
             .database
             .get_headers("t")
@@ -2768,12 +2965,12 @@ mod history_tests {
     #[test]
     fn generated_column_is_hidden_and_restored_by_history() {
         let mut controller = controller();
-        controller.copy().unwrap();
+        controller.execute(Command::Copy, vec![]).unwrap();
         assert_eq!(
             controller.database.get_cell("t", 1, "name_copy").unwrap(),
             "abc"
         );
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert!(!controller
             .database
             .get_headers("t")
@@ -2785,7 +2982,7 @@ mod history_tests {
             .unwrap()
             .0
             .contains(&"name_copy".into()));
-        controller.redo().unwrap();
+        controller.execute(Command::Redo, vec![]).unwrap();
         assert!(controller
             .database
             .get_headers("t")
@@ -2796,19 +2993,21 @@ mod history_tests {
     #[test]
     fn regex_transform_is_undoable_and_redoable() {
         let mut controller = controller();
-        controller.regex_transform(vec!["a".into()]).unwrap();
+        controller
+            .execute(Command::RegexTransform, vec!["a".into()])
+            .unwrap();
         assert!(controller
             .database
             .get_headers("t")
             .unwrap()
             .contains(&"name_tform".into()));
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert!(!controller
             .database
             .get_headers("t")
             .unwrap()
             .contains(&"name_tform".into()));
-        controller.redo().unwrap();
+        controller.execute(Command::Redo, vec![]).unwrap();
         assert!(controller
             .database
             .get_headers("t")
@@ -2826,19 +3025,19 @@ mod history_tests {
         controller.get_headers_and_rows(10).unwrap();
         controller.view.column = 2;
 
-        controller.int_to_text().unwrap();
+        controller.execute(Command::IntToText, vec![]).unwrap();
         assert!(controller
             .database
             .get_headers("t")
             .unwrap()
             .contains(&"TEXT_count".into()));
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert!(!controller
             .database
             .get_headers("t")
             .unwrap()
             .contains(&"TEXT_count".into()));
-        controller.redo().unwrap();
+        controller.execute(Command::Redo, vec![]).unwrap();
         assert!(controller
             .database
             .get_headers("t")
@@ -2846,19 +3045,19 @@ mod history_tests {
             .contains(&"TEXT_count".into()));
 
         controller.view.column = 2;
-        controller.text_to_int().unwrap();
+        controller.execute(Command::TextToInt, vec![]).unwrap();
         assert!(controller
             .database
             .get_headers("t")
             .unwrap()
             .contains(&"INTEGER_count".into()));
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert!(!controller
             .database
             .get_headers("t")
             .unwrap()
             .contains(&"INTEGER_count".into()));
-        controller.redo().unwrap();
+        controller.execute(Command::Redo, vec![]).unwrap();
         assert!(controller
             .database
             .get_headers("t")
@@ -2875,7 +3074,7 @@ mod history_tests {
             .unwrap();
         controller.get_headers_and_rows(10).unwrap();
         controller.view.column = 2;
-        controller.text_to_int().unwrap();
+        controller.execute(Command::TextToInt, vec![]).unwrap();
         assert_eq!(
             controller
                 .database
@@ -2890,13 +3089,13 @@ mod history_tests {
                 .unwrap(),
             DataItem::Null
         );
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert!(!controller
             .database
             .get_headers("t")
             .unwrap()
             .contains(&"INTEGER_raw".into()));
-        controller.redo().unwrap();
+        controller.execute(Command::Redo, vec![]).unwrap();
         assert_eq!(
             controller
                 .database
@@ -2909,12 +3108,12 @@ mod history_tests {
     #[test]
     fn summary_command_opens_all_column_describe_view() {
         let mut controller = controller();
-        controller.dispatch(Command::Summary, 10).unwrap();
+        controller.execute(Command::Summary, vec![]).unwrap();
         assert!(controller.view.table_name.ends_with("_describe"));
         assert!(controller.view.headers.contains(&"column_name".into()));
         assert!(controller.view.headers.contains(&"null_count".into()));
         assert!(controller.view.headers.contains(&"distinct_count".into()));
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert_eq!(controller.view.table_name, "t");
     }
 
@@ -2922,7 +3121,7 @@ mod history_tests {
     fn frequency_group_selection_propagates_to_source_and_clear_restores_baseline() {
         let mut controller = controller();
         controller.selected_rows.insert(2);
-        controller.show_analysis(true).unwrap();
+        controller.execute(Command::Frequency, vec![]).unwrap();
         let frequency = controller.view.table_name.clone();
         let row = controller
             .view
@@ -2932,12 +3131,32 @@ mod history_tests {
             .unwrap();
         controller.view.row = row;
         controller.toggle_selection().unwrap();
-        assert!(controller.sheet_views["t"].selection.contains(&1));
-        assert!(controller.sheet_views["t"].selection.contains(&2));
+        assert!(controller.sheets["t"]
+            .saved_view
+            .as_ref()
+            .unwrap()
+            .selection
+            .contains(&1));
+        assert!(controller.sheets["t"]
+            .saved_view
+            .as_ref()
+            .unwrap()
+            .selection
+            .contains(&2));
 
         controller.clear_selection().unwrap();
-        assert!(!controller.sheet_views["t"].selection.contains(&1));
-        assert!(controller.sheet_views["t"].selection.contains(&2));
+        assert!(!controller.sheets["t"]
+            .saved_view
+            .as_ref()
+            .unwrap()
+            .selection
+            .contains(&1));
+        assert!(controller.sheets["t"]
+            .saved_view
+            .as_ref()
+            .unwrap()
+            .selection
+            .contains(&2));
         controller.switch_sheet("t".into()).unwrap();
         assert!(controller.selected_rows.contains(&2));
         assert!(!controller.selected_rows.contains(&1));
@@ -2950,7 +3169,7 @@ mod history_tests {
     #[test]
     fn frequency_enter_opens_highlighted_source_rows_read_only_and_escape_returns() {
         let mut controller = controller();
-        controller.show_analysis(true).unwrap();
+        controller.execute(Command::Frequency, vec![]).unwrap();
         let frequency = controller.view.table_name.clone();
         let row = controller
             .view
@@ -2959,19 +3178,19 @@ mod history_tests {
             .position(|row| row.get(1) == Some(&DataItem::Text("abc".into())))
             .unwrap();
         controller.view.row = row;
-        controller.dispatch(Command::HistoryReplay, 10).unwrap();
+        controller.execute(Command::HistoryReplay, vec![]).unwrap();
         assert_eq!(controller.view.table_name, "t");
         assert!(controller.selected_rows.contains(&1));
-        assert!(controller.dispatch(Command::DeleteSelected, 10).is_err());
+        assert!(controller.execute(Command::DeleteSelected, vec![]).is_err());
         assert_eq!(controller.database.count_rows("t").unwrap(), 2);
-        controller.dispatch(Command::HistoryClose, 10).unwrap();
+        controller.execute(Command::HistoryClose, vec![]).unwrap();
         assert_eq!(controller.view.table_name, frequency);
     }
 
     #[test]
     fn refresh_rebuilds_stale_frequency_sheet_after_source_edit() {
         let mut controller = controller();
-        controller.show_analysis(true).unwrap();
+        controller.execute(Command::Frequency, vec![]).unwrap();
         let frequency = controller.view.table_name.clone();
 
         controller.switch_sheet("t".into()).unwrap();
@@ -2979,9 +3198,9 @@ mod history_tests {
         controller.view.column = 1;
         controller.view.row = 0;
         controller
-            .execute_inputs(Command::Edit, vec!["changed".into()])
+            .execute(Command::Edit, vec!["changed".into()])
             .unwrap();
-        assert!(controller.stale_derived.contains(&frequency));
+        assert!(controller.sheets[&frequency].metadata.stale);
         let stale: i64 = controller
             .database
             .connection
@@ -2994,8 +3213,8 @@ mod history_tests {
         assert_eq!(stale, 1);
 
         controller.switch_sheet(frequency.clone()).unwrap();
-        controller.dispatch(Command::RefreshDerived, 20).unwrap();
-        assert!(!controller.stale_derived.contains(&frequency));
+        controller.execute(Command::RefreshDerived, vec![]).unwrap();
+        assert!(!controller.sheets[&frequency].metadata.stale);
         let stale: i64 = controller
             .database
             .connection
@@ -3024,7 +3243,9 @@ mod history_tests {
     #[test]
     fn math_generated_column_is_undoable_and_redoable() {
         let mut controller = controller();
-        controller.math_operation(vec!["id + 10".into()]).unwrap();
+        controller
+            .execute(Command::MathOperation, vec!["id + 10".into()])
+            .unwrap();
         assert_eq!(
             controller
                 .database
@@ -3032,13 +3253,13 @@ mod history_tests {
                 .unwrap(),
             DataItem::Integer(11)
         );
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert!(!controller
             .database
             .get_headers("t")
             .unwrap()
             .contains(&"math_expr".into()));
-        controller.redo().unwrap();
+        controller.execute(Command::Redo, vec![]).unwrap();
         assert_eq!(
             controller
                 .database
@@ -3058,16 +3279,16 @@ mod history_tests {
         controller.get_headers_and_rows(10).unwrap();
         controller.view.column = 2;
 
-        controller.text_to_int().unwrap();
+        controller.execute(Command::TextToInt, vec![]).unwrap();
         let derived_column = controller.view.headers.len() - 1;
         controller.view.column = derived_column;
-        controller.sort().unwrap();
+        controller.execute(Command::Sort, vec![]).unwrap();
 
         assert_eq!(
             controller.view.order_column.as_deref(),
             Some("INTEGER_count")
         );
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert_eq!(controller.view.order_column.as_deref(), Some("id"));
         assert!(controller
             .database
@@ -3075,7 +3296,7 @@ mod history_tests {
             .unwrap()
             .contains(&"INTEGER_count".into()));
 
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert!(!controller
             .database
             .get_headers("t")
@@ -3086,15 +3307,15 @@ mod history_tests {
     #[test]
     fn deleted_column_is_retained_and_restored() {
         let mut controller = controller();
-        controller.delete_column().unwrap();
+        controller.execute(Command::DeleteColumn, vec![]).unwrap();
         assert!(!controller
             .database
             .get_headers("t")
             .unwrap()
             .contains(&"name".into()));
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert_eq!(controller.database.get_cell("t", 1, "name").unwrap(), "abc");
-        controller.redo().unwrap();
+        controller.execute(Command::Redo, vec![]).unwrap();
         assert!(!controller
             .database
             .get_headers("t")
@@ -3107,7 +3328,7 @@ mod history_tests {
         let mut controller = controller();
         controller.view.column = 0;
 
-        assert!(controller.delete_column().is_err());
+        assert!(controller.execute(Command::DeleteColumn, vec![]).is_err());
         assert!(controller
             .database
             .get_headers("t")
@@ -3119,17 +3340,19 @@ mod history_tests {
     #[test]
     fn filtered_table_undoes_and_redoes_view_transition() {
         let mut controller = controller();
-        controller.regex_filter(vec!["a".into()]).unwrap();
+        controller
+            .execute(Command::RegexFilter, vec!["a".into()])
+            .unwrap();
         let filtered = controller.view.table_name.clone();
         assert_eq!(controller.database.count_rows(&filtered).unwrap(), 1);
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert_eq!(controller.view.table_name, "t");
         assert!(!controller
             .database
             .get_table_names()
             .unwrap()
             .contains(&filtered));
-        controller.redo().unwrap();
+        controller.execute(Command::Redo, vec![]).unwrap();
         assert_eq!(controller.view.table_name, filtered);
         assert_eq!(controller.database.count_rows(&filtered).unwrap(), 1);
     }
@@ -3137,20 +3360,20 @@ mod history_tests {
     #[test]
     fn deleted_table_is_retained_and_restored() {
         let mut controller = controller();
-        controller.delete_table().unwrap();
+        controller.execute(Command::DeleteTable, vec![]).unwrap();
         assert!(!controller
             .database
             .get_table_names()
             .unwrap()
             .contains(&"t".into()));
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert!(controller
             .database
             .get_table_names()
             .unwrap()
             .contains(&"t".into()));
         assert_eq!(controller.view.table_name, "t");
-        controller.redo().unwrap();
+        controller.execute(Command::Redo, vec![]).unwrap();
         assert!(!controller
             .database
             .get_table_names()
@@ -3161,30 +3384,36 @@ mod history_tests {
     #[test]
     fn renamed_table_undoes_and_redoes() {
         let mut controller = controller();
-        controller.rename_table(vec!["renamed".into()]).unwrap();
+        controller
+            .execute(Command::RenameTable, vec!["renamed".into()])
+            .unwrap();
         assert!(controller
             .database
             .get_table_names()
             .unwrap()
             .contains(&"renamed".into()));
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert_eq!(controller.view.table_name, "t");
         assert!(controller
             .database
             .get_table_names()
             .unwrap()
             .contains(&"t".into()));
-        controller.redo().unwrap();
+        controller.execute(Command::Redo, vec![]).unwrap();
         assert_eq!(controller.view.table_name, "renamed");
     }
 
     #[test]
     fn new_edit_after_undo_discards_redo() {
         let mut controller = controller();
-        controller.edit_cell(vec!["first".into()]).unwrap();
-        controller.undo().unwrap();
-        controller.edit_cell(vec!["second".into()]).unwrap();
-        controller.redo().unwrap();
+        controller
+            .execute(Command::Edit, vec!["first".into()])
+            .unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
+        controller
+            .execute(Command::Edit, vec!["second".into()])
+            .unwrap();
+        controller.execute(Command::Redo, vec![]).unwrap();
         assert_eq!(
             controller.database.get_cell("t", 1, "name").unwrap(),
             "second"
@@ -3194,19 +3423,21 @@ mod history_tests {
     #[test]
     fn configured_undo_redo_keys_reach_history_dispatch() {
         let mut controller = controller();
-        controller.edit_cell(vec!["changed".into()]).unwrap();
+        controller
+            .execute(Command::Edit, vec!["changed".into()])
+            .unwrap();
         let undo = Command::from(crossterm::event::KeyEvent::new(
             KeyCode::Char('z'),
             KeyModifiers::CONTROL,
         ));
-        controller.dispatch_history_command(undo).unwrap();
+        controller.execute(undo, vec![]).unwrap();
         assert_eq!(controller.database.get_cell("t", 1, "name").unwrap(), "abc");
 
         let redo = Command::from(crossterm::event::KeyEvent::new(
             KeyCode::Char('y'),
             KeyModifiers::CONTROL,
         ));
-        controller.dispatch_history_command(redo).unwrap();
+        controller.execute(redo, vec![]).unwrap();
         assert_eq!(
             controller.database.get_cell("t", 1, "name").unwrap(),
             "changed"
@@ -3216,12 +3447,14 @@ mod history_tests {
     #[test]
     fn new_command_removes_hidden_redo_artifacts() {
         let mut controller = controller();
-        controller.copy().unwrap();
-        controller.undo().unwrap();
+        controller.execute(Command::Copy, vec![]).unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert!(raw_headers(&controller, "t")
             .iter()
             .any(|header| header.starts_with(INTERNAL_PREFIX)));
-        controller.edit_cell(vec!["new value".into()]).unwrap();
+        controller
+            .execute(Command::Edit, vec!["new value".into()])
+            .unwrap();
         assert!(!raw_headers(&controller, "t")
             .iter()
             .any(|header| header.starts_with(INTERNAL_PREFIX)));
@@ -3231,20 +3464,21 @@ mod history_tests {
     #[test]
     fn successful_sql_clears_undo_history() {
         let mut controller = controller();
-        controller.edit_cell(vec!["before sql".into()]).unwrap();
-        let mut queued = QueuedCommand::new(Command::SqlQuery);
-        queued
-            .inputs
-            .push("UPDATE t SET name = 'from sql' WHERE id = 1;".into());
-        controller.ui.queued_command = Some(queued);
-        controller.execute_queued_command().unwrap();
-        controller.ui.queued_command = None;
+        controller
+            .execute(Command::Edit, vec!["before sql".into()])
+            .unwrap();
+        controller
+            .execute(
+                Command::SqlQuery,
+                vec!["UPDATE t SET name = 'from sql' WHERE id = 1;".into()],
+            )
+            .unwrap();
         assert!(controller.history.undo.is_empty());
         assert_eq!(
             controller.database.get_cell("t", 1, "name").unwrap(),
             "from sql"
         );
-        controller.undo().unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert_eq!(
             controller.database.get_cell("t", 1, "name").unwrap(),
             "from sql"
@@ -3254,7 +3488,9 @@ mod history_tests {
     #[test]
     fn failed_rename_does_not_enter_history() {
         let mut controller = controller();
-        assert!(controller.rename_column(vec!["id".into()]).is_err());
+        assert!(controller
+            .execute(Command::RenameColumn, vec!["id".into()])
+            .is_err());
         assert!(controller.history.undo.is_empty());
         assert!(controller
             .database
@@ -3268,12 +3504,12 @@ mod history_tests {
         let mut controller = controller();
         for index in 0..101 {
             controller
-                .edit_cell(vec![format!("value-{index}")])
+                .execute(Command::Edit, vec![format!("value-{index}")])
                 .unwrap();
         }
         assert_eq!(controller.history.undo.len(), HISTORY_LIMIT);
         for _ in 0..HISTORY_LIMIT {
-            controller.undo().unwrap();
+            controller.execute(Command::Undo, vec![]).unwrap();
         }
         assert_eq!(
             controller.database.get_cell("t", 1, "name").unwrap(),
@@ -3298,8 +3534,10 @@ mod history_tests {
         controller.view.table_name = "t".into();
         controller.get_headers_and_rows(10).unwrap();
         controller.view.column = 1;
-        controller.edit_cell(vec!["not-a-number".into()]).unwrap();
-        controller.undo().unwrap();
+        controller
+            .execute(Command::Edit, vec!["not-a-number".into()])
+            .unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         assert_eq!(
             controller.database.get_cell_item("t", 1, "count").unwrap(),
             DataItem::Integer(42)
@@ -3309,7 +3547,7 @@ mod history_tests {
     #[test]
     fn sqlite_export_omits_hidden_history_artifacts() {
         let mut controller = controller();
-        controller.delete_table().unwrap();
+        controller.execute(Command::DeleteTable, vec![]).unwrap();
         let path =
             std::env::temp_dir().join(format!("dataman-undo-export-{}.sqlite", std::process::id()));
         controller.database.backup_db(&path).unwrap();
@@ -3329,8 +3567,8 @@ mod history_tests {
     #[test]
     fn csv_export_omits_hidden_history_columns() {
         let mut controller = controller();
-        controller.copy().unwrap();
-        controller.undo().unwrap();
+        controller.execute(Command::Copy, vec![]).unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
         let path = std::env::temp_dir().join(format!(
             "dataman-undo-csv-export-{}.csv",
             std::process::id()
@@ -3392,13 +3630,13 @@ mod history_tests {
         controller.view.table_name = "t".into();
         controller.get_headers_and_rows(10).unwrap();
         controller.view.column = 1;
-        controller.delete_table().unwrap();
+        controller.execute(Command::DeleteTable, vec![]).unwrap();
         assert_eq!(controller.view.table_name, "u");
         controller.get_headers_and_rows(10).unwrap();
         controller.view.column = 1;
         for index in 0..HISTORY_LIMIT {
             controller
-                .edit_cell(vec![format!("value-{index}")])
+                .execute(Command::Edit, vec![format!("value-{index}")])
                 .unwrap();
         }
         let internal_tables: i64 = controller
@@ -3418,27 +3656,31 @@ mod history_tests {
     fn undo_and_redo_failures_leave_their_history_entries_available() {
         {
             let mut controller = controller();
-            controller.edit_cell(vec!["changed".into()]).unwrap();
+            controller
+                .execute(Command::Edit, vec!["changed".into()])
+                .unwrap();
             controller
                 .database
                 .execute_batch("ALTER TABLE t DROP COLUMN name;")
                 .unwrap();
-            assert!(controller.undo().is_err());
+            assert!(controller.execute(Command::Undo, vec![]).is_err());
             assert_eq!(controller.history.undo.len(), 1);
         }
 
         let mut redo_controller = controller();
-        redo_controller.edit_cell(vec!["changed".into()]).unwrap();
-        redo_controller.undo().unwrap();
+        redo_controller
+            .execute(Command::Edit, vec!["changed".into()])
+            .unwrap();
+        redo_controller.execute(Command::Undo, vec![]).unwrap();
         redo_controller
             .database
             .execute_batch("ALTER TABLE t DROP COLUMN name;")
             .unwrap();
-        assert!(redo_controller.redo().is_err());
+        assert!(redo_controller.execute(Command::Redo, vec![]).is_err());
         assert_eq!(redo_controller.history.redo.len(), 1);
     }
     #[test]
-    fn queued_and_synchronous_failures_preserve_typed_errors_and_history() {
+    fn failed_commands_preserve_typed_errors_and_history() {
         let mut controller = controller();
         controller
             .execute(Command::Edit, vec!["changed".into()])
@@ -3454,15 +3696,267 @@ mod history_tests {
         assert!(matches!(error, AppError::Sqlite(_)));
         assert_eq!(controller.history.undo.len(), undo);
         assert_eq!(controller.command_history.len(), commands);
-        controller.ui.queued_command = Some(QueuedCommand {
-            command: Command::RegexFilter,
-            inputs: vec!["[".into()],
-        });
         assert!(matches!(
-            controller.execute_queued_command(),
+            controller.execute(Command::RegexFilter, vec!["[".into()]),
             Err(AppError::Regex(_))
         ));
         assert_eq!(controller.history.undo.len(), undo);
         assert_eq!(controller.command_history.len(), commands);
+    }
+    #[test]
+    fn committed_edit_survives_sheet_list_failure_and_can_be_undone() {
+        use rusqlite::hooks::{AuthAction, AuthContext, Authorization};
+        let mut controller = controller();
+        controller
+            .database
+            .connection
+            .authorizer(Some(|ctx: AuthContext<'_>| {
+                if matches!(
+                    ctx.action,
+                    AuthAction::Insert {
+                        table_name: "table_of_tables"
+                    }
+                ) {
+                    Authorization::Deny
+                } else {
+                    Authorization::Allow
+                }
+            }));
+        let (execution, snapshot) =
+            controller.execute_and_snapshot(Command::Edit, vec!["committed".into()], None);
+        execution.unwrap();
+        assert!(snapshot.is_err());
+        assert_eq!(controller.history.undo.len(), 1);
+        assert_eq!(controller.command_history.len(), 1);
+        assert_eq!(
+            controller.database.get_cell("t", 1, "name").unwrap(),
+            "committed"
+        );
+        controller
+            .database
+            .connection
+            .authorizer(None::<fn(AuthContext<'_>) -> Authorization>);
+        controller.execute(Command::Undo, vec![]).unwrap();
+        assert_eq!(controller.database.get_cell("t", 1, "name").unwrap(), "abc");
+        controller.replay_history(0).unwrap();
+        assert_eq!(controller.history.undo.len(), 1);
+        assert_eq!(controller.command_history.len(), 1);
+        assert_eq!(
+            controller.database.get_cell("t", 1, "name").unwrap(),
+            "committed"
+        );
+    }
+
+    #[test]
+    fn registry_rename_delete_undo_redo_preserves_references_and_saved_state() {
+        let mut controller = controller();
+        controller
+            .database
+            .execute_batch("ALTER TABLE t ADD COLUMN count INTEGER")
+            .unwrap();
+        controller.get_headers_and_rows(100).unwrap();
+        controller.execute(Command::ToggleJoinKey, vec![]).unwrap();
+        controller
+            .execute(Command::ConfigureAggregator, vec!["count".into()])
+            .unwrap();
+        controller.selected_rows.insert(2);
+        controller.execute(Command::Frequency, vec![]).unwrap();
+        let frequency = controller.view.table_name.clone();
+        let membership = controller.sheets[&frequency]
+            .metadata
+            .frequency
+            .as_ref()
+            .unwrap()
+            .1
+            .clone();
+        controller.switch_sheet("t".into()).unwrap();
+        controller.refresh_page(100).unwrap();
+        controller.view.column = 2;
+        controller.execute(Command::HideColumn, vec![]).unwrap();
+        controller.view.column = 1;
+        controller.switch_sheet(frequency.clone()).unwrap();
+        controller.switch_sheet("t".into()).unwrap();
+        controller.selected_sheets.insert("t".into());
+        controller.previous_sheet = Some("t".into());
+        controller.view.table_before_metadata = Some("t".into());
+        controller
+            .execute(Command::RenameTable, vec!["renamed".into()])
+            .unwrap();
+        assert_eq!(controller.previous_sheet.as_deref(), Some("renamed"));
+        assert_eq!(
+            controller.view.table_before_metadata.as_deref(),
+            Some("renamed")
+        );
+        assert!(controller.selected_sheets.contains("renamed"));
+        assert_eq!(
+            Controller::derived_sources(
+                controller.sheets[&frequency]
+                    .metadata
+                    .derived
+                    .as_ref()
+                    .unwrap()
+            ),
+            ["renamed"]
+        );
+        assert_eq!(
+            controller.sheets[&frequency]
+                .metadata
+                .frequency
+                .as_ref()
+                .unwrap()
+                .0,
+            "renamed"
+        );
+        assert_eq!(controller.sheets["renamed"].metadata.keys, ["name"]);
+        assert!(controller.sheets["renamed"].layout.hidden.contains("count"));
+        assert!(controller.sheets["renamed"]
+            .saved_view
+            .as_ref()
+            .unwrap()
+            .selection
+            .contains(&2));
+        controller.execute(Command::Undo, vec![]).unwrap();
+        assert_eq!(
+            controller.sheets[&frequency]
+                .metadata
+                .frequency
+                .as_ref()
+                .unwrap()
+                .0,
+            "t"
+        );
+        assert!(controller.sheets["t"].layout.hidden.contains("count"));
+        controller.execute(Command::Redo, vec![]).unwrap();
+        controller.execute(Command::DeleteTable, vec![]).unwrap();
+        assert!(!controller.sheets["renamed"].present);
+        assert_eq!(controller.sheets["renamed"].metadata.keys, ["name"]);
+        controller.execute(Command::Undo, vec![]).unwrap();
+        assert_eq!(controller.view.table_name, "renamed");
+        assert!(controller.selected_rows.contains(&2));
+        assert!(controller.sheets["renamed"].layout.hidden.contains("count"));
+        assert_eq!(controller.sheets["renamed"].metadata.aggregators.len(), 1);
+        controller.execute(Command::Redo, vec![]).unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
+        controller.switch_sheet(frequency.clone()).unwrap();
+        controller.refresh_page(100).unwrap();
+        controller.execute(Command::DeleteTable, vec![]).unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
+        assert_eq!(
+            controller.sheets[&frequency]
+                .metadata
+                .frequency
+                .as_ref()
+                .unwrap()
+                .1,
+            membership
+        );
+        assert!(controller.sheets[&frequency]
+            .metadata
+            .frequency_baseline
+            .contains(&2));
+        assert!(!controller
+            .database
+            .frequency_group_members(&membership, 1)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn deleted_registry_entry_expires_with_its_undo_record() {
+        let mut controller = controller();
+        controller.execute(Command::DeleteTable, vec![]).unwrap();
+        assert!(controller.sheets.contains_key("t"));
+        for _ in 0..HISTORY_LIMIT {
+            controller.execute(Command::Sort, vec![]).unwrap();
+        }
+        assert!(!controller.sheets.contains_key("t"));
+    }
+
+    #[test]
+    fn read_only_context_rejects_input_and_replay_without_logging() {
+        let mut controller = controller();
+        controller
+            .execute(Command::Edit, vec!["changed".into()])
+            .unwrap();
+        let undo = controller.history.undo.len();
+        let logged = controller.command_history.len();
+        controller.drilldown_return_sheet = Some("frequency".into());
+        assert!(controller
+            .execute(Command::Edit, vec!["bad".into()])
+            .is_err());
+        assert!(controller.replay_history(0).is_err());
+        assert_eq!(controller.history.undo.len(), undo);
+        assert_eq!(controller.command_history.len(), logged);
+    }
+    #[test]
+    fn column_rename_updates_derived_specs_markers_and_saved_sort_through_history() {
+        let mut controller = controller();
+        controller.execute(Command::ToggleJoinKey, vec![]).unwrap();
+        controller
+            .execute(Command::ConfigureAggregator, vec!["count".into()])
+            .unwrap();
+        controller.view.order_column = Some("name".into());
+        controller.execute(Command::Frequency, vec![]).unwrap();
+        let frequency = controller.view.table_name.clone();
+        controller.switch_sheet("t".into()).unwrap();
+        controller.refresh_page(100).unwrap();
+        controller
+            .execute(Command::RenameColumn, vec!["label".into()])
+            .unwrap();
+        assert_eq!(controller.sheets["t"].metadata.keys, ["label"]);
+        assert_eq!(controller.sheets["t"].metadata.aggregators[0].0, "label");
+        assert_eq!(
+            controller.sheets["t"]
+                .saved_view
+                .as_ref()
+                .unwrap()
+                .order_column
+                .as_deref(),
+            Some("label")
+        );
+        assert!(
+            matches!(&controller.sheets[&frequency].metadata.derived, Some(DerivedSpec::Frequency { column, .. }) if column == "label")
+        );
+        controller.execute(Command::Undo, vec![]).unwrap();
+        assert_eq!(controller.sheets["t"].metadata.keys, ["name"]);
+        assert_eq!(
+            controller.sheets["t"]
+                .saved_view
+                .as_ref()
+                .unwrap()
+                .order_column
+                .as_deref(),
+            Some("name")
+        );
+        controller.execute(Command::Redo, vec![]).unwrap();
+        controller.switch_sheet(frequency).unwrap();
+        controller.execute(Command::RefreshDerived, vec![]).unwrap();
+        let source_column = controller
+            .view
+            .headers
+            .iter()
+            .position(|header| header == "source_column")
+            .unwrap();
+        assert_eq!(
+            controller.view.rows[0][controller.view.column_indexes[source_column]],
+            DataItem::Text("label".into())
+        );
+    }
+
+    #[test]
+    fn history_does_not_restore_other_sheets_saved_navigation() {
+        let mut controller = controller();
+        controller.database.execute_batch("CREATE TABLE other(id INTEGER PRIMARY KEY, value TEXT); INSERT INTO other VALUES(1,'a'),(2,'b')").unwrap();
+        controller
+            .execute(Command::Edit, vec!["edited".into()])
+            .unwrap();
+        controller.switch_sheet("other".into()).unwrap();
+        controller.view.row = 1;
+        controller.selected_rows.insert(2);
+        controller.switch_sheet("t".into()).unwrap();
+        controller.execute(Command::Undo, vec![]).unwrap();
+        controller.switch_sheet("other".into()).unwrap();
+        assert_eq!(controller.view.row, 1);
+        assert!(controller.selected_rows.contains(&2));
     }
 }

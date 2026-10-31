@@ -88,7 +88,7 @@ fn trim_external_editor_newline(editable: String) -> String {
     }
 }
 use crate::error::{AppError, AppResult};
-use crate::{controller::input::InputMode, model::datarow::DataItem};
+use crate::model::datarow::DataItem;
 
 pub struct TUI {
     terminal: Terminal<CrosstermBackend<Stdout>>,
@@ -182,20 +182,14 @@ impl TUI {
 
     fn update(f: &mut Frame, controller: &crate::controller::worker::RenderState) -> AppResult<()> {
         let (ui, view) = (&controller.ui, &controller.view);
-        let constraints: Vec<Constraint> = match ui.input_mode_state_machine.get_state() {
-            InputMode::Editing => {
-                vec![
-                    Constraint::Max(1000),
-                    Constraint::Length(1),
-                    Constraint::Length(3),
-                ]
-            }
-            InputMode::Normal | InputMode::Abort | InputMode::Finish => {
-                vec![Constraint::Max(1000), Constraint::Length(1)]
-            }
-            InputMode::ExternalEditor => {
-                return Err(AppError::from("External editor is still active"))
-            }
+        let constraints = if ui.editing.is_some() {
+            vec![
+                Constraint::Max(1000),
+                Constraint::Length(1),
+                Constraint::Length(3),
+            ]
+        } else {
+            vec![Constraint::Max(1000), Constraint::Length(1)]
         };
         let rects = Layout::default()
             .direction(ratatui::prelude::Direction::Vertical)
@@ -336,9 +330,9 @@ impl TUI {
 
         f.render_widget(paragraph, rects[1]);
 
-        if ui.input_mode_state_machine.get_state() == InputMode::Editing {
-            let title = ui.last_command.command.to_string();
-            let paragraph = Paragraph::new(ui.input.as_str())
+        if let Some(session) = &ui.editing {
+            let title = session.prompt();
+            let paragraph = Paragraph::new(session.text.as_str())
                 .style(Style::default().fg(Color::Yellow))
                 .block(
                     Block::default()
@@ -346,26 +340,8 @@ impl TUI {
                         .title(format!("{title} input")),
                 );
 
-            f.set_cursor_position((rects[2].x + ui.character_index as u16 + 1, rects[2].y + 1));
+            f.set_cursor_position((rects[2].x + session.cursor as u16 + 1, rects[2].y + 1));
             f.render_widget(paragraph, rects[2]);
-            // match app.input_mode {
-            //     InputMode::Normal =>
-            //         // Hide the cursor. `Frame` does this by default, so we don't need to do anything here
-            //         {}
-
-            //     InputMode::Editing => {
-            //         // Make the cursor visible and ask ratatui to put it at the specified coordinates after
-            //         // rendering
-            //         #[allow(clippy::cast_possible_truncation)]
-            //         f.set_cursor(
-            //             // Draw the cursor at the current position in the input field.
-            //             // This position is can be controlled via the left and right arrow key
-            //             input_area.x + app.character_index as u16 + 1,
-            //             // Move one line down, from the border to the input line
-            //             input_area.y + 1,
-            //         );
-            //     }
-            // }
         }
         Ok(())
     }
@@ -419,13 +395,17 @@ mod tests {
     #[test]
     #[ignore = "manual rendering benchmark"]
     fn benchmark_cached_render() {
-        use crate::controller::{controller_impl::Controller, worker::RenderState};
+        use crate::controller::{
+            controller_impl::Controller,
+            worker::{DatabaseSnapshot, RenderState},
+        };
         let connection = rusqlite::Connection::open_in_memory().unwrap();
         connection.execute_batch("CREATE TABLE t(id INTEGER PRIMARY KEY, value TEXT, amount INTEGER);
             WITH RECURSIVE n(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM n WHERE id<100) INSERT INTO t SELECT id,'some text',id FROM n;").unwrap();
         let mut controller = Controller::new(Database::new(connection).unwrap()).unwrap();
         controller.get_headers_and_rows(100).unwrap();
-        let state = RenderState::from_controller(&controller).unwrap();
+        let state =
+            RenderState::from_snapshot(DatabaseSnapshot::from_controller(&controller).unwrap());
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
         let start = std::time::Instant::now();
@@ -442,7 +422,10 @@ mod tests {
 
     #[test]
     fn cached_render_handles_resize_typing_and_history_without_database_access() {
-        use crate::controller::{controller_impl::Controller, worker::RenderState};
+        use crate::controller::{
+            controller_impl::Controller,
+            worker::{DatabaseSnapshot, RenderState},
+        };
         use rusqlite::{
             hooks::{AuthContext, Authorization},
             Connection,
@@ -451,7 +434,8 @@ mod tests {
         connection.execute_batch("CREATE TABLE t(id INTEGER PRIMARY KEY, value TEXT); INSERT INTO t VALUES(1,'hello');").unwrap();
         let mut controller = Controller::new(Database::new(connection).unwrap()).unwrap();
         controller.get_headers_and_rows(100).unwrap();
-        let mut state = RenderState::from_controller(&controller).unwrap();
+        let mut state =
+            RenderState::from_snapshot(DatabaseSnapshot::from_controller(&controller).unwrap());
         controller
             .database
             .connection
@@ -462,7 +446,10 @@ mod tests {
             terminal
                 .draw(|frame| super::TUI::update(frame, &state).unwrap())
                 .unwrap();
-            state.ui.input.push('x');
+            state.ui.editing = Some(crate::controller::input::EditingSession::new(
+                crate::controller::command::Command::Edit,
+                "x".into(),
+            ));
             state.ui.history_view = !state.ui.history_view;
             terminal
                 .draw(|frame| super::TUI::update(frame, &state).unwrap())

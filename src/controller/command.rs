@@ -3,25 +3,6 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::navigation::Direction;
 
 #[derive(Debug, Clone)]
-pub(crate) struct QueuedCommand {
-    pub(super) command: Command,
-    pub(super) inputs: Vec<String>,
-}
-
-impl QueuedCommand {
-    pub(crate) fn new(command: Command) -> Self {
-        Self {
-            command,
-            inputs: vec![],
-        }
-    }
-}
-impl Default for QueuedCommand {
-    fn default() -> Self {
-        QueuedCommand::new(Command::None)
-    }
-}
-#[derive(Debug, Clone)]
 pub(crate) struct PreviousCommand {
     pub(crate) command: Command,
     pub(crate) message: Option<String>,
@@ -86,6 +67,39 @@ pub enum Command {
 }
 
 impl Command {
+    pub(crate) fn validate_inputs(&self, inputs: &[String]) -> crate::error::AppResult<()> {
+        if self.needs_input() && inputs.is_empty() {
+            return Err(crate::error::AppError::invalid_input(format!(
+                "{} is required",
+                self.prompt()
+            )));
+        }
+        Ok(())
+    }
+    pub(crate) fn input_default(&self, sheet_name: &str) -> String {
+        if *self == Self::RenameTable {
+            sheet_name.to_owned()
+        } else {
+            String::new()
+        }
+    }
+
+    pub(crate) fn prompt(&self) -> &'static str {
+        match self {
+            Self::RegexTransform | Self::RegexFilter | Self::SelectRegex => "Regular expression",
+            Self::SqlQuery | Self::SelectSql => "SQL expression",
+            Self::RenameTable => "Sheet name",
+            Self::RenameColumn => "Column name",
+            Self::Save => "Output filename",
+            Self::CombineTables => "append, inner, left, or full",
+            Self::ConfigureAggregator => "count, distinct, sum, average, min, or max",
+            Self::Join => "Table to join",
+            Self::MathOperation => "Math expression",
+            Self::ExactSearch => "Search text",
+            _ => "Value",
+        }
+    }
+
     pub(crate) fn needs_input(&self) -> bool {
         matches!(
             self,

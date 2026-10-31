@@ -2,8 +2,8 @@
 use super::selection::Selection;
 use super::{
     command::{Command, PreviousCommand},
-    controller_impl::{Controller, UiState, ViewState},
-    input::{self, InputMode, StateMachine},
+    controller_impl::{Controller, ExecutionOutcome, ViewState},
+    input::{EditingSession, UiState},
 };
 use crate::{
     error::{AppError, AppResult},
@@ -37,66 +37,88 @@ pub(crate) struct HistoryLine {
 #[derive(Debug, Clone)]
 pub(crate) struct RenderState {
     pub(crate) ui: UiState,
+    pub(crate) snapshot: DatabaseSnapshot,
+    pub(crate) busy: bool,
+    pub(crate) busy_phase: &'static str,
+    pub(crate) busy_frame: usize,
+}
+impl std::ops::Deref for RenderState {
+    type Target = DatabaseSnapshot;
+    fn deref(&self) -> &Self::Target {
+        &self.snapshot
+    }
+}
+impl std::ops::DerefMut for RenderState {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.snapshot
+    }
+}
+#[derive(Debug, Clone)]
+pub(crate) struct DatabaseSnapshot {
     pub(crate) view: ViewState,
     pub(crate) selected_rows: Selection,
     pub(crate) selected_sheets: HashSet<String>,
     pub(crate) marked_join_keys: Vec<String>,
     pub(crate) command_history: Vec<HistoryLine>,
     pub(crate) total_rows: u32,
-    pub(crate) busy: bool,
+    pub(crate) special_selection: bool,
     pub(crate) column_widths: Vec<u16>,
-    pub(crate) busy_phase: &'static str,
-    pub(crate) busy_frame: usize,
 }
 impl RenderState {
+    #[cfg(test)]
+    pub(crate) fn from_snapshot(snapshot: DatabaseSnapshot) -> Self {
+        Self {
+            snapshot,
+            ui: UiState::default(),
+            busy: false,
+            busy_phase: "Working",
+            busy_frame: 0,
+        }
+    }
+
     fn loading() -> Self {
         Self {
             ui: UiState {
-                input: String::new(),
-                character_index: 0,
                 last_command: PreviousCommand::new(
                     Command::None,
                     Some("Loading… Esc cancels".into()),
                 ),
-                queued_command: None,
-                input_mode_state_machine: StateMachine::new(),
-                history_view: false,
-                history_cursor: 0,
+                ..UiState::default()
             },
-            view: ViewState {
-                table_name: String::new(),
-                column: 0,
-                row: 0,
-                row_offset: 0,
-                order_column: None,
-                ascending: true,
-                headers: vec![],
-                rows: Arc::default(),
-                column_indexes: vec![],
-                table_before_metadata: None,
-            },
-            selected_rows: Selection::default(),
-            selected_sheets: HashSet::new(),
-            marked_join_keys: vec![],
-            command_history: vec![],
-            total_rows: 0,
             busy: true,
-            column_widths: vec![],
             busy_phase: "Loading",
             busy_frame: 0,
+            snapshot: DatabaseSnapshot {
+                view: ViewState {
+                    table_name: String::new(),
+                    column: 0,
+                    row: 0,
+                    row_offset: 0,
+                    order_column: None,
+                    ascending: true,
+                    headers: vec![],
+                    rows: Arc::default(),
+                    column_indexes: vec![],
+                    table_before_metadata: None,
+                },
+                selected_rows: Selection::default(),
+                selected_sheets: HashSet::new(),
+                marked_join_keys: vec![],
+                command_history: vec![],
+                total_rows: 0,
+                special_selection: false,
+                column_widths: vec![],
+            },
         }
     }
+}
+impl DatabaseSnapshot {
     pub(crate) fn from_controller(controller: &Controller) -> AppResult<Self> {
-        Ok(Self {
-            ui: controller.ui.clone(),
+        Ok(DatabaseSnapshot {
             view: controller.view.clone(),
             selected_rows: controller.selected_rows.clone(),
             selected_sheets: controller.selected_sheets.clone(),
-            marked_join_keys: controller
-                .join_keys
-                .get(&controller.view.table_name)
-                .cloned()
-                .unwrap_or_default(),
+            marked_join_keys: controller.marked_join_keys(),
             command_history: controller
                 .command_history
                 .iter()
@@ -109,9 +131,7 @@ impl RenderState {
             total_rows: controller
                 .database
                 .count_rows(&controller.view.table_name)?,
-            busy: false,
-            busy_phase: "Working",
-            busy_frame: 0,
+            special_selection: controller.special_selection(),
             column_widths: crate::tui::column_widths(
                 &controller.view.headers,
                 &controller.view.rows,
@@ -122,10 +142,15 @@ impl RenderState {
 }
 
 struct ViewContext {
+    table_name: Option<String>,
+    row_offset: u32,
+    order_column: Option<String>,
+    ascending: bool,
+    selected_sheets: HashSet<String>,
     row: usize,
     column: usize,
     selected_rows: Selection,
-    history_cursor: usize,
+    replay_index: Option<usize>,
 }
 struct Operation {
     id: OperationId,
@@ -140,17 +165,12 @@ enum DatabaseRequest {
     Execute(Operation),
 }
 enum DatabaseResponse {
-    Ready(RenderState),
+    Ready(DatabaseSnapshot),
     Completed {
         id: OperationId,
         generation: ViewGeneration,
-        state: RenderState,
-        error: Option<AppError>,
-    },
-    OperationFailed {
-        id: OperationId,
-        generation: ViewGeneration,
-        error: AppError,
+        execution: AppResult<ExecutionOutcome>,
+        snapshot: AppResult<DatabaseSnapshot>,
     },
     Progress {
         id: OperationId,
@@ -164,9 +184,7 @@ fn serve(
     requests: Receiver<DatabaseRequest>,
     responses: SyncSender<DatabaseResponse>,
 ) -> AppResult<()> {
-    let initial = controller
-        .refresh_page(100)
-        .and_then(|()| RenderState::from_controller(&controller));
+    let initial = controller.prepare_snapshot();
     match initial {
         Ok(state) => {
             if responses.send(DatabaseResponse::Ready(state)).is_err() {
@@ -187,14 +205,17 @@ fn serve(
             &controller.database.connection,
             operation.cancellation.clone(),
         );
+        if let Some(table) = operation.context.table_name {
+            controller.view.table_name = table;
+            controller.view.row_offset = operation.context.row_offset;
+            controller.view.order_column = operation.context.order_column;
+            controller.view.ascending = operation.context.ascending;
+        }
+        controller.selected_sheets = operation.context.selected_sheets;
         controller.view.row = operation.context.row;
         controller.view.column = operation.context.column;
         controller.selected_rows = operation.context.selected_rows;
-        controller.ui.history_cursor = operation.context.history_cursor;
-        controller.ui.history_view = operation.command == Command::HistoryReplay;
         controller.table_height = operation.height;
-        controller.defer_refresh = true;
-        controller.ui.last_command = PreviousCommand::new(operation.command.clone(), None);
         if matches!(
             responses.try_send(DatabaseResponse::Progress {
                 id: operation.id,
@@ -204,59 +225,22 @@ fn serve(
         ) {
             break;
         }
-        let result = if operation.cancellation.load(Ordering::Relaxed) {
-            Err(AppError::Cancelled)
-        } else if let Some(inputs) = operation.inputs {
-            controller.execute_inputs(operation.command.clone(), inputs)
-        } else {
-            controller.dispatch(operation.command.clone(), operation.height)
-        };
-        let error = result.err().map(|error| {
-            error
-                .normalize_cancelled(operation.cancellation.load(Ordering::Relaxed))
-                .context(format!(
-                    "Executing {} on '{}'",
-                    operation.command, controller.view.table_name
-                ))
+        let (result, snapshot) = controller.execute_and_snapshot(
+            operation.command.clone(),
+            operation.inputs.unwrap_or_default(),
+            operation.context.replay_index,
+        );
+        let execution = result.map_err(|error| {
+            error.context(format!(
+                "Executing {} on '{}'",
+                operation.command, controller.view.table_name
+            ))
         });
-        // Cancellation belongs to execution, not the refresh following a committed command.
-        operation.cancellation.store(false, Ordering::Relaxed);
-        controller.defer_refresh = false;
-        if matches!(
-            responses.try_send(DatabaseResponse::Progress {
-                id: operation.id,
-                phase: "Refreshing page",
-            }),
-            Err(mpsc::TrySendError::Disconnected(_))
-        ) {
-            break;
-        }
-        let snapshot = controller
-            .refresh_page(100)
-            .and_then(|()| RenderState::from_controller(&controller));
-        let response = match snapshot {
-            Ok(state) => DatabaseResponse::Completed {
-                id: operation.id,
-                generation: operation.generation,
-                state,
-                error,
-            },
-            Err(refresh) => {
-                let refresh = refresh.context(if error.is_some() {
-                    "Loading page after failed command"
-                } else {
-                    "Command completed; page could not be loaded"
-                });
-                let error = match error {
-                    Some(error) => error.with_cleanup(refresh),
-                    None => refresh,
-                };
-                DatabaseResponse::OperationFailed {
-                    id: operation.id,
-                    generation: operation.generation,
-                    error,
-                }
-            }
+        let response = DatabaseResponse::Completed {
+            id: operation.id,
+            generation: operation.generation,
+            execution,
+            snapshot,
         };
         if responses.send(response).is_err() {
             break;
@@ -351,37 +335,18 @@ impl Frontend {
             loop {
                 match self.responses.try_recv() {
                     Ok(DatabaseResponse::Ready(state)) => {
-                        self.state = state;
+                        self.state.snapshot = state;
+                        self.state.ui.last_command = PreviousCommand::new(Command::None, None);
                         self.active = None;
                         self.dirty = true;
                     }
                     Ok(DatabaseResponse::Completed {
                         id,
                         generation,
-                        mut state,
-                        error,
+                        execution,
+                        snapshot,
                     }) => {
-                        if self
-                            .active
-                            .as_ref()
-                            .is_some_and(|(active, _, _)| *active == id)
-                            && generation == self.generation
-                        {
-                            if let Some(error) = error {
-                                state.ui.last_command = PreviousCommand::new(
-                                    Command::IllegalOperation,
-                                    Some(error.present()),
-                                );
-                            }
-                        }
-                        self.complete(id, generation, state);
-                    }
-                    Ok(DatabaseResponse::OperationFailed {
-                        id,
-                        generation,
-                        error,
-                    }) => {
-                        self.fail(id, generation, error);
+                        self.accept(id, generation, execution, snapshot);
                     }
                     Ok(DatabaseResponse::Progress { id, phase }) => {
                         if self
@@ -441,6 +406,53 @@ impl Frontend {
             }
         }
     }
+    fn accept(
+        &mut self,
+        id: OperationId,
+        generation: ViewGeneration,
+        execution: AppResult<ExecutionOutcome>,
+        snapshot: AppResult<DatabaseSnapshot>,
+    ) {
+        if !self
+            .active
+            .as_ref()
+            .is_some_and(|(active, _, _)| *active == id)
+        {
+            return;
+        }
+        let error = match execution {
+            Ok(outcome) => {
+                if generation == self.generation {
+                    self.state.ui.last_command = outcome.status;
+                    if outcome.close_history {
+                        self.state.ui.history_view = false;
+                    }
+                }
+                None
+            }
+            Err(error) => Some(error),
+        };
+        match snapshot {
+            Ok(state) => {
+                if generation == self.generation {
+                    if let Some(error) = error {
+                        self.state.ui.last_command =
+                            PreviousCommand::new(Command::IllegalOperation, Some(error.present()));
+                    }
+                }
+                self.complete(id, generation, state);
+            }
+            Err(refresh) => self.fail(
+                id,
+                generation,
+                match error {
+                    Some(error) => error.with_cleanup(refresh),
+                    None => refresh,
+                },
+            ),
+        }
+    }
+
     fn fail(&mut self, id: OperationId, generation: ViewGeneration, error: AppError) {
         if !self
             .active
@@ -457,7 +469,12 @@ impl Frontend {
         }
         self.dirty = true;
     }
-    fn complete(&mut self, id: OperationId, generation: ViewGeneration, mut state: RenderState) {
+    fn complete(
+        &mut self,
+        id: OperationId,
+        generation: ViewGeneration,
+        mut state: DatabaseSnapshot,
+    ) {
         if !self
             .active
             .as_ref()
@@ -467,7 +484,6 @@ impl Frontend {
         }
         self.active = None;
         self.state.busy = false;
-        state.busy = false;
         if generation == self.generation {
             if self.moved_while_busy
                 && state.view.table_name == self.state.view.table_name
@@ -485,7 +501,7 @@ impl Frontend {
                     .min(state.view.headers.len().saturating_sub(1));
             }
             state.view.row = state.view.row.min(self.height.saturating_sub(1) as usize);
-            self.state = state;
+            self.state.snapshot = state;
         }
         self.dirty = true;
     }
@@ -497,13 +513,22 @@ impl Frontend {
         let operation = Operation {
             id,
             generation: self.generation,
-            command,
+            command: command.clone(),
             inputs,
             context: ViewContext {
+                table_name: Some(self.state.view.table_name.clone()),
+                row_offset: self.state.view.row_offset,
+                order_column: self.state.view.order_column.clone(),
+                ascending: self.state.view.ascending,
+                selected_sheets: self.state.selected_sheets.clone(),
                 row: self.state.view.row,
                 column: self.state.view.column,
                 selected_rows: self.state.selected_rows.clone(),
-                history_cursor: self.state.ui.history_cursor,
+                replay_index: self
+                    .state
+                    .ui
+                    .history_view
+                    .then_some(self.state.ui.history_cursor),
             },
             height: self.height,
             cancellation: cancellation.clone(),
@@ -518,7 +543,7 @@ impl Frontend {
     }
     fn key(&mut self, key: KeyEvent) -> AppResult<()> {
         self.dirty = true;
-        if self.state.ui.input_mode_state_machine.get_state() == InputMode::Editing {
+        if self.state.ui.editing.is_some() {
             return self.edit(key);
         }
         let command = Command::from(key);
@@ -571,6 +596,9 @@ impl Frontend {
                     self.submit(command, None)?;
                 }
             }
+            Command::ToggleSelection | Command::ClearSelection if self.state.special_selection => {
+                self.submit(command, None)?
+            }
             Command::ToggleSelection => {
                 if let Some(crate::model::datarow::DataItem::Integer(id)) = self
                     .state
@@ -579,8 +607,9 @@ impl Frontend {
                     .get(self.state.view.row)
                     .and_then(|row| row.get(*self.state.view.column_indexes.first()?))
                 {
-                    if !self.state.selected_rows.insert(*id) {
-                        self.state.selected_rows.remove(id);
+                    let id = *id;
+                    if !self.state.selected_rows.insert(id) {
+                        self.state.selected_rows.remove(&id);
                     }
                 }
             }
@@ -591,17 +620,28 @@ impl Frontend {
             }
             Command::None | Command::IllegalOperation | Command::HistoryClose => {}
             command if command.needs_input() => {
-                self.state.ui.queued_command =
-                    Some(super::command::QueuedCommand::new(command.clone()));
+                let current_name = if self.state.view.table_name == "table_of_tables" {
+                    self.state
+                        .view
+                        .headers
+                        .iter()
+                        .position(|header| header == "table_name")
+                        .and_then(|column| self.state.view.column_indexes.get(column))
+                        .and_then(|column| {
+                            self.state
+                                .view
+                                .rows
+                                .get(self.state.view.row)
+                                .and_then(|row| row.get(*column))
+                        })
+                        .map(ToString::to_string)
+                        .unwrap_or_default()
+                } else {
+                    self.state.view.table_name.clone()
+                };
+                let text = command.input_default(&current_name);
                 self.state.ui.last_command = PreviousCommand::new(command.clone(), None);
-                if command == Command::RenameTable {
-                    self.state.ui.input = self.state.view.table_name.clone();
-                    self.state.ui.character_index = self.state.ui.input.chars().count();
-                }
-                self.state
-                    .ui
-                    .input_mode_state_machine
-                    .transition(input::Event::StartEditing)?;
+                self.state.ui.editing = Some(EditingSession::new(command, text));
             }
             command => self.submit(command, None)?,
         }
@@ -632,70 +672,60 @@ impl Frontend {
         true
     }
     fn edit(&mut self, key: KeyEvent) -> AppResult<()> {
-        let ui = &mut self.state.ui;
-        let byte = ui
-            .input
+        let Some(session) = self.state.ui.editing.as_mut() else {
+            return Ok(());
+        };
+        let byte = session
+            .text
             .char_indices()
-            .nth(ui.character_index)
+            .nth(session.cursor)
             .map(|(i, _)| i)
-            .unwrap_or(ui.input.len());
+            .unwrap_or(session.text.len());
         match key.code {
             KeyCode::Esc | KeyCode::Char('c')
                 if key.code == KeyCode::Esc || key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                ui.input.clear();
-                ui.character_index = 0;
-                ui.queued_command = None;
-                ui.input_mode_state_machine
-                    .transition(input::Event::AbortEditing)?;
-                ui.input_mode_state_machine
-                    .transition(input::Event::Reset)?;
+                self.state.ui.editing = None;
             }
             KeyCode::Char(character) => {
-                ui.input.insert(byte, character);
-                ui.character_index += 1;
+                session.text.insert(byte, character);
+                session.cursor += 1;
             }
-            KeyCode::Backspace if ui.character_index > 0 => {
-                let previous = ui
-                    .input
+            KeyCode::Backspace if session.cursor > 0 => {
+                let previous = session
+                    .text
                     .char_indices()
-                    .nth(ui.character_index - 1)
+                    .nth(session.cursor - 1)
                     .map(|(index, _)| index)
                     .ok_or_else(|| AppError::invalid_input("Input cursor is out of bounds"))?;
-                ui.input.replace_range(previous..byte, "");
-                ui.character_index -= 1;
+                session.text.replace_range(previous..byte, "");
+                session.cursor -= 1;
             }
-            KeyCode::Left => ui.character_index = ui.character_index.saturating_sub(1),
+            KeyCode::Left => session.cursor = session.cursor.saturating_sub(1),
             KeyCode::Right => {
-                ui.character_index = (ui.character_index + 1).min(ui.input.chars().count())
+                session.cursor = (session.cursor + 1).min(session.text.chars().count())
             }
-            KeyCode::Tab => match TUI::get_external_editor_input(&ui.input) {
-                Ok(input) => {
-                    ui.character_index = input.chars().count();
-                    ui.input = input;
+            KeyCode::Tab => match TUI::get_external_editor_input(&session.text) {
+                Ok(text) => {
+                    session.cursor = text.chars().count();
+                    session.text = text;
                 }
-                Err(error) => ui.last_command.message = Some(error.present()),
+                Err(error) => self.state.ui.last_command.message = Some(error.present()),
             },
             KeyCode::Enter => {
-                let queued = ui
-                    .queued_command
-                    .as_mut()
-                    .ok_or_else(|| AppError::from("Missing command"))?;
-                let template = queued.command == Command::RegexTransform
-                    && queued.inputs.is_empty()
-                    && regex::Regex::new(&ui.input).is_ok_and(|regex| regex.captures_len() > 1);
-                queued.inputs.push(std::mem::take(&mut ui.input));
-                ui.character_index = 0;
+                let template = session.command == Command::RegexTransform
+                    && session.inputs.is_empty()
+                    && regex::Regex::new(&session.text).is_ok_and(|regex| regex.captures_len() > 1);
+                session.inputs.push(std::mem::take(&mut session.text));
+                session.cursor = 0;
                 if !template {
-                    let queued = ui
-                        .queued_command
+                    let session = self
+                        .state
+                        .ui
+                        .editing
                         .take()
                         .ok_or_else(|| AppError::from("Missing command"))?;
-                    ui.input_mode_state_machine
-                        .transition(input::Event::FinishEditing)?;
-                    ui.input_mode_state_machine
-                        .transition(input::Event::Reset)?;
-                    self.submit(queued.command, Some(queued.inputs))?;
+                    self.submit(session.command, Some(session.inputs))?;
                 }
             }
             _ => {}
@@ -725,13 +755,18 @@ mod tests {
         DatabaseRequest::Execute(Operation {
             id: OperationId(id),
             generation: ViewGeneration(id),
-            command,
+            command: command.clone(),
             inputs,
             context: ViewContext {
+                table_name: None,
+                row_offset: 0,
+                order_column: None,
+                ascending: true,
+                selected_sheets: HashSet::new(),
                 row: 0,
                 column: 1,
                 selected_rows: Selection::default(),
-                history_cursor: 0,
+                replay_index: (command == Command::HistoryReplay).then_some(0),
             },
             height: 20,
             cancellation,
@@ -784,9 +819,16 @@ mod tests {
         started.recv_timeout(Duration::from_secs(5)).unwrap();
         cancellation.store(true, Ordering::Relaxed);
         barrier.wait();
-        let DatabaseResponse::Completed { state, error, .. } = receive(&receive_results) else {
+        let DatabaseResponse::Completed {
+            snapshot,
+            execution,
+            ..
+        } = receive(&receive_results)
+        else {
             panic!("missing completion");
         };
+        let state = snapshot.unwrap();
+        let error = execution.err();
         assert!(error.unwrap().is_cancelled());
         assert_eq!(state.view.rows[0][1], DataItem::Text("one".into()));
         send.send(operation(
@@ -796,9 +838,16 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         ))
         .unwrap();
-        let DatabaseResponse::Completed { state, .. } = receive(&receive_results) else {
+        let DatabaseResponse::Completed {
+            snapshot,
+            execution,
+            ..
+        } = receive(&receive_results)
+        else {
             panic!("missing completion");
         };
+        execution.unwrap();
+        let state = snapshot.unwrap();
         assert_eq!(state.view.rows[0][1], DataItem::Text("next".into()));
         send.send(operation(
             3,
@@ -807,10 +856,73 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         ))
         .unwrap();
-        let DatabaseResponse::Completed { state, .. } = receive(&receive_results) else {
+        let DatabaseResponse::Completed {
+            snapshot,
+            execution,
+            ..
+        } = receive(&receive_results)
+        else {
             panic!("missing undo");
         };
+        execution.unwrap();
+        let state = snapshot.unwrap();
         assert_eq!(state.view.rows[0][1], DataItem::Text("one".into()));
+        drop(send);
+        worker.join().unwrap().unwrap();
+    }
+    #[test]
+    fn synchronous_worker_and_replay_agree_on_edits_and_failures() {
+        let mut synchronous = controller();
+        synchronous.refresh_page(100).unwrap();
+        synchronous.view.column = 1;
+        let (send, requests) = mpsc::sync_channel(1);
+        let (responses, receiver) = mpsc::sync_channel(1);
+        let worker = thread::spawn(move || serve(controller(), requests, responses));
+        assert!(matches!(receive(&receiver), DatabaseResponse::Ready(_)));
+        let commands = [
+            (Command::Edit, vec!["changed".into()]),
+            (
+                Command::SqlQuery,
+                vec!["UPDATE missing SET name='bad'".into()],
+            ),
+            (Command::Undo, vec![]),
+            (Command::HistoryReplay, vec![]),
+            (Command::Undo, vec![]),
+            (Command::Frequency, vec![]),
+            (Command::ToggleSelection, vec![]),
+        ];
+        for (index, (command, inputs)) in commands.into_iter().enumerate() {
+            let (result, _) = synchronous.execute_and_snapshot(
+                command.clone(),
+                inputs.clone(),
+                (command == Command::HistoryReplay).then_some(0),
+            );
+            send.send(operation(
+                index as u64 + 1,
+                command.clone(),
+                command.needs_input().then_some(inputs),
+                Arc::new(AtomicBool::new(false)),
+            ))
+            .unwrap();
+            let DatabaseResponse::Completed {
+                snapshot,
+                execution,
+                ..
+            } = receive(&receiver)
+            else {
+                panic!("missing completion")
+            };
+            let error = execution.err();
+            let state = snapshot.unwrap();
+            assert_eq!(result.is_err(), error.is_some());
+            assert_eq!(synchronous.view.headers, state.view.headers);
+            assert_eq!(synchronous.view.rows, state.view.rows);
+            assert_eq!(*synchronous.selected_rows, *state.selected_rows);
+            assert_eq!(
+                synchronous.command_history.len(),
+                state.command_history.len()
+            );
+        }
         drop(send);
         worker.join().unwrap().unwrap();
     }
@@ -821,7 +933,13 @@ mod tests {
         controller.refresh_page(100).unwrap();
         (
             Frontend {
-                state: RenderState::from_controller(&controller).unwrap(),
+                state: RenderState {
+                    snapshot: DatabaseSnapshot::from_controller(&controller).unwrap(),
+                    ui: UiState::default(),
+                    busy: false,
+                    busy_phase: "Working",
+                    busy_frame: 0,
+                },
                 requests,
                 responses,
                 next_id: 1,
@@ -843,12 +961,12 @@ mod tests {
     #[test]
     fn stale_responses_cannot_replace_active_view() {
         let (mut frontend, _) = frontend();
-        let mut stale = frontend.state.clone();
+        let mut stale = frontend.state.snapshot.clone();
         stale.view.table_name = "wrong".into();
         frontend.complete(OperationId(0), ViewGeneration(0), stale);
         assert_eq!(frontend.state.view.table_name, "t");
         assert!(frontend.active.is_some());
-        let current = frontend.state.clone();
+        let current = frontend.state.snapshot.clone();
         frontend.complete(OperationId(1), ViewGeneration(1), current);
         assert!(frontend.active.is_none());
     }
@@ -878,7 +996,7 @@ mod tests {
     #[test]
     fn cached_navigation_is_preserved_when_operation_completes() {
         let (mut frontend, _) = frontend();
-        let response = frontend.state.clone();
+        let response = frontend.state.snapshot.clone();
         frontend
             .key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE))
             .unwrap();
@@ -903,8 +1021,8 @@ mod tests {
         frontend
             .key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE))
             .unwrap();
-        assert_eq!(frontend.state.ui.input, "🙂");
-        assert_eq!(frontend.state.ui.character_index, 0);
+        assert_eq!(frontend.state.ui.editing.as_ref().unwrap().text, "🙂");
+        assert_eq!(frontend.state.ui.editing.as_ref().unwrap().cursor, 0);
         frontend
             .key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
             .unwrap();
@@ -919,10 +1037,7 @@ mod tests {
         frontend
             .key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
             .unwrap();
-        assert_eq!(
-            frontend.state.ui.input_mode_state_machine.get_state(),
-            InputMode::Editing
-        );
+        assert!(frontend.state.ui.editing.is_some());
         assert!(receiver.try_recv().is_err());
         for character in "$1$1".chars() {
             frontend
@@ -982,7 +1097,7 @@ mod tests {
             .database
             .connection
             .authorizer(Some(|_: AuthContext<'_>| Authorization::Deny));
-        assert!(RenderState::from_controller(&controller).is_err());
+        assert!(DatabaseSnapshot::from_controller(&controller).is_err());
     }
 
     #[test]
@@ -1018,20 +1133,131 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         ))
         .unwrap();
-        let DatabaseResponse::OperationFailed { id, error, .. } = receive(&receiver) else {
+        let DatabaseResponse::Completed {
+            id,
+            snapshot,
+            execution,
+            ..
+        } = receive(&receiver)
+        else {
             panic!("missing refresh failure")
         };
+        execution.unwrap();
+        let error = snapshot.unwrap_err();
         assert_eq!(id, OperationId(1));
         assert!(error
             .to_string()
             .contains("Command completed; page could not be loaded"));
         send.send(operation(2, Command::SqlQuery, Some(vec!["CREATE TABLE t(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO t VALUES(1,'recovered')".into()]), Arc::new(AtomicBool::new(false)))).unwrap();
-        let DatabaseResponse::Completed { state, error, .. } = receive(&receiver) else {
+        let DatabaseResponse::Completed {
+            snapshot,
+            execution,
+            ..
+        } = receive(&receiver)
+        else {
             panic!("missing recovery")
         };
+        let state = snapshot.unwrap();
+        let error = execution.err();
         assert!(error.is_none());
         assert_eq!(state.view.rows[0][1], DataItem::Text("recovered".into()));
         drop(send);
         worker.join().unwrap().unwrap();
+    }
+    #[test]
+    fn completion_preserves_frontend_editing_and_history_navigation() {
+        let (mut frontend, _) = frontend();
+        frontend.state.ui.editing = Some(EditingSession::new(Command::Edit, "α🙂".into()));
+        frontend.state.ui.history_view = true;
+        frontend.state.ui.history_cursor = 3;
+        frontend.accept(
+            OperationId(1),
+            ViewGeneration(1),
+            Ok(ExecutionOutcome::default()),
+            Ok(frontend.state.snapshot.clone()),
+        );
+        assert_eq!(frontend.state.ui.editing.as_ref().unwrap().text, "α🙂");
+        assert!(frontend.state.ui.history_view);
+        assert_eq!(frontend.state.ui.history_cursor, 3);
+    }
+
+    #[test]
+    fn special_selection_is_sent_with_explicit_view_context() {
+        let (mut frontend, receiver) = frontend();
+        frontend.active = None;
+        frontend.state.special_selection = true;
+        frontend.state.view.row_offset = 20;
+        frontend.state.selected_sheets.insert("t".into());
+        frontend
+            .key(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE))
+            .unwrap();
+        let DatabaseRequest::Execute(operation) = receiver.try_recv().unwrap();
+        assert_eq!(operation.command, Command::ToggleSelection);
+        assert_eq!(operation.context.table_name.as_deref(), Some("t"));
+        assert_eq!(operation.context.row_offset, 20);
+        assert!(operation.context.selected_sheets.contains("t"));
+        frontend.active = None;
+        frontend
+            .key(KeyEvent::new(KeyCode::Char('U'), KeyModifiers::NONE))
+            .unwrap();
+        let DatabaseRequest::Execute(operation) = receiver.try_recv().unwrap();
+        assert_eq!(operation.command, Command::ClearSelection);
+    }
+
+    #[test]
+    fn cached_sheet_highlight_prefills_rename_for_the_highlighted_sheet() {
+        let (mut frontend, _) = frontend();
+        frontend.active = None;
+        frontend.state.view.table_name = "table_of_tables".into();
+        frontend.state.view.headers = vec!["table_name".into()];
+        frontend.state.view.column_indexes = vec![0];
+        frontend.state.view.rows = Arc::new(vec![
+            vec![DataItem::Text("first".into())],
+            vec![DataItem::Text("føø🙂".into())],
+        ]);
+        frontend.state.view.row = 1;
+        frontend
+            .key(KeyEvent::new(KeyCode::Char('R'), KeyModifiers::NONE))
+            .unwrap();
+        let session = frontend.state.ui.editing.as_ref().unwrap();
+        assert_eq!(session.text, "føø🙂");
+        assert_eq!(session.cursor, 4);
+    }
+
+    #[test]
+    fn failed_execution_remains_primary_when_snapshot_also_fails() {
+        let (mut frontend, _) = frontend();
+        let rows = frontend.state.view.rows.clone();
+        frontend.accept(
+            OperationId(1),
+            ViewGeneration(1),
+            Err(AppError::invalid_input("primary execution error")),
+            Err(AppError::from("snapshot error")),
+        );
+        assert!(frontend
+            .state
+            .ui
+            .last_command
+            .message
+            .as_ref()
+            .unwrap()
+            .starts_with("primary execution error"));
+        assert!(Arc::ptr_eq(&rows, &frontend.state.view.rows));
+        assert!(frontend.active.is_none());
+    }
+
+    #[test]
+    fn cancelled_view_only_command_does_not_execute_or_enter_history() {
+        let mut controller = controller();
+        controller.refresh_page(100).unwrap();
+        controller
+            .database
+            .cancellation
+            .store(true, Ordering::Relaxed);
+        let (execution, snapshot) = controller.execute_and_snapshot(Command::Sort, vec![], None);
+        assert!(execution.unwrap_err().is_cancelled());
+        assert!(snapshot.is_ok());
+        assert!(controller.command_history.is_empty());
+        assert_eq!(controller.view.order_column.as_deref(), Some("id"));
     }
 }

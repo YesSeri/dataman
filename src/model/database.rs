@@ -214,42 +214,10 @@ impl Database {
         operation: impl FnOnce() -> AppResult<T>,
         invalidate_all: bool,
     ) -> AppResult<T> {
-        if !self.connection.is_autocommit() {
-            return operation();
-        }
-        // Keep the transaction guard for rollback during unwinding. Commit and
-        // rollback are explicit so failures from both can be retained.
-        let mut transaction = self.connection.unchecked_transaction()?;
-        let result = operation().and_then(|value| {
-            self.check_cancelled()?;
-            Ok(value)
-        });
-        // COMMIT/ROLLBACK are the operation boundary. A late cancellation must not
-        // interrupt rollback or turn a successfully committed mutation into an error.
-        self.connection.progress_handler(0, None::<fn() -> bool>);
-        let result = result.and_then(|value| {
-            self.connection.execute_batch("COMMIT")?;
-            Ok(value)
-        });
-        let result = match result {
-            Err(error) => {
-                let cleanup = if self.connection.is_autocommit() {
-                    Ok(())
-                } else {
-                    self.connection
-                        .execute_batch("ROLLBACK")
-                        .map_err(AppError::from)
-                };
-                crate::error::finish(
-                    Err(error.normalize_cancelled(self.cancellation.load(Ordering::Relaxed))),
-                    cleanup,
-                )
-            }
-            success => success,
-        };
-        transaction.set_drop_behavior(rusqlite::DropBehavior::Ignore);
-        Self::install_cancellation(&self.connection, self.cancellation.clone());
-        if invalidate_all || result.is_err() {
+        let owns_transaction = self.connection.is_autocommit();
+        let result =
+            super::transaction::atomic(&self.connection, Some(&self.cancellation), operation);
+        if owns_transaction && (invalidate_all || result.is_err()) {
             self.invalidate();
         }
         result
@@ -2684,7 +2652,7 @@ mod performance_regressions {
                 Authorization::Allow
             }));
         controller.get_headers_and_rows(100).unwrap();
-        let _ = crate::controller::worker::RenderState::from_controller(&controller);
+        let _ = crate::controller::worker::DatabaseSnapshot::from_controller(&controller);
         assert_eq!(queries.load(Ordering::Relaxed), 0);
     }
 
