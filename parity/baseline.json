@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "revision": "fdd4318abe088a20e3f7688eba0b2e4091231761",
+  "checks": [
+    {"command": "cargo test --all-targets", "status": "passing", "library_passed": 148, "library_ignored": 1, "library_failed": 0, "benchmarks": "passing"}
+  ],
+  "inherited_failures": [],
+  "note": "Ignored rendering benchmark is not parity coverage. Original full log is retained locally at /tmp/dataman-baseline.log."
+}

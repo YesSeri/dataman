@@ -134,3 +134,10 @@ Database operations run on a worker while the terminal displays cached data. Dur
 Exports are streamed to a temporary output and replace the destination only after success. Saving over the currently open SQLite source is rejected; choose another output path.
 
 Developer benchmarks, architecture details, and measurement instructions are in [docs/performance.md](docs/performance.md).
+
+### Parity automation and interaction profiles
+
+VisiData is now the default keymap, initially with a small verified binding subset.
+Use `dataman --keymap dataman input.csv` to retain the bindings documented above.
+See [the parity contract and runner guide](docs/parity.md) for pinned VisiData setup,
+batch JSONL replay, structured snapshots, coverage, and isolated local agent runs.

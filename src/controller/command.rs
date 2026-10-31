@@ -64,6 +64,7 @@ pub enum Command {
     DeleteSelected,
     CopySelected,
     ClearSelection,
+    InvertSelection,
 }
 
 impl Command {
@@ -164,7 +165,8 @@ impl Command {
             | Command::SelectRegex
             | Command::DeleteSelected
             | Command::CopySelected
-            | Command::ClearSelection => true,
+            | Command::ClearSelection
+            | Command::InvertSelection => true,
             Command::None
             | Command::IllegalOperation
             | Command::Save
@@ -222,6 +224,7 @@ impl Command {
             Command::DeleteSelected => "Delete Selected Rows".to_string(),
             Command::CopySelected => "Copy Selected Rows".to_string(),
             Command::ClearSelection => "Clear Selection".to_string(),
+            Command::InvertSelection => "Invert Selection".to_string(),
         }
     }
 }
@@ -288,7 +291,7 @@ impl From<KeyEvent> for Command {
     }
 }
 
-fn normalized_key(key: &KeyEvent) -> String {
+pub(crate) fn normalized_key(key: &KeyEvent) -> String {
     let key_name = match key.code {
         KeyCode::Char(' ') => "space".to_owned(),
         KeyCode::Char(c) => c.to_string(),
@@ -299,6 +302,8 @@ fn normalized_key(key: &KeyEvent) -> String {
         KeyCode::F(number) => format!("f{number}"),
         KeyCode::Enter => "enter".to_owned(),
         KeyCode::Esc => "esc".to_owned(),
+        KeyCode::Backspace => "backspace".to_owned(),
+        KeyCode::Tab => "tab".to_owned(),
         _ => return String::new(),
     };
     if key.modifiers.contains(KeyModifiers::CONTROL) {

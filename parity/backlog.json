@@ -1,0 +1,2264 @@
+{
+  "schema_version": 1,
+  "inputs": [
+    "README.md",
+    "todo.md",
+    "src/"
+  ],
+  "missing_inputs": [
+    "Separate feature audit and upstream inventory were not present in this checkout"
+  ],
+  "tasks": [
+    {
+      "id": "foundation-session",
+      "scope": "Shared registry/session/replay and full snapshots",
+      "dependencies": [],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/blob/v3.5/dev/TESTING.md"
+      ],
+      "acceptance_scenarios": [
+        "foundation-regression"
+      ],
+      "design_decisions": [],
+      "execution_ready": true,
+      "implementation_state": "implemented",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "foundation-harness",
+      "scope": "Pinned oracle and exact comparator",
+      "dependencies": [],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/blob/v3.5/dev/TESTING.md"
+      ],
+      "acceptance_scenarios": [
+        "foundation-regression"
+      ],
+      "design_decisions": [],
+      "execution_ready": true,
+      "implementation_state": "implemented",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "foundation-runner",
+      "scope": "Durable isolated task execution",
+      "dependencies": [],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/blob/v3.5/dev/TESTING.md"
+      ],
+      "acceptance_scenarios": [
+        "foundation-regression"
+      ],
+      "design_decisions": [],
+      "execution_ready": true,
+      "implementation_state": "implemented",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "navigation-cursor",
+      "scope": "Core navigation: cursor",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-navigation-cursor",
+        "interaction-navigation-cursor"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "navigation-paging",
+      "scope": "Core navigation: paging",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-navigation-paging",
+        "interaction-navigation-paging"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "navigation-search-forward",
+      "scope": "Core navigation: search-forward",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-navigation-search-forward",
+        "interaction-navigation-search-forward"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "navigation-search-backward",
+      "scope": "Core navigation: search-backward",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-navigation-search-backward",
+        "interaction-navigation-search-backward"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "navigation-search-next",
+      "scope": "Core navigation: search-next",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-navigation-search-next",
+        "interaction-navigation-search-next"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "navigation-jump-row",
+      "scope": "Core navigation: jump-row",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-navigation-jump-row",
+        "interaction-navigation-jump-row"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "navigation-jump-column",
+      "scope": "Core navigation: jump-column",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-navigation-jump-column",
+        "interaction-navigation-jump-column"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "sheets-list",
+      "scope": "Core sheets: list",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-sheets-list",
+        "interaction-sheets-list"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "sheets-switch",
+      "scope": "Core sheets: switch",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-sheets-switch",
+        "interaction-sheets-switch"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "sheets-previous",
+      "scope": "Core sheets: previous",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-sheets-previous",
+        "interaction-sheets-previous"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "sheets-rename",
+      "scope": "Core sheets: rename",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-sheets-rename",
+        "interaction-sheets-rename"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "sheets-delete",
+      "scope": "Core sheets: delete",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-sheets-delete",
+        "interaction-sheets-delete"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "sheets-duplicate",
+      "scope": "Core sheets: duplicate",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-sheets-duplicate",
+        "interaction-sheets-duplicate"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "sheets-stable-ids",
+      "scope": "Core sheets: stable-ids",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-sheets-stable-ids",
+        "interaction-sheets-stable-ids"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "sheets-source-provenance",
+      "scope": "Core sheets: source-provenance",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-sheets-source-provenance",
+        "interaction-sheets-source-provenance"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "columns-rename",
+      "scope": "Core columns: rename",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-columns-rename",
+        "interaction-columns-rename"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "columns-hide",
+      "scope": "Core columns: hide",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-columns-hide",
+        "interaction-columns-hide"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "columns-show",
+      "scope": "Core columns: show",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-columns-show",
+        "interaction-columns-show"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "columns-reorder",
+      "scope": "Core columns: reorder",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-columns-reorder",
+        "interaction-columns-reorder"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "columns-width",
+      "scope": "Core columns: width",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-columns-width",
+        "interaction-columns-width"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "columns-key-markers",
+      "scope": "Core columns: key-markers",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-columns-key-markers",
+        "interaction-columns-key-markers"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "columns-freeze",
+      "scope": "Core columns: freeze",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-columns-freeze",
+        "interaction-columns-freeze"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "selection-toggle-row",
+      "scope": "Core selection: toggle-row",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-selection-toggle-row",
+        "interaction-selection-toggle-row"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "selection-select-row",
+      "scope": "Core selection: select-row",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-selection-select-row",
+        "interaction-selection-select-row"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "selection-unselect-row",
+      "scope": "Core selection: unselect-row",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-selection-unselect-row",
+        "interaction-selection-unselect-row"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "selection-select-all",
+      "scope": "Core selection: select-all",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-selection-select-all",
+        "interaction-selection-select-all"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "selection-clear",
+      "scope": "Core selection: clear",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-selection-clear",
+        "interaction-selection-clear"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "selection-invert",
+      "scope": "Core selection: invert",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/blob/f730c389e601dc156c42eb80acb1302d7d268f55/visidata/selection.py#L215"
+      ],
+      "acceptance_scenarios": [
+        "invert-empty-selection-behavioral",
+        "invert-empty-selection-interaction",
+        "invert-all-selected-behavioral",
+        "invert-all-selected-interaction",
+        "invert-partial-behavioral",
+        "invert-partial-interaction",
+        "invert-duplicates-behavioral",
+        "invert-duplicates-interaction",
+        "invert-sorted-behavioral",
+        "invert-sorted-interaction",
+        "invert-repeated-behavioral",
+        "invert-repeated-interaction",
+        "invert-empty-sheet-behavioral",
+        "invert-isolation-behavioral",
+        "invert-empty-sheet-interaction",
+        "invert-isolation-interaction"
+      ],
+      "design_decisions": [],
+      "execution_ready": true,
+      "implementation_state": "missing",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified",
+      "verification_commands": [
+        [
+          "python3",
+          "{root}/tools/mutations.py",
+          "--binary",
+          "{binary}"
+        ]
+      ]
+    },
+    {
+      "id": "selection-regex-column",
+      "scope": "Core selection: regex-column",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-selection-regex-column",
+        "interaction-selection-regex-column"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "selection-regex-all",
+      "scope": "Core selection: regex-all",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-selection-regex-all",
+        "interaction-selection-regex-all"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "selection-expression",
+      "scope": "Core selection: expression",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-selection-expression",
+        "interaction-selection-expression"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "selection-duplicates",
+      "scope": "Core selection: duplicates",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-selection-duplicates",
+        "interaction-selection-duplicates"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "selection-bulk-edit",
+      "scope": "Core selection: bulk-edit",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-selection-bulk-edit",
+        "interaction-selection-bulk-edit"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "selection-delete",
+      "scope": "Core selection: delete",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-selection-delete",
+        "interaction-selection-delete"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "selection-copy",
+      "scope": "Core selection: copy",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-selection-copy",
+        "interaction-selection-copy"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "selection-sheet-isolation",
+      "scope": "Core selection: sheet-isolation",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-selection-sheet-isolation",
+        "interaction-selection-sheet-isolation"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "editing-cell",
+      "scope": "Core editing: cell",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-editing-cell",
+        "interaction-editing-cell"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "editing-regex-transform",
+      "scope": "Core editing: regex-transform",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-editing-regex-transform",
+        "interaction-editing-regex-transform"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "editing-expression",
+      "scope": "Core editing: expression",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-editing-expression",
+        "interaction-editing-expression"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "editing-undo",
+      "scope": "Core editing: undo",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-editing-undo",
+        "interaction-editing-undo"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "editing-redo",
+      "scope": "Core editing: redo",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-editing-redo",
+        "interaction-editing-redo"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "editing-external-editor",
+      "scope": "Core editing: external-editor",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-editing-external-editor",
+        "interaction-editing-external-editor"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "logical-types-text",
+      "scope": "Core logical-types: text",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-logical-types-text",
+        "interaction-logical-types-text"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "logical-types-integer",
+      "scope": "Core logical-types: integer",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-logical-types-integer",
+        "interaction-logical-types-integer"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "logical-types-float",
+      "scope": "Core logical-types: float",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-logical-types-float",
+        "interaction-logical-types-float"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "logical-types-date",
+      "scope": "Core logical-types: date",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-logical-types-date",
+        "interaction-logical-types-date"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "logical-types-boolean",
+      "scope": "Core logical-types: boolean",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-logical-types-boolean",
+        "interaction-logical-types-boolean"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "logical-types-null-empty",
+      "scope": "Core logical-types: null-empty",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-logical-types-null-empty",
+        "interaction-logical-types-null-empty"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "logical-types-errors",
+      "scope": "Core logical-types: errors",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-logical-types-errors",
+        "interaction-logical-types-errors"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "logical-types-conversion",
+      "scope": "Core logical-types: conversion",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-logical-types-conversion",
+        "interaction-logical-types-conversion"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "transformations-filter",
+      "scope": "Core transformations: filter",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-transformations-filter",
+        "interaction-transformations-filter"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "transformations-derive-column",
+      "scope": "Core transformations: derive-column",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-transformations-derive-column",
+        "interaction-transformations-derive-column"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "transformations-split",
+      "scope": "Core transformations: split",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-transformations-split",
+        "interaction-transformations-split"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "transformations-melt",
+      "scope": "Core transformations: melt",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-transformations-melt",
+        "interaction-transformations-melt"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "transformations-transpose",
+      "scope": "Core transformations: transpose",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-transformations-transpose",
+        "interaction-transformations-transpose"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "transformations-group",
+      "scope": "Core transformations: group",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-transformations-group",
+        "interaction-transformations-group"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "transformations-pivot",
+      "scope": "Core transformations: pivot",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-transformations-pivot",
+        "interaction-transformations-pivot"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "transformations-fill",
+      "scope": "Core transformations: fill",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-transformations-fill",
+        "interaction-transformations-fill"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "analysis-frequency",
+      "scope": "Core analysis: frequency",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-analysis-frequency",
+        "interaction-analysis-frequency"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "analysis-describe",
+      "scope": "Core analysis: describe",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-analysis-describe",
+        "interaction-analysis-describe"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "analysis-aggregators",
+      "scope": "Core analysis: aggregators",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-analysis-aggregators",
+        "interaction-analysis-aggregators"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "analysis-group-drilldown",
+      "scope": "Core analysis: group-drilldown",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-analysis-group-drilldown",
+        "interaction-analysis-group-drilldown"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "combine-append",
+      "scope": "Core combine: append",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-combine-append",
+        "interaction-combine-append"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "combine-inner-join",
+      "scope": "Core combine: inner-join",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-combine-inner-join",
+        "interaction-combine-inner-join"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "combine-left-join",
+      "scope": "Core combine: left-join",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-combine-left-join",
+        "interaction-combine-left-join"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "combine-full-join",
+      "scope": "Core combine: full-join",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-combine-full-join",
+        "interaction-combine-full-join"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "combine-composite-keys",
+      "scope": "Core combine: composite-keys",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-combine-composite-keys",
+        "interaction-combine-composite-keys"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "local-io-csv-load",
+      "scope": "Core local-io: csv-load",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-local-io-csv-load",
+        "interaction-local-io-csv-load"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "local-io-csv-save",
+      "scope": "Core local-io: csv-save",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-local-io-csv-save",
+        "interaction-local-io-csv-save"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "local-io-tsv-load",
+      "scope": "Core local-io: tsv-load",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-local-io-tsv-load",
+        "interaction-local-io-tsv-load"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "local-io-tsv-save",
+      "scope": "Core local-io: tsv-save",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-local-io-tsv-save",
+        "interaction-local-io-tsv-save"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "local-io-sqlite-load",
+      "scope": "Core local-io: sqlite-load",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-local-io-sqlite-load",
+        "interaction-local-io-sqlite-load"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "local-io-sqlite-save",
+      "scope": "Core local-io: sqlite-save",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-local-io-sqlite-save",
+        "interaction-local-io-sqlite-save"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "local-io-source-immutability",
+      "scope": "Core local-io: source-immutability",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-local-io-source-immutability",
+        "interaction-local-io-source-immutability"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "replay-native-log",
+      "scope": "Core replay: native-log",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-replay-native-log",
+        "interaction-replay-native-log"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "replay-vdj-adapter",
+      "scope": "Core replay: vdj-adapter",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-replay-vdj-adapter",
+        "interaction-replay-vdj-adapter"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "replay-full-vdj",
+      "scope": "Core replay: full-vdj",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-replay-full-vdj",
+        "interaction-replay-full-vdj"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "replay-context",
+      "scope": "Core replay: context",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-replay-context",
+        "interaction-replay-context"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "replay-persistent-log",
+      "scope": "Core replay: persistent-log",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-replay-persistent-log",
+        "interaction-replay-persistent-log"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "replay-error-diagnostics",
+      "scope": "Core replay: error-diagnostics",
+      "dependencies": [
+        "foundation-session",
+        "foundation-harness",
+        "foundation-runner"
+      ],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata",
+        "README.md#visidata-workflow-roadmap-status",
+        "todo.md"
+      ],
+      "acceptance_scenarios": [
+        "core-replay-error-diagnostics",
+        "interaction-replay-error-diagnostics"
+      ],
+      "design_decisions": [
+        "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+      ],
+      "execution_ready": false,
+      "implementation_state": "unknown",
+      "verification_state": "unverified",
+      "dimension": "behavioral",
+      "interaction_verification_state": "unverified"
+    },
+    {
+      "id": "deferred-additional-formats",
+      "scope": "additional-formats",
+      "dependencies": [],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata"
+      ],
+      "acceptance_scenarios": [],
+      "design_decisions": [
+        "Outside core parity"
+      ],
+      "execution_ready": false,
+      "implementation_state": "deferred",
+      "verification_state": "deferred",
+      "dimension": "behavioral",
+      "interaction_verification_state": "deferred"
+    },
+    {
+      "id": "deferred-remote-connectors",
+      "scope": "remote-connectors",
+      "dependencies": [],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata"
+      ],
+      "acceptance_scenarios": [],
+      "design_decisions": [
+        "Outside core parity"
+      ],
+      "execution_ready": false,
+      "implementation_state": "deferred",
+      "verification_state": "deferred",
+      "dimension": "behavioral",
+      "interaction_verification_state": "deferred"
+    },
+    {
+      "id": "deferred-plotting",
+      "scope": "plotting",
+      "dependencies": [],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata"
+      ],
+      "acceptance_scenarios": [],
+      "design_decisions": [
+        "Outside core parity"
+      ],
+      "execution_ready": false,
+      "implementation_state": "deferred",
+      "verification_state": "deferred",
+      "dimension": "behavioral",
+      "interaction_verification_state": "deferred"
+    },
+    {
+      "id": "deferred-python-plugins",
+      "scope": "python-plugins",
+      "dependencies": [],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata"
+      ],
+      "acceptance_scenarios": [],
+      "design_decisions": [
+        "Outside core parity"
+      ],
+      "execution_ready": false,
+      "implementation_state": "deferred",
+      "verification_state": "deferred",
+      "dimension": "behavioral",
+      "interaction_verification_state": "deferred"
+    },
+    {
+      "id": "deferred-bundled-apps",
+      "scope": "bundled-apps",
+      "dependencies": [],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata"
+      ],
+      "acceptance_scenarios": [],
+      "design_decisions": [
+        "Outside core parity"
+      ],
+      "execution_ready": false,
+      "implementation_state": "deferred",
+      "verification_state": "deferred",
+      "dimension": "behavioral",
+      "interaction_verification_state": "deferred"
+    },
+    {
+      "id": "deferred-experiments",
+      "scope": "experiments",
+      "dependencies": [],
+      "upstream_evidence": [
+        "https://github.com/saulpw/visidata/tree/v3.5/visidata"
+      ],
+      "acceptance_scenarios": [],
+      "design_decisions": [
+        "Outside core parity"
+      ],
+      "execution_ready": false,
+      "implementation_state": "deferred",
+      "verification_state": "deferred",
+      "dimension": "behavioral",
+      "interaction_verification_state": "deferred"
+    }
+  ]
+}

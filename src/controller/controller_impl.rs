@@ -24,7 +24,8 @@ struct PreparedCommand {
 }
 impl PreparedCommand {
     fn new(command: Command, inputs: Vec<String>, controller: &Controller) -> AppResult<Self> {
-        command.validate_inputs(&inputs)?;
+        crate::automation::registry::validate(&command, &inputs)
+            .map_err(AppError::invalid_input)?;
         let action = match command {
             Command::HistoryReplay if controller.view.table_name == "table_of_tables" => {
                 PreparedAction::OpenSheet
@@ -221,7 +222,7 @@ struct SourcePage {
 
 /// Data produced by execution, independent of terminal interaction.
 #[derive(Debug, Clone)]
-pub(super) struct ExecutionOutcome {
+pub(crate) struct ExecutionOutcome {
     pub(crate) status: PreviousCommand,
     pub(crate) close_history: bool,
     pub(crate) affected_sources: Vec<String>,
@@ -1692,6 +1693,9 @@ impl Controller {
                 Command::Frequency => self.show_analysis(true),
                 Command::ToggleSelection => self.toggle_selection(),
                 Command::ClearSelection => self.clear_selection(),
+                Command::InvertSelection => Err(AppError::invalid_input(
+                    "invert selection is not implemented",
+                )),
                 Command::DeleteSelected if self.view.table_name == "table_of_tables" => {
                     self.delete_table()
                 }
@@ -1798,7 +1802,7 @@ impl Controller {
                 .get(&self.view.table_name)
                 .is_some_and(|sheet| sheet.metadata.frequency.is_some())
     }
-    pub(super) fn prepare_snapshot(&mut self) -> AppResult<super::worker::DatabaseSnapshot> {
+    pub(crate) fn prepare_snapshot(&mut self) -> AppResult<super::worker::DatabaseSnapshot> {
         if self.sheet_list_revision != Some(self.database.revision()) {
             self.refresh_sheet_list()?;
             self.reconcile_registry()?;
@@ -1808,7 +1812,7 @@ impl Controller {
         super::worker::DatabaseSnapshot::from_controller(self)
     }
 
-    pub(super) fn execute_and_snapshot(
+    pub(crate) fn execute_and_snapshot(
         &mut self,
         command: Command,
         inputs: Vec<String>,
@@ -3958,5 +3962,209 @@ mod history_tests {
         controller.switch_sheet("other".into()).unwrap();
         assert_eq!(controller.view.row, 1);
         assert!(controller.selected_rows.contains(&2));
+    }
+}
+
+impl Controller {
+    pub(crate) fn automation_context(
+        &mut self,
+        sheet: &str,
+        row: usize,
+        column: usize,
+    ) -> Result<(), String> {
+        if !self.sheet_order.iter().any(|s| s == sheet) {
+            return Err(format!("missing sheet: {sheet}"));
+        }
+        self.switch_sheet(sheet.into()).map_err(|e| e.to_string())?;
+        let count = self.database.count_rows(sheet).map_err(|e| e.to_string())? as usize;
+        self.refresh_page(100).map_err(|e| e.to_string())?;
+        if row >= count.max(1) || column >= self.view.headers.len() {
+            return Err("cursor out of bounds".into());
+        }
+        self.view.row_offset = row as u32;
+        self.view.row = 0;
+        self.view.column = column;
+        self.refresh_page(100).map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub(crate) fn automation_snapshot(&mut self) -> Result<serde_json::Value, String> {
+        self.automation_snapshot_data(true)
+    }
+    pub(crate) fn automation_write_snapshot(
+        &mut self,
+        mut out: impl std::io::Write,
+        extra: serde_json::Value,
+    ) -> Result<(), String> {
+        use serde_json::{json, Value};
+        let mut metadata = self.automation_snapshot_data(false)?;
+        for (key, value) in extra.as_object().ok_or("invalid snapshot context")? {
+            metadata[key] = value.clone();
+        }
+        let sheets = metadata["sheets"]
+            .take()
+            .as_array()
+            .ok_or("missing sheets")?
+            .clone();
+        metadata.as_object_mut().unwrap().remove("sheets");
+        let mut prefix = serde_json::to_vec(&metadata).map_err(|e| e.to_string())?;
+        prefix.pop();
+        out.write_all(&prefix).map_err(|e| e.to_string())?;
+        out.write_all(b",\"sheets\":[").map_err(|e| e.to_string())?;
+        for (index, mut sheet) in sheets.into_iter().enumerate() {
+            if index > 0 {
+                out.write_all(b",").map_err(|e| e.to_string())?;
+            }
+            let name = sheet["alias"].as_str().ok_or("missing alias")?.to_owned();
+            let order = if let Some(column) = sheet["sort"]["column"].as_str() {
+                format!(
+                    "ORDER BY \"{}\" {}",
+                    column.replace('"', "\"\""),
+                    if sheet["sort"]["ascending"] == true {
+                        "ASC"
+                    } else {
+                        "DESC"
+                    }
+                )
+            } else {
+                String::new()
+            };
+            let selection = if name == self.view.table_name {
+                self.selected_rows.clone()
+            } else {
+                self.sheets
+                    .get(&name)
+                    .and_then(|s| s.saved_view.as_ref())
+                    .map(|v| v.selection.clone())
+                    .unwrap_or_default()
+            };
+            sheet.as_object_mut().unwrap().remove("rows");
+            let mut prefix = serde_json::to_vec(&sheet).map_err(|e| e.to_string())?;
+            prefix.pop();
+            out.write_all(&prefix).map_err(|e| e.to_string())?;
+            out.write_all(b",\"rows\":[").map_err(|e| e.to_string())?;
+            let count = self.database.count_rows(&name).map_err(|e| e.to_string())?;
+            let mut first = true;
+            for offset in (0..count).step_by(1024) {
+                let (headers, rows) = self
+                    .database
+                    .get(1024, offset, &name, &order)
+                    .map_err(|e| e.to_string())?;
+                let id_index = headers
+                    .iter()
+                    .position(|h| h == "id")
+                    .ok_or("missing row identity")?;
+                for cells in rows {
+                    if !first {
+                        out.write_all(b",").map_err(|e| e.to_string())?;
+                    }
+                    first = false;
+                    let id = cells[id_index].to_string();
+                    let selected = id.parse::<i64>().is_ok_and(|i| selection.contains(&i));
+                    serde_json::to_writer(
+                        &mut out,
+                        &json!({"ref":id,"cells":cells,"selected":selected}),
+                    )
+                    .map_err(|e| e.to_string())?;
+                }
+            }
+            out.write_all(b"]}").map_err(|e| e.to_string())?;
+        }
+        out.write_all(b"]}").map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    fn automation_snapshot_data(
+        &mut self,
+        include_rows: bool,
+    ) -> Result<serde_json::Value, String> {
+        use serde_json::{json, Value};
+        self.prepare_snapshot().map_err(|e| e.to_string())?;
+        let mut sheets = Vec::new();
+        for name in &self.sheet_order {
+            let sheet = self.sheets.get(name).ok_or("missing sheet state")?;
+            if !sheet.present {
+                continue;
+            }
+            let active = *name == self.view.table_name;
+            let saved = sheet.saved_view.as_ref();
+            let selection = if active {
+                Some(&self.selected_rows)
+            } else {
+                saved.map(|v| &v.selection)
+            };
+            let sort = if active {
+                self.view.order_column.as_ref()
+            } else {
+                saved.and_then(|v| v.order_column.as_ref())
+            };
+            let ascending = if active {
+                self.view.ascending
+            } else {
+                saved.map(|v| v.ascending).unwrap_or(true)
+            };
+            let order = sort
+                .map(|c| {
+                    format!(
+                        "ORDER BY \"{}\" {}",
+                        c.replace('"', "\"\""),
+                        if ascending { "ASC" } else { "DESC" }
+                    )
+                })
+                .unwrap_or_default();
+            let count = self.database.count_rows(name).map_err(|e| e.to_string())?;
+            let headers = self.database.get_headers(name).map_err(|e| e.to_string())?;
+            let layout = if sheet.layout.order.is_empty() {
+                headers.clone()
+            } else {
+                sheet.layout.order.clone()
+            };
+            let mut rows = Vec::new();
+            for offset in (0..if include_rows { count } else { 0 }).step_by(1024) {
+                let (_, data) = self
+                    .database
+                    .get(1024, offset, name, &order)
+                    .map_err(|e| e.to_string())?;
+                for row in data {
+                    let id_index = headers
+                        .iter()
+                        .position(|h| h == "id")
+                        .ok_or("missing row identity")?;
+                    let id = row[id_index].to_string();
+                    let selected = id
+                        .parse::<i64>()
+                        .ok()
+                        .is_some_and(|id| selection.is_some_and(|s| s.contains(&id)));
+                    rows.push(json!({"ref":id,"cells":row,"selected":selected}));
+                }
+            }
+            let sources = sheet
+                .metadata
+                .derived
+                .as_ref()
+                .map(Self::derived_sources)
+                .unwrap_or_default();
+            let column_types = {
+                let query = format!("PRAGMA table_info(\"{}\")", name.replace('"', "\"\""));
+                let mut stmt = self
+                    .database
+                    .connection
+                    .prepare(&query)
+                    .map_err(|e| e.to_string())?;
+                let types = stmt
+                    .query_map([], |r| Ok((r.get::<_, String>(1)?, r.get::<_, String>(2)?)))
+                    .map_err(|e| e.to_string())?
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|e| e.to_string())?;
+                types
+            };
+            let mut hidden = sheet.layout.hidden.iter().collect::<Vec<_>>();
+            hidden.sort();
+            sheets.push(json!({"alias":name,"columns":headers,"column_order":layout,"hidden_columns":hidden,
+                "column_types":column_types,"rows":rows,"keys":sheet.metadata.keys,"sources":sources,"stale":sheet.metadata.stale,
+                "cursor":if active{json!([self.view.row_offset as usize+self.view.row,self.view.column])}else{saved.map(|v|json!([v.row_offset as usize+v.row,v.column])).unwrap_or(json!([0,0]))},
+                "sort":{"column":sort,"ascending":ascending}}));
+        }
+        Ok(
+            json!({"schema_version":1,"active_sheet":self.view.table_name,"sheets":sheets,"prompt":Value::Null,"errors":[]}),
+        )
     }
 }

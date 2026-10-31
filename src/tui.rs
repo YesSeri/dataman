@@ -180,7 +180,10 @@ impl TUI {
         Ok(trimmed)
     }
 
-    fn update(f: &mut Frame, controller: &crate::controller::worker::RenderState) -> AppResult<()> {
+    pub(crate) fn update(
+        f: &mut Frame,
+        controller: &crate::controller::worker::RenderState,
+    ) -> AppResult<()> {
         let (ui, view) = (&controller.ui, &controller.view);
         let constraints = if ui.editing.is_some() {
             vec![

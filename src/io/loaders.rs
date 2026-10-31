@@ -63,9 +63,23 @@ impl Database {
                 .extension()
                 .is_some_and(|ext| ext == "sqlite" || ext == "sqlite3" || ext == "db")
         {
-            let connection = Connection::open(&paths[0])?;
+            let source = Connection::open_with_flags(&paths[0], rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+            let directory = tempfile::Builder::new().prefix("dataman-").tempdir()?;
+            let mut connection = Connection::open(directory.path().join("session.sqlite"))?;
+            {
+                let backup = rusqlite::backup::Backup::new(&source, &mut connection)?;
+                loop {
+                    if token.load(std::sync::atomic::Ordering::Relaxed) {return Err(AppError::Cancelled);}
+                    match backup.step(128)? {
+                        rusqlite::backup::StepResult::Done => break,
+                        rusqlite::backup::StepResult::More => {},
+                        _ => return Err(AppError::invalid_input("SQLite source busy during session copy")),
+                    }
+                }
+            }
             Self::install_cancellation(&connection, token.clone());
             let mut database = Self::new(connection)?;
+            database.session_directory = Some(directory);
             Self::install_cancellation(&database.connection, token.clone());
             database.cancellation = token;
             return Ok(database);

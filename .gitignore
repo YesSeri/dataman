@@ -7,3 +7,6 @@ log.txt
 
 dataman.error.log*
 test.db
+
+/.parity/
+__pycache__/

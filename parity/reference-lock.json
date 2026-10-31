@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "version": "3.5",
+  "commit": "f730c389e601dc156c42eb80acb1302d7d268f55",
+  "release": "https://github.com/saulpw/visidata/releases/tag/v3.5",
+  "source_url": "https://codeload.github.com/saulpw/visidata/tar.gz/refs/tags/v3.5",
+  "source_sha256": "3e08fab9e3697983d0b2bf23718fc52445806779627190e5c2c595375ba97bb6",
+  "python": "3.10.12",
+  "dependencies": "requirements.lock"
+}

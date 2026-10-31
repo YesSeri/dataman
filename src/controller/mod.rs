@@ -1,6 +1,6 @@
-pub(super) mod command;
+pub(crate) mod command;
 pub mod controller_impl;
-pub(super) mod input;
+pub(crate) mod input;
 
 pub(crate) mod worker;
 

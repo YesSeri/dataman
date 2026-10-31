@@ -289,6 +289,11 @@ pub(super) fn run(
         }
     };
     let mut frontend = Frontend {
+        recorder: crate::automation::recorder()?,
+        dispatcher: crate::automation::interaction::Dispatcher::new(
+            crate::automation::profile(),
+            true,
+        ),
         state: RenderState::loading(),
         requests,
         responses,
@@ -316,6 +321,8 @@ pub(super) fn run(
 }
 
 struct Frontend {
+    recorder: Option<std::fs::File>,
+    dispatcher: crate::automation::interaction::Dispatcher,
     state: RenderState,
     requests: SyncSender<DatabaseRequest>,
     responses: Receiver<DatabaseResponse>,
@@ -542,11 +549,22 @@ impl Frontend {
         Ok(())
     }
     fn key(&mut self, key: KeyEvent) -> AppResult<()> {
+        if let Some(file) = self.recorder.as_mut() {
+            use std::io::Write;
+            let token = super::command::normalized_key(&key);
+            if !token.is_empty() {
+                let record = crate::automation::Record::Key { key: token };
+                let text = serde_json::to_string(&record)
+                    .map_err(|e| AppError::invalid_input(e.to_string()))?;
+                writeln!(file, "{text}")?;
+                file.flush()?;
+            }
+        }
         self.dirty = true;
         if self.state.ui.editing.is_some() {
             return self.edit(key);
         }
-        let command = Command::from(key);
+        let command = self.dispatcher.key(key, &self.state.view.table_name);
         if command == Command::Quit {
             self.quitting = true;
             if let Some((_, _, token)) = &self.active {
@@ -672,63 +690,8 @@ impl Frontend {
         true
     }
     fn edit(&mut self, key: KeyEvent) -> AppResult<()> {
-        let Some(session) = self.state.ui.editing.as_mut() else {
-            return Ok(());
-        };
-        let byte = session
-            .text
-            .char_indices()
-            .nth(session.cursor)
-            .map(|(i, _)| i)
-            .unwrap_or(session.text.len());
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('c')
-                if key.code == KeyCode::Esc || key.modifiers.contains(KeyModifiers::CONTROL) =>
-            {
-                self.state.ui.editing = None;
-            }
-            KeyCode::Char(character) => {
-                session.text.insert(byte, character);
-                session.cursor += 1;
-            }
-            KeyCode::Backspace if session.cursor > 0 => {
-                let previous = session
-                    .text
-                    .char_indices()
-                    .nth(session.cursor - 1)
-                    .map(|(index, _)| index)
-                    .ok_or_else(|| AppError::invalid_input("Input cursor is out of bounds"))?;
-                session.text.replace_range(previous..byte, "");
-                session.cursor -= 1;
-            }
-            KeyCode::Left => session.cursor = session.cursor.saturating_sub(1),
-            KeyCode::Right => {
-                session.cursor = (session.cursor + 1).min(session.text.chars().count())
-            }
-            KeyCode::Tab => match TUI::get_external_editor_input(&session.text) {
-                Ok(text) => {
-                    session.cursor = text.chars().count();
-                    session.text = text;
-                }
-                Err(error) => self.state.ui.last_command.message = Some(error.present()),
-            },
-            KeyCode::Enter => {
-                let template = session.command == Command::RegexTransform
-                    && session.inputs.is_empty()
-                    && regex::Regex::new(&session.text).is_ok_and(|regex| regex.captures_len() > 1);
-                session.inputs.push(std::mem::take(&mut session.text));
-                session.cursor = 0;
-                if !template {
-                    let session = self
-                        .state
-                        .ui
-                        .editing
-                        .take()
-                        .ok_or_else(|| AppError::from("Missing command"))?;
-                    self.submit(session.command, Some(session.inputs))?;
-                }
-            }
-            _ => {}
+        if let Some((command, inputs)) = super::input::edit_prompt(&mut self.state.ui, key)? {
+            self.submit(command, Some(inputs))?;
         }
         Ok(())
     }
@@ -933,6 +896,8 @@ mod tests {
         controller.refresh_page(100).unwrap();
         (
             Frontend {
+                recorder: None,
+                dispatcher: crate::automation::interaction::Dispatcher::new("dataman", false),
                 state: RenderState {
                     snapshot: DatabaseSnapshot::from_controller(&controller).unwrap(),
                     ui: UiState::default(),
@@ -1259,5 +1224,30 @@ mod tests {
         assert!(snapshot.is_ok());
         assert!(controller.command_history.is_empty());
         assert_eq!(controller.view.order_column.as_deref(), Some("id"));
+    }
+    #[test]
+    fn dispatcher_prompt_is_observable_through_test_backend() {
+        let (mut frontend, _requests) = frontend();
+        frontend.active = None;
+        frontend
+            .key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE))
+            .unwrap();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        terminal
+            .draw(|frame| TUI::update(frame, &frontend.state).unwrap())
+            .unwrap();
+        let text = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect::<String>();
+        assert!(text.contains("Value"));
+        frontend
+            .key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE))
+            .unwrap();
+        assert!(frontend.state.ui.editing.is_none());
     }
 }

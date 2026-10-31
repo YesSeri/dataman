@@ -1,0 +1,206 @@
+{
+  "metadata": {
+    "schema_version": 1,
+    "reference": {
+      "schema_version": 1,
+      "version": "3.5",
+      "commit": "f730c389e601dc156c42eb80acb1302d7d268f55",
+      "release": "https://github.com/saulpw/visidata/releases/tag/v3.5",
+      "source_url": "https://codeload.github.com/saulpw/visidata/tar.gz/refs/tags/v3.5",
+      "source_sha256": "3e08fab9e3697983d0b2bf23718fc52445806779627190e5c2c595375ba97bb6",
+      "python": "3.10.12",
+      "dependencies": "requirements.lock"
+    },
+    "scenario_sha256": "a85b6b094167a6f7f0eecbd6070d7ebd967cc2b17564d4a9a39d47ec00253478",
+    "dependency_lock_sha256": "02cc3419566ebc300d223c42e5cba2650858cd8b9eadab6b7f65b96429279a28",
+    "adapter_sha256": "7adaf52370db7aed10fae6eb67c2d8ece545fe7fd46496f88c52726c38948029",
+    "fixtures": {
+      "parity/fixtures/rows.csv": "e9efb5e82290b4ee097100820152d321863c811e9c3421cf8fb0c73817c6fff8"
+    }
+  },
+  "checkpoints": [
+    {
+      "sheets": [
+        {
+          "alias": "rows",
+          "columns": [
+            "name",
+            "value"
+          ],
+          "rows": [
+            {
+              "ref": "1",
+              "cells": [
+                {
+                  "Text": "α"
+                },
+                {
+                  "Text": "one"
+                }
+              ],
+              "selected": false
+            },
+            {
+              "ref": "2",
+              "cells": [
+                {
+                  "Text": "same"
+                },
+                {
+                  "Text": "duplicate"
+                }
+              ],
+              "selected": false
+            },
+            {
+              "ref": "3",
+              "cells": [
+                {
+                  "Text": "same"
+                },
+                {
+                  "Text": "duplicate"
+                }
+              ],
+              "selected": false
+            },
+            {
+              "ref": "4",
+              "cells": [
+                {
+                  "Text": "🙂"
+                },
+                {
+                  "Text": ""
+                }
+              ],
+              "selected": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sheets": [
+        {
+          "alias": "rows",
+          "columns": [
+            "name",
+            "value"
+          ],
+          "rows": [
+            {
+              "ref": "1",
+              "cells": [
+                {
+                  "Text": "α"
+                },
+                {
+                  "Text": "one"
+                }
+              ],
+              "selected": true
+            },
+            {
+              "ref": "2",
+              "cells": [
+                {
+                  "Text": "same"
+                },
+                {
+                  "Text": "duplicate"
+                }
+              ],
+              "selected": true
+            },
+            {
+              "ref": "3",
+              "cells": [
+                {
+                  "Text": "same"
+                },
+                {
+                  "Text": "duplicate"
+                }
+              ],
+              "selected": true
+            },
+            {
+              "ref": "4",
+              "cells": [
+                {
+                  "Text": "🙂"
+                },
+                {
+                  "Text": ""
+                }
+              ],
+              "selected": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "sheets": [
+        {
+          "alias": "rows",
+          "columns": [
+            "name",
+            "value"
+          ],
+          "rows": [
+            {
+              "ref": "1",
+              "cells": [
+                {
+                  "Text": "α"
+                },
+                {
+                  "Text": "one"
+                }
+              ],
+              "selected": false
+            },
+            {
+              "ref": "2",
+              "cells": [
+                {
+                  "Text": "same"
+                },
+                {
+                  "Text": "duplicate"
+                }
+              ],
+              "selected": false
+            },
+            {
+              "ref": "3",
+              "cells": [
+                {
+                  "Text": "same"
+                },
+                {
+                  "Text": "duplicate"
+                }
+              ],
+              "selected": false
+            },
+            {
+              "ref": "4",
+              "cells": [
+                {
+                  "Text": "🙂"
+                },
+                {
+                  "Text": ""
+                }
+              ],
+              "selected": false
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

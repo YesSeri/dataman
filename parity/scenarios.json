@@ -1,0 +1,3008 @@
+{
+  "schema_version": 1,
+  "scenarios": [
+    {
+      "id": "invert-empty-selection-behavioral",
+      "dimension": "behavioral",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "command",
+          "name": "invert_selection",
+          "inputs": []
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "command",
+          "longname": "stoggle-rows",
+          "input": ""
+        }
+      ],
+      "checkpoints": [
+        0,
+        1
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "invert-empty-selection-interaction",
+      "dimension": "interaction",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "key",
+          "key": "g"
+        },
+        {
+          "kind": "key",
+          "key": "t"
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "key",
+          "key": "g"
+        },
+        {
+          "kind": "key",
+          "key": "t"
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "invert-all-selected-behavioral",
+      "dimension": "behavioral",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "command",
+          "name": "invert_selection",
+          "inputs": []
+        },
+        {
+          "kind": "command",
+          "name": "invert_selection",
+          "inputs": []
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "command",
+          "longname": "stoggle-rows",
+          "input": ""
+        },
+        {
+          "kind": "command",
+          "longname": "stoggle-rows",
+          "input": ""
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "invert-all-selected-interaction",
+      "dimension": "interaction",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "command",
+          "name": "invert_selection",
+          "inputs": []
+        },
+        {
+          "kind": "key",
+          "key": "g"
+        },
+        {
+          "kind": "key",
+          "key": "t"
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "command",
+          "longname": "stoggle-rows",
+          "input": ""
+        },
+        {
+          "kind": "key",
+          "key": "g"
+        },
+        {
+          "kind": "key",
+          "key": "t"
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "invert-partial-behavioral",
+      "dimension": "behavioral",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "command",
+          "name": "toggle_selection",
+          "inputs": []
+        },
+        {
+          "kind": "command",
+          "name": "invert_selection",
+          "inputs": []
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "command",
+          "longname": "stoggle-row",
+          "input": ""
+        },
+        {
+          "kind": "command",
+          "longname": "stoggle-rows",
+          "input": ""
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "invert-partial-interaction",
+      "dimension": "interaction",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "command",
+          "name": "toggle_selection",
+          "inputs": []
+        },
+        {
+          "kind": "key",
+          "key": "g"
+        },
+        {
+          "kind": "key",
+          "key": "t"
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "command",
+          "longname": "stoggle-row",
+          "input": ""
+        },
+        {
+          "kind": "key",
+          "key": "g"
+        },
+        {
+          "kind": "key",
+          "key": "t"
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "invert-duplicates-behavioral",
+      "dimension": "behavioral",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 1,
+          "column": 1
+        },
+        {
+          "kind": "command",
+          "name": "toggle_selection",
+          "inputs": []
+        },
+        {
+          "kind": "command",
+          "name": "invert_selection",
+          "inputs": []
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 1,
+          "column": 0
+        },
+        {
+          "kind": "command",
+          "longname": "stoggle-row",
+          "input": ""
+        },
+        {
+          "kind": "command",
+          "longname": "stoggle-rows",
+          "input": ""
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "invert-duplicates-interaction",
+      "dimension": "interaction",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 1,
+          "column": 1
+        },
+        {
+          "kind": "command",
+          "name": "toggle_selection",
+          "inputs": []
+        },
+        {
+          "kind": "key",
+          "key": "g"
+        },
+        {
+          "kind": "key",
+          "key": "t"
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 1,
+          "column": 0
+        },
+        {
+          "kind": "command",
+          "longname": "stoggle-row",
+          "input": ""
+        },
+        {
+          "kind": "key",
+          "key": "g"
+        },
+        {
+          "kind": "key",
+          "key": "t"
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "invert-sorted-behavioral",
+      "dimension": "behavioral",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 0,
+          "column": 1
+        },
+        {
+          "kind": "command",
+          "name": "sort",
+          "inputs": []
+        },
+        {
+          "kind": "command",
+          "name": "toggle_selection",
+          "inputs": []
+        },
+        {
+          "kind": "command",
+          "name": "invert_selection",
+          "inputs": []
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 0,
+          "column": 0
+        },
+        {
+          "kind": "command",
+          "longname": "sort-asc",
+          "input": ""
+        },
+        {
+          "kind": "command",
+          "longname": "stoggle-row",
+          "input": ""
+        },
+        {
+          "kind": "command",
+          "longname": "stoggle-rows",
+          "input": ""
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "invert-sorted-interaction",
+      "dimension": "interaction",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 0,
+          "column": 1
+        },
+        {
+          "kind": "command",
+          "name": "sort",
+          "inputs": []
+        },
+        {
+          "kind": "command",
+          "name": "toggle_selection",
+          "inputs": []
+        },
+        {
+          "kind": "key",
+          "key": "g"
+        },
+        {
+          "kind": "key",
+          "key": "t"
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 0,
+          "column": 0
+        },
+        {
+          "kind": "command",
+          "longname": "sort-asc",
+          "input": ""
+        },
+        {
+          "kind": "command",
+          "longname": "stoggle-row",
+          "input": ""
+        },
+        {
+          "kind": "key",
+          "key": "g"
+        },
+        {
+          "kind": "key",
+          "key": "t"
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "invert-repeated-behavioral",
+      "dimension": "behavioral",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "command",
+          "name": "invert_selection",
+          "inputs": []
+        },
+        {
+          "kind": "command",
+          "name": "invert_selection",
+          "inputs": []
+        },
+        {
+          "kind": "command",
+          "name": "invert_selection",
+          "inputs": []
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "command",
+          "longname": "stoggle-rows",
+          "input": ""
+        },
+        {
+          "kind": "command",
+          "longname": "stoggle-rows",
+          "input": ""
+        },
+        {
+          "kind": "command",
+          "longname": "stoggle-rows",
+          "input": ""
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "invert-repeated-interaction",
+      "dimension": "interaction",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "command",
+          "name": "invert_selection",
+          "inputs": []
+        },
+        {
+          "kind": "command",
+          "name": "invert_selection",
+          "inputs": []
+        },
+        {
+          "kind": "key",
+          "key": "g"
+        },
+        {
+          "kind": "key",
+          "key": "t"
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "command",
+          "longname": "stoggle-rows",
+          "input": ""
+        },
+        {
+          "kind": "command",
+          "longname": "stoggle-rows",
+          "input": ""
+        },
+        {
+          "kind": "key",
+          "key": "g"
+        },
+        {
+          "kind": "key",
+          "key": "t"
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "invert-empty-sheet-behavioral",
+      "dimension": "behavioral",
+      "fixtures": [
+        "parity/fixtures/empty.csv"
+      ],
+      "native": [
+        {
+          "kind": "command",
+          "name": "invert_selection",
+          "inputs": []
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "command",
+          "longname": "stoggle-rows",
+          "input": ""
+        }
+      ],
+      "checkpoints": [
+        0,
+        1
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "invert-isolation-behavioral",
+      "dimension": "behavioral",
+      "fixtures": [
+        "parity/fixtures/rows.csv",
+        "parity/fixtures/other.csv"
+      ],
+      "native": [
+        {
+          "kind": "command",
+          "name": "toggle_selection",
+          "inputs": []
+        },
+        {
+          "kind": "context",
+          "sheet": "other",
+          "row": 0,
+          "column": 1
+        },
+        {
+          "kind": "command",
+          "name": "invert_selection",
+          "inputs": []
+        },
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 0,
+          "column": 1
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "command",
+          "longname": "stoggle-row",
+          "input": ""
+        },
+        {
+          "kind": "context",
+          "sheet": "other",
+          "row": 0,
+          "column": 0
+        },
+        {
+          "kind": "command",
+          "longname": "stoggle-rows",
+          "input": ""
+        },
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 0,
+          "column": 0
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "invert-empty-sheet-interaction",
+      "dimension": "interaction",
+      "fixtures": [
+        "parity/fixtures/empty.csv"
+      ],
+      "native": [
+        {
+          "kind": "key",
+          "key": "g"
+        },
+        {
+          "kind": "key",
+          "key": "t"
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "key",
+          "key": "g"
+        },
+        {
+          "kind": "key",
+          "key": "t"
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "invert-isolation-interaction",
+      "dimension": "interaction",
+      "fixtures": [
+        "parity/fixtures/rows.csv",
+        "parity/fixtures/other.csv"
+      ],
+      "native": [
+        {
+          "kind": "command",
+          "name": "toggle_selection",
+          "inputs": []
+        },
+        {
+          "kind": "context",
+          "sheet": "other",
+          "row": 0,
+          "column": 1
+        },
+        {
+          "kind": "key",
+          "key": "g"
+        },
+        {
+          "kind": "key",
+          "key": "t"
+        },
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 0,
+          "column": 1
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "command",
+          "longname": "stoggle-row",
+          "input": ""
+        },
+        {
+          "kind": "context",
+          "sheet": "other",
+          "row": 0,
+          "column": 0
+        },
+        {
+          "kind": "key",
+          "key": "g"
+        },
+        {
+          "kind": "key",
+          "key": "t"
+        },
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 0,
+          "column": 0
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "existing-edit",
+      "dimension": "behavioral",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 0,
+          "column": 1
+        },
+        {
+          "kind": "command",
+          "name": "edit",
+          "inputs": [
+            "changed"
+          ]
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 0,
+          "column": 0
+        },
+        {
+          "kind": "command",
+          "longname": "edit-cell",
+          "input": "changed"
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "existing-sort",
+      "dimension": "behavioral",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 0,
+          "column": 1
+        },
+        {
+          "kind": "command",
+          "name": "sort",
+          "inputs": []
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 0,
+          "column": 0
+        },
+        {
+          "kind": "command",
+          "longname": "sort-asc",
+          "input": ""
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "existing-rename",
+      "dimension": "behavioral",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 0,
+          "column": 1
+        },
+        {
+          "kind": "command",
+          "name": "rename_column",
+          "inputs": [
+            "renamed"
+          ]
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 0,
+          "column": 0
+        },
+        {
+          "kind": "command",
+          "longname": "rename-col",
+          "input": "renamed"
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "existing-selection",
+      "dimension": "behavioral",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "command",
+          "name": "toggle_selection",
+          "inputs": []
+        },
+        {
+          "kind": "command",
+          "name": "clear_selection",
+          "inputs": []
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "command",
+          "longname": "stoggle-row",
+          "input": ""
+        },
+        {
+          "kind": "command",
+          "longname": "unselect-rows",
+          "input": ""
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "existing-undo-redo",
+      "dimension": "behavioral",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 0,
+          "column": 1
+        },
+        {
+          "kind": "command",
+          "name": "edit",
+          "inputs": [
+            "changed"
+          ]
+        },
+        {
+          "kind": "command",
+          "name": "undo",
+          "inputs": []
+        },
+        {
+          "kind": "command",
+          "name": "redo",
+          "inputs": []
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 0,
+          "column": 0
+        },
+        {
+          "kind": "command",
+          "longname": "edit-cell",
+          "input": "changed"
+        },
+        {
+          "kind": "command",
+          "longname": "undo-last",
+          "input": ""
+        },
+        {
+          "kind": "command",
+          "longname": "redo-last",
+          "input": ""
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      }
+    },
+    {
+      "id": "existing-frequency",
+      "dimension": "behavioral",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 0,
+          "column": 1
+        },
+        {
+          "kind": "command",
+          "name": "frequency",
+          "inputs": []
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "context",
+          "sheet": "rows",
+          "row": 0,
+          "column": 0
+        },
+        {
+          "kind": "command",
+          "longname": "freq-col",
+          "input": ""
+        }
+      ],
+      "checkpoints": [
+        0,
+        1,
+        2
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Define cross-application frequency schema and provenance contract"
+    },
+    {
+      "id": "existing-export",
+      "dimension": "behavioral",
+      "fixtures": [
+        "parity/fixtures/rows.csv"
+      ],
+      "native": [
+        {
+          "kind": "command",
+          "name": "save",
+          "inputs": [
+            "output.csv"
+          ]
+        }
+      ],
+      "visidata": [
+        {
+          "kind": "command",
+          "longname": "save-sheet",
+          "input": "output.csv"
+        }
+      ],
+      "checkpoints": [
+        0,
+        1
+      ],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Define export file checkpoint in addition to state projection"
+    },
+    {
+      "id": "foundation-regression",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "unverified": "Foundation acceptance is repository and tooling checks, recorded by the runner"
+    },
+    {
+      "id": "core-navigation-cursor",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-navigation-cursor",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-navigation-paging",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-navigation-paging",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-navigation-search-forward",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-navigation-search-forward",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-navigation-search-backward",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-navigation-search-backward",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-navigation-search-next",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-navigation-search-next",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-navigation-jump-row",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-navigation-jump-row",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-navigation-jump-column",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-navigation-jump-column",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-sheets-list",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-sheets-list",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-sheets-switch",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-sheets-switch",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-sheets-previous",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-sheets-previous",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-sheets-rename",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-sheets-rename",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-sheets-delete",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-sheets-delete",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-sheets-duplicate",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-sheets-duplicate",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-sheets-stable-ids",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-sheets-stable-ids",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-sheets-source-provenance",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-sheets-source-provenance",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-columns-rename",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-columns-rename",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-columns-hide",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-columns-hide",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-columns-show",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-columns-show",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-columns-reorder",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-columns-reorder",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-columns-width",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-columns-width",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-columns-key-markers",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-columns-key-markers",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-columns-freeze",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-columns-freeze",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-selection-toggle-row",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-selection-toggle-row",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-selection-select-row",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-selection-select-row",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-selection-unselect-row",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-selection-unselect-row",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-selection-select-all",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-selection-select-all",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-selection-clear",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-selection-clear",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-selection-regex-column",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-selection-regex-column",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-selection-regex-all",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-selection-regex-all",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-selection-expression",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-selection-expression",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-selection-duplicates",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-selection-duplicates",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-selection-bulk-edit",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-selection-bulk-edit",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-selection-delete",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-selection-delete",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-selection-copy",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-selection-copy",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-selection-sheet-isolation",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-selection-sheet-isolation",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-editing-cell",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-editing-cell",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-editing-regex-transform",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-editing-regex-transform",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-editing-expression",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-editing-expression",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-editing-undo",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-editing-undo",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-editing-redo",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-editing-redo",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-editing-external-editor",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-editing-external-editor",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-logical-types-text",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-logical-types-text",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-logical-types-integer",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-logical-types-integer",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-logical-types-float",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-logical-types-float",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-logical-types-date",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-logical-types-date",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-logical-types-boolean",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-logical-types-boolean",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-logical-types-null-empty",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-logical-types-null-empty",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-logical-types-errors",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-logical-types-errors",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-logical-types-conversion",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-logical-types-conversion",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-transformations-filter",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-transformations-filter",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-transformations-derive-column",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-transformations-derive-column",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-transformations-split",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-transformations-split",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-transformations-melt",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-transformations-melt",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-transformations-transpose",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-transformations-transpose",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-transformations-group",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-transformations-group",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-transformations-pivot",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-transformations-pivot",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-transformations-fill",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-transformations-fill",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-analysis-frequency",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-analysis-frequency",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-analysis-describe",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-analysis-describe",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-analysis-aggregators",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-analysis-aggregators",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-analysis-group-drilldown",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-analysis-group-drilldown",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-combine-append",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-combine-append",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-combine-inner-join",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-combine-inner-join",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-combine-left-join",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-combine-left-join",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-combine-full-join",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-combine-full-join",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-combine-composite-keys",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-combine-composite-keys",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-local-io-csv-load",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-local-io-csv-load",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-local-io-csv-save",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-local-io-csv-save",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-local-io-tsv-load",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-local-io-tsv-load",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-local-io-tsv-save",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-local-io-tsv-save",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-local-io-sqlite-load",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-local-io-sqlite-load",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-local-io-sqlite-save",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-local-io-sqlite-save",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-local-io-source-immutability",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-local-io-source-immutability",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-replay-native-log",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-replay-native-log",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-replay-vdj-adapter",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-replay-vdj-adapter",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-replay-full-vdj",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-replay-full-vdj",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-replay-context",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-replay-context",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-replay-persistent-log",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-replay-persistent-log",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "core-replay-error-diagnostics",
+      "dimension": "behavioral",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {
+        "omit_dataman_synthetic_id": true,
+        "projection": "data-selection"
+      },
+      "blocked": "Review exact behavior, interactions, and normalization against pinned upstream before unattended execution"
+    },
+    {
+      "id": "interaction-replay-error-diagnostics",
+      "dimension": "interaction",
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {},
+      "blocked": "Pinned binding, context, and prompt parity contract requires review"
+    },
+    {
+      "id": "deferred-additional-formats",
+      "dimension": "behavioral",
+      "deferred": true,
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {}
+    },
+    {
+      "id": "deferred-remote-connectors",
+      "dimension": "behavioral",
+      "deferred": true,
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {}
+    },
+    {
+      "id": "deferred-plotting",
+      "dimension": "behavioral",
+      "deferred": true,
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {}
+    },
+    {
+      "id": "deferred-python-plugins",
+      "dimension": "behavioral",
+      "deferred": true,
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {}
+    },
+    {
+      "id": "deferred-bundled-apps",
+      "dimension": "behavioral",
+      "deferred": true,
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {}
+    },
+    {
+      "id": "deferred-experiments",
+      "dimension": "behavioral",
+      "deferred": true,
+      "fixtures": [],
+      "native": [],
+      "visidata": [],
+      "checkpoints": [],
+      "normalization": {}
+    }
+  ]
+}
