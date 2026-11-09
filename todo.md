@@ -6,12 +6,12 @@
 - [x] Store internal metadata separately from user data.
 - [x] Support tables without an integer `id` column.
 - [x] Implement generic row identity using primary keys or stable internal identifiers.
-- [ ] Add CSV type inference for integers, floats, booleans, dates, and nulls.
 - [x] Ensure mutations are transactional and safely recoverable.
 - [x] Add regression tests for data integrity and undo/redo.
 - [x] Implement transitive invalidation of derived sheets.
 
 ## P1 — File Format Support
+- [ ] Add CSV type inference for integers, floats, booleans, dates, and nulls.
 - [ ] Support JSON and JSONL.
 - [ ] Support Parquet.
 - [ ] Support XLSX.
@@ -95,7 +95,7 @@
 
 ## Development Order
 1. Fix data safety and correctness issues.
-2. Implement generic row identity and type inference.
+2. Finish generic row identity checks; defer CSV type inference to the import/type milestone.
 3. Add stdin/stdout, JSONL, and Parquet support.
 4. Make SQL query results interactive.
 5. Improve command discovery and usability.
@@ -118,7 +118,7 @@ Derived-sheet invalidation and refresh now traverse dependency chains, including
 undo/redo and source deletion. These remain partial roadmap capabilities because
 portable dependency references and workflow persistence are still pending.
 
-Generic runtime identities are implemented. Copy-on-first-write and deferred counts are implemented. Milestone 1 remains incomplete until the full cross-platform terminal/performance acceptance gate passes.
+Generic runtime identities are implemented. Copy-on-first-write and deferred counts are implemented. Milestone 1 remains incomplete until the three-platform functional acceptance gate (performance diagnostics are non-blocking) passes.
 Milestones 2?5 retain their acceptance gates and are not marked complete.
 Plugin APIs, custom-command extensions, and charts are deferred until the core
 workflows and performance advantage are proven.

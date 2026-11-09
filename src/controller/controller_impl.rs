@@ -2676,6 +2676,74 @@ mod history_tests {
         controller
     }
 
+    #[test]
+    fn cancelled_active_count_keeps_selection_navigation_and_history_usable() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Barrier,
+        };
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("count.sqlite");
+        Connection::open(&path).unwrap().execute_batch("CREATE TABLE t(value); WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<10000) INSERT INTO t SELECT x FROM n;").unwrap();
+        let before = std::fs::read(&path).unwrap();
+        let mut controller =
+            Controller::new(Database::try_from(vec![path.clone()]).unwrap()).unwrap();
+        controller.get_headers_and_rows(10).unwrap();
+        controller
+            .execute(Command::ToggleSelection, vec![])
+            .unwrap();
+        let selected = controller.view.row_ids[0];
+        let replay_entries = controller.command_history.len();
+        let barrier = Arc::new(Barrier::new(2));
+        let paused = barrier.clone();
+        let token = controller.database.cancellation.clone();
+        let triggered = AtomicBool::new(false);
+        let mut steps = 0;
+        controller.database.connection.progress_handler(
+            1,
+            Some(move || {
+                steps += 1;
+                if steps >= 500 && !triggered.swap(true, Ordering::Relaxed) {
+                    paused.wait();
+                    paused.wait();
+                }
+                token.load(Ordering::Relaxed)
+            }),
+        );
+        let cancel = controller.database.cancellation.clone();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                barrier.wait();
+                cancel.store(true, Ordering::Relaxed);
+                barrier.wait();
+            });
+            assert!(controller
+                .dispatch(Command::CountRows, 10)
+                .unwrap_err()
+                .is_cancelled());
+        });
+        assert!(matches!(
+            controller.database.row_count_state("t"),
+            crate::model::database::RowCountState::Unknown { .. }
+        ));
+        assert!(controller.history.undo.is_empty());
+        assert_eq!(controller.command_history.len(), replay_entries);
+        assert!(controller.selected_rows.contains(&selected));
+        cancel.store(false, Ordering::Relaxed);
+        Database::install_cancellation(&controller.database.connection, cancel);
+        controller
+            .execute(Command::Move(Direction::Down), vec![])
+            .unwrap();
+        controller.get_headers_and_rows(10).unwrap();
+        controller.execute(Command::CountRows, vec![]).unwrap();
+        assert_eq!(
+            controller.database.row_count_state("t"),
+            crate::model::database::RowCountState::Exact(10000)
+        );
+        assert!(controller.history.undo.is_empty());
+        assert_eq!(std::fs::read(path).unwrap(), before);
+    }
+
     fn fixture_row(database: &Database, table: &str, key: i64) -> RowId {
         let sheet = database.open_sheet_existing(table).unwrap();
         *database

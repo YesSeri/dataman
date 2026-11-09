@@ -1,70 +1,101 @@
-"""Measure a release profile_open binary; fixtures and build are outside timing.
-
-Usage: python scripts/measure_open.py target/release/examples/profile_open.exe
-Outputs single-run warm-cache observations, not percentile acceptance results.
-"""
-import ctypes
+"""Sequential non-blocking diagnostics; build binaries before running this tool."""
+import argparse
 import json
 import os
 from pathlib import Path
-import sqlite3
 import subprocess
 import sys
 import tempfile
 import time
 
-
-def peak_rss(process):
-    if os.name != "nt":
-        return 0  # POSIX wait4 rusage is collected after process completion.
-
-    class Counters(ctypes.Structure):
-        _fields_ = [("cb", ctypes.c_ulong), ("faults", ctypes.c_ulong)] + [
-            (name, ctypes.c_size_t) for name in [
-                "peak", "working", "pool_peak", "pool", "nonpaged_peak",
-                "nonpaged", "pagefile", "pagefile_peak",
-            ]
-        ]
-
-    counters = Counters()
-    counters.cb = ctypes.sizeof(counters)
-    if ctypes.windll.psapi.GetProcessMemoryInfo(
-        ctypes.c_void_p(int(process._handle)), ctypes.byref(counters), counters.cb
-    ):
-        return counters.peak
-    return 0
+from diagnostics import SHAPES, Sampler, checksum, emit, fixture, metadata, peak_rss, summary
+from terminal_acceptance import run as terminal_run
 
 
-binary = str(Path(sys.argv[1]).resolve())
-for count in [100_000, 1_000_000, 10_000_000]:
-    with tempfile.TemporaryDirectory(prefix="dataman-measure-") as root:
-        root = Path(root)
-        source = root / "fixture.sqlite"
-        with sqlite3.connect(source) as db:
-            db.executescript(f"""
-                CREATE TABLE data(id INTEGER PRIMARY KEY,value TEXT,amount INTEGER);
-                WITH RECURSIVE n(id) AS (VALUES(1) UNION ALL SELECT id+1 FROM n WHERE id<{count})
-                INSERT INTO data SELECT id,'value-'||(id%1000),id*2 FROM n;
-            """)
-        db.close()
-        session = root / "session"
-        session.mkdir()
-        env = dict(os.environ, TEMP=str(session), TMP=str(session), TMPDIR=str(session))
+def library_run(binary, source, session):
+    env = dict(os.environ, TEMP=str(session), TMP=str(session), TMPDIR=str(session))
+    # Files avoid pipe deadlocks and retain child diagnostics even on failure.
+    with tempfile.TemporaryFile(mode="w+") as stdout, tempfile.TemporaryFile(mode="w+") as stderr:
+        process = subprocess.Popen([binary, str(source)], env=env, stdout=stdout, stderr=stderr)
         started = time.perf_counter()
-        process = subprocess.Popen([binary, str(source)], env=env, stdout=subprocess.PIPE, text=True)
-        peak = 0
+        with Sampler(session, process._handle if os.name == "nt" else None) as sampler:
+            peak = 0
+            while process.returncode is None:
+                if os.name == "nt":
+                    process.poll()
+                else:
+                    pid, status, usage = os.wait4(process.pid, os.WNOHANG)
+                    if pid:
+                        process.returncode = os.waitstatus_to_exitcode(status)
+                        peak = usage.ru_maxrss * (1 if sys.platform == "darwin" else 1024)
+                if time.perf_counter() - started > 120:
+                    process.kill()
+                    process.wait()
+                    break
+                time.sleep(.01)
+        stdout.seek(0)
+        stderr.seek(0)
         if os.name == "nt":
-            while process.poll() is None:
-                peak = max(peak, peak_rss(process))
-                time.sleep(0.001)
+            sampler.rss = max(sampler.rss, peak_rss(process._handle))
+        output, errors = stdout.read(), stderr.read()
+        result = dict(kind="library", exit_status=process.returncode, status="failed", stderr=errors,
+                      process_ms=(time.perf_counter() - started) * 1000, peak_rss_bytes=max(peak, sampler.rss),
+                      sampled_temporary_disk_high_water_mark_bytes=sampler.disk, resource_sampling_errors=sampler.errors)
+        if process.returncode == 0:
+            try:
+                result.update(json.loads(output), status="passed")
+            except ValueError:
+                result["error"] = "invalid child JSON"
         else:
-            _, status, usage = os.wait4(process.pid, 0)
-            process.returncode = os.waitstatus_to_exitcode(status)
-            peak = usage.ru_maxrss * (1 if sys.platform == "darwin" else 1024)
-        stdout, _ = process.communicate()
-        if process.returncode:
-            raise RuntimeError(f"profile process failed: {process.returncode}")
-        result = json.loads(stdout)
-        result.update(kind="library", process_ms=round((time.perf_counter()-started)*1000, 3),
-                      peak_rss_bytes=peak, fixture_bytes=source.stat().st_size)
-        print(json.dumps(result), flush=True)
+            result["error"] = "child failed or exceeded 120-second watchdog"
+        return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("binary", help="built profile_open example")
+    parser.add_argument("--terminal-binary", help="also measure actual PTY/ConPTY process")
+    parser.add_argument("--rows", nargs="+", type=int, default=[100000, 1000000, 10000000])
+    parser.add_argument("--shape", nargs="+", choices=SHAPES, default=list(SHAPES))
+    parser.add_argument("--repetitions", type=int, default=5)
+    parser.add_argument("--working-directory")
+    parser.add_argument("--jsonl")
+    parser.add_argument("--artifacts", default="artifacts/diagnostics")
+    args = parser.parse_args()
+    if args.repetitions < 1:
+        parser.error("repetitions must be positive")
+    emit(dict(kind="environment", binary_sha256=checksum(args.binary), **metadata(args.working_directory or tempfile.gettempdir())), args.jsonl)
+    for rows in args.rows:
+        for shape in args.shape:
+            results = []
+            with tempfile.TemporaryDirectory(prefix="dataman-measure-", dir=args.working_directory) as root:
+                root = Path(root)
+                source = root / "fixture.sqlite"
+                try:
+                    fixture(source, rows, shape)
+                except OSError as error:
+                    emit(dict(kind="skip", rows=rows, shape=shape, reason=str(error)), args.jsonl)
+                    continue
+                for repetition in range(args.repetitions):
+                    session = root / "session"
+                    session.mkdir(exist_ok=True)
+                    result = library_run(str(Path(args.binary).resolve()), source, session)
+                    result.update(rows=rows, shape=shape, repetition=repetition, fixture_bytes=source.stat().st_size)
+                    results.append(result)
+                    emit(result, args.jsonl)
+                    if args.terminal_binary:
+                        for scenario in ("all", "count-cancel", "copy-cancel"):
+                            result = terminal_run(str(Path(args.terminal_binary).resolve()), rows, shape, scenario,
+                                                  args.working_directory, Path(args.artifacts) / f"{shape}-{rows}-{repetition}-{scenario}")
+                            result["repetition"] = repetition
+                            results.append(result)
+                            emit(result, args.jsonl)
+            for kind in ("library", "terminal"):
+                emit(dict(kind="summary", process=kind, rows=rows, shape=shape,
+                          metrics=summary([r for r in results if r["kind"] == kind])), args.jsonl)
+    # Diagnostic failures and outliers are retained; functional CI uses the
+    # acceptance command directly and enforces its exit status.
+
+
+if __name__ == "__main__":
+    main()

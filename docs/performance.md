@@ -1,3 +1,57 @@
+# Non-blocking MVP performance diagnostics
+
+Functional P0 sign-off requires the Windows/Linux/macOS matrix. Performance
+measurements do not block the MVP. Slow runs and outliers remain in raw JSONL and
+become follow-up work; none establish an advantage over VisiData.
+
+Build before measuring, and run one measurement process at a time:
+
+```powershell
+cargo build --locked --release --bin dataman --example profile_open
+python scripts/measure_open.py target/release/examples/profile_open.exe --jsonl docs/p0-diagnostics.jsonl
+python scripts/measure_open.py target/release/examples/profile_open.exe --terminal-binary target/release/dataman.exe --rows 10000000 --shape narrow --jsonl docs/p0-diagnostics-terminal.jsonl
+python scripts/terminal_acceptance.py target/release/dataman.exe 100000 --shape wide --repetitions 5 --jsonl docs/p0-terminal-wide.jsonl
+```
+
+Omit `.exe` on Unix. Both tools preserve their original positional arguments and
+support `--shape`, `--repetitions`, `--working-directory`, and `--jsonl`.
+`measure_open.py` defaults to five measured runs for every 100K/1M/10M case across
+narrow (the original two-column terminal fixture), wide (16 mixed columns), and
+skewed (90% repeated, 9% unique, 1% null value cells) shapes. Fixtures are generated
+before measurement, sequentially, with conservative source/candidate/journal/disk
+headroom preflight. Insufficient space is a skipped diagnostic. Acceptance in CI
+always treats an inability to complete functional checks as a failure.
+
+Results report samples, median, minimum and maximum; nearest-rank p95 is reported
+only with at least 20 samples. Failed runs and outliers remain present. Warm
+opening <=1s, verified cold opening <=2s, cached navigation <=50ms and cancellation
+acknowledgement <=250ms are diagnostic p95 targets, **unassessed** below 20 samples.
+Promotion/count throughput and resource use have no release-blocking limits.
+
+Library measurements cover opening and a 100-row page, repeated page fetch, first
+edit including promotion, and explicit count. Terminal measurements cover actual
+launch-to-painted-page, cached cursor movement, first edit, F6 and SQL cancellation.
+When `--terminal-binary` is supplied, the measurement driver additionally attempts
+active F6 and copying cancellation per case. The terminal observer cannot guarantee
+that a fast operation is still scanning/copying when Esc is handled; deterministic
+barrier regressions establish correctness. Missed active phases are retained as
+failed diagnostic observations rather than silently measuring cancellation before
+work begins. A subsequent count/promotion retry is required after cancellation.
+
+The actual child process's peak RSS comes from Windows per-process peak working
+set counters or Unix per-child `wait4` usage (macOS bytes, Linux KiB converted to
+bytes). Isolated session-directory file sizes are sampled every 10 ms and reported
+as **sampled temporary-disk high-water mark**: brief peaks may be missed. Metadata
+records OS, CPU, RAM, filesystem, fixture bytes, toolchain, SHA, sampling interval,
+and cache conditions. A session directory excludes fixture storage; fixture size
+is recorded separately. No caches are automatically flushed. Ordinary runs are
+warm/cache-uncontrolled. Fresh processes and copied fixtures are not cold-cache
+measurements; verified cold runs require a recorded operator-controlled procedure.
+
+Current measurements, limitations and follow-up work are recorded in
+[P0 evidence](p0-evidence.md). Earlier single-run observations below are historical
+and do not establish p95 or cross-platform acceptance.
+
 # Database execution and performance
 
 The terminal thread owns input, editing buffers, cached navigation, and rendering.
@@ -169,7 +223,7 @@ On Linux/macOS, omit `.exe`. The scripts use Python's standard library only.
 CI runs the 100K terminal script on all three platforms. Cross-platform results,
 cold-cache and percentile targets, wide/skewed datasets, terminal peak RSS,
 transient peak disk, and large-promotion cancellation measurements remain open.
-Public SQLite releases remain blocked; no VisiData advantage is claimed.
+Three-platform functional sign-off remains required; these diagnostic gaps do not block the MVP. No VisiData advantage is claimed.
 
 ## Historical observations before copy-on-first-write
 
@@ -190,7 +244,7 @@ database work described above, including the eager private copy and exact count.
 The release-mode cached terminal rendering test separately measured an average
 of 249 microseconds per frame. These are preliminary warm-cache observations,
 not p95 figures, memory acceptance results, or comparisons with VisiData. Peak
-RSS, cancellation latency, and the full 10-million-row release gate remain
+RSS, cancellation latency, and the 10-million-row diagnostic matrix remain
 unverified for this migration.
 
 Reproduce the identity and startup measurements with:

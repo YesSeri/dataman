@@ -205,6 +205,53 @@ fn export_rejects_hardlinks_to_the_source_after_promotion() {
     assert!(savers::csv(&db, "t", &alias).is_err());
 }
 
+#[cfg(unix)]
+#[test]
+fn unlinking_source_keeps_cached_page_but_requires_reopening() {
+    let (_directory, path) = fixture("CREATE TABLE t(value); INSERT INTO t VALUES('cached');");
+    let mut db = Database::try_from(vec![path.clone()]).unwrap();
+    let sheet = db.open_sheet("t").unwrap();
+    let page = db.fetch_page(sheet, 1, 0, "").unwrap();
+    std::fs::remove_file(&path).unwrap();
+    assert!(db
+        .fetch_page(sheet, 1, 0, "")
+        .unwrap_err()
+        .to_string()
+        .contains("reopen"));
+    assert!(db
+        .count_rows("t")
+        .unwrap_err()
+        .to_string()
+        .contains("reopen"));
+    assert_eq!(page.rows[0][0].to_string(), "cached");
+    assert_eq!(db.storage_state(), StorageState::ReadOnlySource);
+}
+
+#[cfg(windows)]
+#[test]
+fn denied_source_replacement_leaves_browsing_and_editing_safe() {
+    let (directory, path) = fixture("CREATE TABLE t(value); INSERT INTO t VALUES('original');");
+    let before = std::fs::read(&path).unwrap();
+    let mut db = Database::try_from(vec![path.clone()]).unwrap();
+    let sheet = db.open_sheet("t").unwrap();
+    let page = db.fetch_page(sheet, 1, 0, "").unwrap();
+    let replacement = directory.path().join("replacement.sqlite");
+    Connection::open(&replacement)
+        .unwrap()
+        .execute_batch("CREATE TABLE t(value); INSERT INTO t VALUES('replacement');")
+        .unwrap();
+    assert!(std::fs::rename(&replacement, &path).is_err());
+    assert!(std::fs::remove_file(&path).is_err());
+    assert_eq!(
+        db.fetch_page(sheet, 1, 0, "").unwrap().row_ids,
+        page.row_ids
+    );
+    let column = db.column_id(sheet, "value").unwrap();
+    db.edit_row(sheet, page.row_ids[0], column, "private edit")
+        .unwrap();
+    assert_eq!(std::fs::read(path).unwrap(), before);
+}
+
 #[test]
 fn view_snapshot_promotes_and_count_command_does_not_promote_or_enter_undo() {
     let (_directory, path) = fixture(

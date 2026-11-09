@@ -7,3 +7,5 @@ log.txt
 
 dataman.error.log*
 test.db
+/artifacts/
+__pycache__/

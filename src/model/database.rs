@@ -143,6 +143,100 @@ mod lazy_open_regressions {
     }
 
     #[test]
+    fn cancellation_after_successful_backup_step_preserves_source_and_retry() {
+        let (directory, mut db) = source();
+        let path = directory.path().join("source.sqlite");
+        let before = std::fs::read(&path).unwrap();
+        let sheet = db.open_sheet("t").unwrap();
+        let page = db.fetch_page(sheet, 2, 0, "").unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let paused = barrier.clone();
+        db.progress = Some(ProgressCallback(Arc::new(move |phase| {
+            if phase == "Backup step completed" {
+                paused.wait();
+                paused.wait();
+            }
+        })));
+        let token = db.cancellation.clone();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                barrier.wait();
+                token.store(true, Ordering::Relaxed);
+                barrier.wait();
+            });
+            assert!(db.ensure_workspace().unwrap_err().is_cancelled());
+        });
+        assert_eq!(db.storage_state(), StorageState::ReadOnlySource);
+        assert!(db.session_directory.is_none());
+        assert!(db.connection.is_autocommit());
+        db.progress = None;
+        db.cancellation.store(false, Ordering::Relaxed);
+        assert_eq!(
+            db.fetch_page(sheet, 2, 0, "").unwrap().row_ids,
+            page.row_ids
+        );
+        db.ensure_workspace().unwrap();
+        assert_eq!(
+            db.fetch_page(sheet, 2, 0, "").unwrap().row_ids,
+            page.row_ids
+        );
+        assert_eq!(std::fs::read(path).unwrap(), before);
+    }
+
+    #[test]
+    fn wal_commit_after_snapshot_starts_rejects_promotion() {
+        let (directory, mut db) = source();
+        let path = directory.path().join("source.sqlite");
+        Connection::open(&path)
+            .unwrap()
+            .execute_batch("PRAGMA journal_mode=WAL")
+            .unwrap();
+        let _ = db.validate_source();
+        let sheet = db.open_sheet("t").unwrap();
+        let row = db.fetch_page(sheet, 2, 0, "").unwrap().row_ids[0];
+        let column = db.column_id(sheet, "value").unwrap();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let paused = barrier.clone();
+        let once = AtomicBool::new(false);
+        db.progress = Some(ProgressCallback(Arc::new(move |phase| {
+            if phase == "Backup step completed" && !once.swap(true, Ordering::Relaxed) {
+                paused.wait();
+                paused.wait();
+            }
+        })));
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                barrier.wait();
+                Connection::open(&path)
+                    .unwrap()
+                    .execute_batch("UPDATE t SET value='external' WHERE rowid=1")
+                    .unwrap();
+                barrier.wait();
+            });
+            assert!(db
+                .ensure_workspace()
+                .unwrap_err()
+                .to_string()
+                .contains("Source changed"));
+        });
+        assert_eq!(db.storage_state(), StorageState::ReadOnlySource);
+        assert!(db.session_directory.is_none());
+        assert!(db.cell_value(sheet, row, column).is_err());
+        db.progress = None;
+        let fresh = db.open_sheet("t").unwrap();
+        assert_ne!(fresh, sheet);
+        assert_eq!(
+            db.fetch_page(fresh, 2, 0, "").unwrap().rows[0][0].to_string(),
+            "external"
+        );
+        db.ensure_workspace().unwrap();
+        assert_eq!(
+            db.fetch_page(fresh, 2, 0, "").unwrap().rows[0][0].to_string(),
+            "external"
+        );
+    }
+
+    #[test]
     fn backup_disk_full_and_initialization_failure_leave_sidecar_reusable() {
         for full in [true, false] {
             let (_directory, mut db) = source();
@@ -207,21 +301,29 @@ mod lazy_open_regressions {
     fn exact_count_invokes_progress_and_cancels_during_the_scan() {
         let (_directory, db) = source();
         let token = db.cancellation.clone();
-        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let observed = calls.clone();
+        let barrier = Arc::new(std::sync::Barrier::new(2));
+        let paused = barrier.clone();
+        let mut calls = 0;
         db.connection.progress_handler(
             1,
             Some(move || {
-                if observed.fetch_add(1, Ordering::Relaxed) >= 500 {
-                    token.store(true, Ordering::Relaxed);
-                    true
-                } else {
-                    false
+                calls += 1;
+                if calls == 500 {
+                    paused.wait();
+                    paused.wait();
                 }
+                token.load(Ordering::Relaxed)
             }),
         );
-        assert!(db.count_rows("t").unwrap_err().is_cancelled());
-        assert!(calls.load(Ordering::Relaxed) >= 500);
+        let cancel = db.cancellation.clone();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                barrier.wait();
+                cancel.store(true, Ordering::Relaxed);
+                barrier.wait();
+            });
+            assert!(db.count_rows("t").unwrap_err().is_cancelled());
+        });
         assert!(matches!(
             db.row_count_state("t"),
             RowCountState::Unknown { .. }
@@ -822,7 +924,10 @@ impl Database {
                     }
                 })? {
                     backup::StepResult::Done => break,
-                    backup::StepResult::More => {}
+                    backup::StepResult::More => {
+                        #[cfg(test)]
+                        self.report_phase("Backup step completed");
+                    }
                     _ if started.elapsed() < time::Duration::from_secs(5) => {
                         std::thread::sleep(time::Duration::from_millis(10))
                     }

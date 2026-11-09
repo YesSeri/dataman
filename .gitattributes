@@ -1,0 +1,2 @@
+# Preserve raw captured terminal bytes, including CRLF and trailing cells.
+*.vt binary

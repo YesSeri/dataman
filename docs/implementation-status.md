@@ -1,10 +1,10 @@
 # Workbench roadmap: implementation status
 
-Public SQLite releases remain blocked until the complete P0 gate passes. The
-copy-on-first-write and deferred-count implementation is present, with local
-Windows regression and terminal evidence. Cross-platform CI results and repeated
-performance acceptance measurements are still required. No advantage over
-VisiData is claimed.
+SQLite P0 sign-off requires passing functional checks on Windows, Linux, and
+macOS, with no known source-safety, identity, rollback, or cancellation correctness
+failures. Performance measurements are non-blocking diagnostics. Interactive SQL
+results, additional formats, CSV type inference, and persistent workspaces remain
+deferred. No advantage over VisiData is claimed.
 
 ## Implemented P0 behavior
 
@@ -38,46 +38,57 @@ VisiData is claimed.
   Output replacement, transactional rollback, generic identities, undo/redo,
   foreign-key/trigger tracking, and cached rendering remain in place.
 
-## Verification
+## Verification and evidence
 
-Local Windows checks include formatting, strict Clippy, library/integration tests,
-all-target benchmark smoke checks at 1,000 rows, and optimized executable/example
-builds. The final local suite passed 197 tests (179 library and 18 integration tests),
-with one intentionally ignored manual render benchmark.
-The new regressions cover promotion phases, SQLite disk-full backup failure,
-candidate initialization failure, failed first edits, one-copy reuse, native
-locator shapes, restored catalog handles/functions/trackers, external WAL commits,
-schema changes, rollback-journal contention, cancelled counts, unknown totals,
-empty/final pages, arbitrary-offset EOF, and source-path/hardlink protection.
-A structural authorizer test rejects COUNT during initial compatible display and
-asserts no workspace or mutation trackers were created.
+The implementation branch extends the existing identity/paging matrix rather
+than duplicating it. Deterministic barriers coordinate cancellation after a
+successful 128-page backup step, cancellation after an exact-count scan begins,
+and a WAL commit after the promotion snapshot starts. Regressions require no
+published candidate or stale target, usable surviving connections/identities,
+and successful retry. A controller count test also checks selection, navigation,
+unknown totals, and absence of undo/replay entries. Existing fault injection
+covers SQLite disk-full, contention, and initialization failure immediately before
+publication. Unix tests cover both replacement and unlink; Windows tests require
+sharing-denied replacement/removal to preserve browsing and private editing.
 
-`scripts/terminal_acceptance.py` runs the real release executable through PTY or
-Windows ConPTY. Local 100K, 1M, and 10M runs passed first-page painting, F6 without
-promotion, cached navigation, one workspace across two edits, undo/redo,
-cancellation, session cleanup, and source checksum preservation. Fixtures are
-created outside launch timing. See [performance.md](performance.md) for measured
-costs and their limits, and [tutorial.md](tutorial.md) for the user flow.
+The terminal harness decodes incremental PTY/ConPTY output into current screen
+cells. It checks an idle first page with real rows and unknown total, exact F6
+count without promotion, cached cursor movement, stale-edit review/retry and
+identity refresh, two edits in one workspace, and undo/redo against both the
+painted data row and SQLite workspace. It requires exit status zero, unchanged
+source checksums (apart from its explicit external writer), and complete session
+cleanup. A 120-second operation watchdog and 10-second cancellation watchdog
+identify hangs; they are not performance targets. Failed checks retain transcript,
+current screen, timeline, exit status, and session-file inventory without copying
+database files. Every platform replays its captured application output in 1-, 7-,
+and 127-byte fragments, including splits inside UTF-8/escape sequences.
 
-The CI matrix runs formatting, strict Clippy, all test targets, release builds,
-and the 100K-row terminal acceptance script on Linux, macOS, and Windows. It does
-not publish binaries. These CI jobs have not been dispatched or observed from
-this local session. Linux/macOS terminal and source-replacement acceptance remain
-unverified here; WSL is available but has no Rust toolchain installed.
+Run `python scripts/ci_checks.py` to reproduce CI locally. The workflow includes
+formatting, strict Clippy, all test targets with 1,000-row benchmark smoke checks,
+Python decoder/fixture tests, optimized executable/example builds, and 100K-row
+narrow/wide/skewed terminal acceptance. Matrix fail-fast is disabled; logs,
+acceptance JSONL, terminal captures, and detailed failures upload on every runner.
+Environment records include exact SHA, runner, Rust/Cargo/Python versions and CI
+run URL. No release is published.
+
+Current local and remote outcomes are recorded in [P0 evidence](p0-evidence.md).
+P0 remains **pending** until the three-platform functional workflow passes.
+Local Windows results cannot substitute for Linux/macOS evidence.
 
 ## Remaining gates and milestones
 
-1. Obtain passing Linux/macOS/Windows CI, including Unix source replacement and
-   real terminal acceptance. Repeat the performance matrix under controlled
-   conditions and assess the P0 targets: cold-cache opening, wide/skewed fixtures,
-   p95 timings, peak temporary disk, and cancellation during large promotion and
-   counts remain open. Current single-run timings do not establish those gates.
+1. Obtain passing Windows/Linux/macOS functional CI on the implementation commit.
+   Source-safety, identity, rollback and cancellation failures block sign-off.
+   Performance measurements and slow outliers create follow-up work; they do not
+   block this MVP. See [performance.md](performance.md) for diagnostics, skips and
+   reproduction commands.
 2. Add interactive read-only SQL classification/results, multiline editing,
    completion, persistent query history, saved queries, and command palette/help.
 3. Extend streaming input/output through stdin/stdout, gzip, JSON/JSONL, then
-   Arrow/Parquet and XLSX. Preserve raw values and conversion diagnostics.
+   Arrow/Parquet and XLSX. Add CSV type inference with raw-value preservation and
+   conversion diagnostics in this deferred import/type milestone.
 4. Introduce typed portable operations, workflow recording/replay, CLI bindings,
    and atomic persistent workspaces. Session handles remain nonportable.
-5. Run pinned Dataman/VisiData comparisons across the full 100K/1M/10M matrix and
-   complete the broader workflow/tutorial/distribution gate before comparative
-   claims or public releases. Plugin APIs and custom extensions remain deferred.
+5. Run pinned Dataman/VisiData comparisons and complete the broader workflow,
+   tutorial and distribution checks before comparative claims. Plugin APIs and
+   custom extensions remain deferred.

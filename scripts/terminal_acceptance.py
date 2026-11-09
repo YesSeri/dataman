@@ -3,8 +3,8 @@
 python scripts/terminal_acceptance.py target/release/dataman.exe [100000]
 Uses only Python's standard library. Fixtures live outside the measured process.
 """
+import argparse
 import ctypes
-import hashlib
 import json
 import os
 from pathlib import Path
@@ -14,6 +14,9 @@ import subprocess
 import sys
 import tempfile
 import time
+
+from terminal_screen import Screen, verify_fragmentation
+from diagnostics import SHAPES, Sampler, checksum, emit, fixture, inventory, metadata, peak_rss, summary
 
 
 class WindowsTerminal:
@@ -74,6 +77,8 @@ class WindowsTerminal:
         k.DeleteProcThreadAttributeList(attributes)
         k.CloseHandle(info.thread)
         self.process = info.process
+        self.handle = info.process
+        self.peak_rss = 0
 
     def read(self):
         available = ctypes.c_ulong()
@@ -89,8 +94,14 @@ class WindowsTerminal:
         written = ctypes.c_ulong()
         assert self.k.WriteFile(self.input, data, len(data), ctypes.byref(written), None)
 
+    def poll(self):
+        code = ctypes.c_ulong()
+        self.k.GetExitCodeProcess.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_ulong)]
+        assert self.k.GetExitCodeProcess(self.process, ctypes.byref(code))
+        return None if code.value == 259 else code.value
+
     def close(self):
-        if self.k.WaitForSingleObject(self.process, 2000) != 0:
+        if self.poll() is None:
             self.k.TerminateProcess(self.process, 1)
             self.k.WaitForSingleObject(self.process, 2000)
         for handle in [self.input, self.output, self.process]:
@@ -111,6 +122,8 @@ class PosixTerminal:
             fcntl.ioctl(0, termios.TIOCSCTTY, 0)
         self.process = subprocess.Popen(argv, stdin=slave, stdout=slave, stderr=slave, env=env, preexec_fn=controlling_terminal)
         os.close(slave)
+        self.handle = None
+        self.peak_rss = 0
 
     def read(self):
         import select
@@ -124,110 +137,239 @@ class PosixTerminal:
     def write(self, data):
         os.write(self.fd, data)
 
+    def poll(self):
+        if self.process.returncode is None:
+            pid, status, usage = os.wait4(self.process.pid, os.WNOHANG)
+            if pid:
+                self.process.returncode = os.waitstatus_to_exitcode(status)
+                self.peak_rss = usage.ru_maxrss * (1 if sys.platform == "darwin" else 1024)
+        return self.process.returncode
+
     def close(self):
-        try:
-            self.process.wait(timeout=2)
-        except subprocess.TimeoutExpired:
+        if self.poll() is None:
             self.process.kill()
-            self.process.wait()
+            pid, status, usage = os.wait4(self.process.pid, 0)
+            self.process.returncode = os.waitstatus_to_exitcode(status)
+            self.peak_rss = usage.ru_maxrss * (1 if sys.platform == "darwin" else 1024)
         os.close(self.fd)
 
 
-binary = str(Path(sys.argv[1]).resolve())
-rows = int(sys.argv[2]) if len(sys.argv) > 2 else 100_000
-with tempfile.TemporaryDirectory(prefix="dataman-terminal-") as root:
-    root = Path(root)
-    source = root / "source.sqlite"
-    with sqlite3.connect(source) as db:
-        db.executescript(f"""CREATE TABLE data(id INTEGER PRIMARY KEY,value TEXT);
-            WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<{rows})
-            INSERT INTO data SELECT x,'value-'||x FROM n;""")
-    db.close()
-    before = hashlib.sha256(source.read_bytes()).digest()
-    session = root / "session"
-    session.mkdir()
-    env = dict(os.environ, TERM="xterm-256color", TEMP=str(session), TMP=str(session), TMPDIR=str(session))
-    started = time.perf_counter()
-    terminal = (WindowsTerminal if os.name == "nt" else PosixTerminal)([binary, str(source)], env)
-    transcript = bytearray()
+def run(binary, rows, shape, scenario, directory, artifacts):
+    with tempfile.TemporaryDirectory(prefix="dataman-terminal-", dir=directory) as root:
+        root = Path(root)
+        source = root / "source.sqlite"
+        fixture(source, rows, shape)
+        before = checksum(source)
+        session = root / "session"
+        session.mkdir()
+        env = dict(os.environ, TERM="xterm-256color", TEMP=str(session), TMP=str(session), TMPDIR=str(session), RUST_LOG="off")
+        transcript = bytearray()
+        screen = Screen()
+        timeline = []
+        result = dict(kind="terminal", rows=rows, shape=shape, scenario=scenario, fixture_bytes=source.stat().st_size,
+                      binary_sha256=checksum(binary))
+        started = time.perf_counter()
+        terminal = None
+        sampler = Sampler(session)
 
-    def wait_for(text, timeout=15):
-        output = bytearray()
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
+        def event(label):
+            timeline.append(dict(event=label, elapsed_ms=(time.perf_counter() - started) * 1000))
+            print(label, file=sys.stderr, flush=True)
+
+        def pump():
             data = terminal.read()
             transcript.extend(data)
-            output.extend(data)
-            if b"\x1b[6n" in data:
-                terminal.write(b"\x1b[1;1R")
-            plain = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", output)
-            if re.sub(rb"\s+", b"", text.encode()) in re.sub(rb"\s+", b"", plain):
-                return
-        raise AssertionError(f"Missing terminal output {text!r}: {output[-3000:]!r}")
+            screen.feed(data)
+            if screen.queries:
+                terminal.write(b"\x1b[1;1R" * screen.queries)
+                screen.queries = 0
 
-    def workspaces():
-        return sorted(path for path in session.glob("dataman-*") if not path.name.startswith("dataman-identities-"))
+        def wait_for(predicate, label, timeout=120):
+            event("waiting: " + label)
+            if terminal:
+                debug = Path(artifacts)
+                debug.mkdir(parents=True, exist_ok=True)
+                (debug / "last-wait-screen.txt").write_text(screen.text, encoding="utf-8")
+            deadline = time.monotonic() + timeout
+            while time.monotonic() < deadline:
+                pump()
+                if predicate(screen.text):
+                    event("painted: " + label)
+                    return
+                if idle(screen.text) and ((label == "active F6 count" and f"total rows: {rows}," in screen.text)
+                                         or (label == "active database copy" and "Edit Completed" in screen.text)):
+                    raise AssertionError("Operation completed before active phase could be observed: " + label)
+                code = terminal.poll()
+                if code is not None:
+                    raise AssertionError(f"Child exited {code} while waiting for {label}")
+            raise AssertionError(f"Operation watchdog expired: {label}")
 
-    def await_value(value):
-        deadline = time.monotonic() + 15
-        while time.monotonic() < deadline:
-            for workspace in workspaces():
-                path = workspace / "session.sqlite"
-                if path.exists():
-                    connection = sqlite3.connect(path, timeout=0.01)
+        def idle(text):
+            return "Esc cancels" not in text
+
+        def workspaces():
+            return sorted(path for path in session.glob("dataman-*") if not path.name.startswith("dataman-identities-"))
+
+        def await_value(value):
+            def committed(text):
+                if not idle(text) or not re.search(r"(?m)^[│|]\s*1\s+(?:1\s+)?" + re.escape(value) + r"(?:\s|│|$)", text):
+                    return False
+                for workspace in workspaces():
+                    path = workspace / "session.sqlite"
+                    if not path.exists():
+                        continue
+                    # Read-only inspection must never create a candidate file.
+                    connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True, timeout=.01)
                     try:
                         if connection.execute("SELECT value FROM data WHERE id=1").fetchone() == (value,):
-                            return
+                            return True
                     except sqlite3.Error:
-                        pass  # The candidate is still being copied or initialized.
+                        pass
                     finally:
                         connection.close()
-            transcript.extend(terminal.read())
-        raise AssertionError(f"Workspace value did not become {value!r}")
+                return False
+            wait_for(committed, "committed and painted " + value)
 
-    try:
-        wait_for("value-1")
-        assert b"unknown" in transcript
-        opening_ms = (time.perf_counter() - started) * 1000
-        assert not workspaces(), "Opening copied the database"
-        terminal.write(b"\x1b[17~")  # F6
-        wait_for(str(rows))
-        assert not workspaces(), "Counting promoted the source"
-        navigated = time.perf_counter()
-        terminal.write(b"\x1b[B")  # down within the cached page
-        wait_for("value-2")
-        navigation_ms = (time.perf_counter() - navigated) * 1000
-        terminal.write(b"\x1b[A")
-        wait_for("value-1")
-        terminal.write(b"\x1b[Ceedited\r")  # right, edit, submit
-        wait_for("edited")
-        # Input painting also contains edited; confirm the mutation committed.
-        await_value("edited")
-        first = workspaces()
-        assert len(first) == 1, first
-        time.sleep(0.1)
-        terminal.write(b"esecond\r")
-        wait_for("second")
-        await_value("second")
-        time.sleep(0.1)
-        assert workspaces() == first, "Second edit created another workspace"
-        terminal.write(b"\x1a")  # undo
-        wait_for("Undo")
-        await_value("edited")
-        terminal.write(b"\x19")  # redo
-        wait_for("Redo")
-        await_value("second")
-        terminal.write(b"qWITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT sum(x) FROM n;\r")
-        time.sleep(0.2)
-        cancelled = time.perf_counter()
-        terminal.write(b"\x1b")
-        wait_for("Operation cancelled")
-        cancellation_ms = (time.perf_counter() - cancelled) * 1000
-        terminal.write(b"\x03")
-    finally:
-        terminal.close()
-    assert hashlib.sha256(source.read_bytes()).digest() == before, "Source changed"
-    assert not list(session.iterdir()), "Session storage was not cleaned up"
-    print(json.dumps(dict(kind="terminal", rows=rows, launch_to_painted_page_ms=round(opening_ms, 3),
-                          cached_navigation_paint_ms=round(navigation_ms, 3),
-                          cancellation_ack_ms=round(cancellation_ms, 3))))
+        try:
+            terminal = (WindowsTerminal if os.name == "nt" else PosixTerminal)([binary, str(source)], env)
+            sampler.handle = terminal.handle
+            sampler.__enter__()
+            first_value = "repeated" if shape == "skewed" else "value-1"
+            wait_for(lambda t: first_value in t and "unknown" in t and idle(t), "first usable page")
+            result["launch_to_painted_page_ms"] = (time.perf_counter() - started) * 1000
+            assert not workspaces(), "Opening copied the database"
+            if scenario == "count-cancel":
+                terminal.write(b"\x1b[17~")
+                wait_for(lambda t: "Esc cancels" in t, "active F6 count")
+                cancelled = time.perf_counter()
+                terminal.write(b"\x1b")
+                wait_for(lambda t: "Operation cancelled" in t and idle(t), "active count cancellation", timeout=10)
+                result["count_cancellation_ack_ms"] = (time.perf_counter() - cancelled) * 1000
+                assert "unknown" in screen.text, "Cancelled count published an exact total"
+                assert not workspaces(), "Cancelled count promoted"
+            counted = time.perf_counter()
+            terminal.write(b"\x1b[17~")
+            wait_for(lambda t: f"total rows: {rows}," in t and idle(t), "exact F6 total")
+            result["count_ms"] = (time.perf_counter() - counted) * 1000
+            assert not workspaces(), "Counting promoted the source"
+            navigated = time.perf_counter()
+            terminal.write(b"\x1b[B")
+            wait_for(lambda t: "row: 1," in t and idle(t), "cached cursor down")
+            result["cached_navigation_paint_ms"] = (time.perf_counter() - navigated) * 1000
+            terminal.write(b"\x1b[A")
+            wait_for(lambda t: "row: 0," in t and idle(t), "cursor up")
+            if scenario in ("all", "stale-edit"):
+                with sqlite3.connect(source) as writer:
+                    writer.execute("UPDATE data SET value='external-change' WHERE id=1")
+                writer.close()
+                before = checksum(source)  # The authorized external writer changed it.
+                terminal.write(b"\x1b[Ceobsolete\r")
+                wait_for(lambda t: "review and retry" in t and idle(t), "stale edit rejected")
+                assert not workspaces(), "Stale edit published a workspace"
+                with sqlite3.connect(source) as reader:
+                    assert reader.execute("SELECT value FROM data WHERE id=1").fetchone() == ("external-change",)
+                reader.close()
+                # F6 runs on the worker and refreshes the displayed identities.
+                terminal.write(b"\x1b[17~")
+                wait_for(lambda t: "external-change" in t and "last command: Count Rows" in t and idle(t), "refreshed source")
+            else:
+                terminal.write(b"\x1b[C")
+                # Wait for a complete navigation response before opening a prompt.
+                pump()
+            if scenario == "copy-cancel":
+                terminal.write(b"eedited\r")
+                wait_for(lambda t: "Copying database" in t and "Esc cancels" in t, "active database copy")
+                cancelled = time.perf_counter()
+                terminal.write(b"\x1b")
+                wait_for(lambda t: "Operation cancelled" in t and idle(t), "active copy cancellation", timeout=10)
+                result["copy_cancellation_ack_ms"] = (time.perf_counter() - cancelled) * 1000
+                assert not workspaces(), "Cancelled copy published a candidate"
+                assert checksum(source) == before
+            if scenario in ("all", "mutation", "copy-cancel"):
+                promoted = time.perf_counter()
+                terminal.write(b"eedited\r")
+                await_value("edited")
+                result["first_edit_ms"] = (time.perf_counter() - promoted) * 1000
+                first = workspaces()
+                assert len(first) == 1, first
+                terminal.write(b"esecond\r")
+                await_value("second")
+                assert workspaces() == first, "Second edit created another workspace"
+                terminal.write(b"\x1a")
+                wait_for(lambda t: "Undo" in t and idle(t), "Undo")
+                await_value("edited")
+                terminal.write(b"\x19")
+                wait_for(lambda t: "Redo" in t and idle(t), "Redo")
+                await_value("second")
+            if scenario in ("all", "cancel"):
+                terminal.write(b"qWITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT sum(x) FROM n;\r")
+                wait_for(lambda t: "Esc cancels" in t, "active SQL")
+                cancelled = time.perf_counter()
+                terminal.write(b"\x1b")
+                wait_for(lambda t: "Operation cancelled" in t and idle(t), "cancellation", timeout=10)
+                result["cancellation_ack_ms"] = (time.perf_counter() - cancelled) * 1000
+            verify_fragmentation(bytes(transcript))
+            capture_dir = Path(artifacts)
+            capture_dir.mkdir(parents=True, exist_ok=True)
+            (capture_dir / "terminal-capture.vt").write_bytes(transcript)
+            terminal.write(b"\x03")
+            deadline = time.monotonic() + 120
+            while terminal.poll() is None and time.monotonic() < deadline:
+                pump()
+            result["exit_status"] = terminal.poll()
+            assert result["exit_status"] == 0, f"Ungraceful exit: {result['exit_status']}"
+            assert checksum(source) == before, "Source changed"
+            assert not list(session.iterdir()), "Session storage was not cleaned up"
+            result["status"] = "passed"
+        except Exception as error:
+            result.update(status="failed", error=str(error), exit_status=terminal.poll() if terminal else None)
+            artifacts = Path(artifacts)
+            artifacts.mkdir(parents=True, exist_ok=True)
+            # Fixtures are generated test data; artifacts contain terminal output and
+            # file names/sizes only. Never copy any SQLite database into artifacts.
+            (artifacts / "transcript.bin").write_bytes(transcript)
+            (artifacts / "screen.txt").write_text(screen.text, encoding="utf-8")
+            (artifacts / "timeline.json").write_text(json.dumps(timeline, indent=2), encoding="utf-8")
+            (artifacts / "session-files.json").write_text(json.dumps(inventory(session), indent=2), encoding="utf-8")
+            (artifacts / "failure.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+        finally:
+            sampler.__exit__()
+            if terminal:
+                if os.name == "nt":
+                    sampler.rss = max(sampler.rss, peak_rss(terminal.handle))
+                terminal.close()  # Force only after recording a failed watchdog/exit.
+            result.update(peak_rss_bytes=max(sampler.rss, terminal.peak_rss if terminal else 0),
+                          sampled_temporary_disk_high_water_mark_bytes=sampler.disk,
+                          resource_sampling_errors=sampler.errors)
+        return result
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("binary")
+    parser.add_argument("rows", type=int, nargs="?", default=100_000)
+    parser.add_argument("--shape", choices=SHAPES, default="narrow")
+    parser.add_argument("--scenario", choices=("all", "browse", "mutation", "cancel", "stale-edit", "count-cancel", "copy-cancel"), default="all")
+    parser.add_argument("--repetitions", type=int, default=1)
+    parser.add_argument("--working-directory")
+    parser.add_argument("--jsonl")
+    parser.add_argument("--artifacts", default="artifacts/terminal")
+    args = parser.parse_args()
+    if args.repetitions < 1:
+        parser.error("repetitions must be positive")
+    emit(dict(kind="environment", **metadata(args.working_directory or tempfile.gettempdir())), args.jsonl)
+    results = []
+    for i in range(args.repetitions):
+        try:
+            result = run(str(Path(args.binary).resolve()), args.rows, args.shape, args.scenario,
+                         args.working_directory, Path(args.artifacts) / f"{args.shape}-{args.rows}-{i}")
+        except Exception as error:
+            result = dict(kind="terminal", rows=args.rows, shape=args.shape, status="failed", error=str(error), exit_status=None)
+        results.append(result)
+        emit(result, args.jsonl)
+    emit(dict(kind="summary", rows=args.rows, shape=args.shape, metrics=summary(results)), args.jsonl)
+    return int(any(r["status"] != "passed" for r in results))
+
+
+if __name__ == "__main__":
+    sys.exit(main())
