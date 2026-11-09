@@ -63,21 +63,21 @@ current screen, timeline, exit status, and session-file inventory without copyin
 database files. Every platform replays its captured application output in 1-, 7-,
 and 127-byte fragments, including splits inside UTF-8/escape sequences.
 
-Run `python scripts/ci_checks.py` to reproduce CI locally. The workflow includes
-formatting, strict Clippy, all test targets with 1,000-row benchmark smoke checks,
-Python decoder/fixture tests, optimized executable/example builds, and 100K-row
-narrow/wide/skewed terminal acceptance. Matrix fail-fast is disabled; logs,
-acceptance JSONL, terminal captures, and detailed failures upload on every runner.
-Environment records include exact SHA, runner, Rust/Cargo/Python versions and CI
-run URL. No release is published.
+Run `python scripts/check_p0.py` locally. It includes formatting, strict Clippy,
+all test targets with 1,000-row benchmark smoke checks, Python decoder/fixture
+tests, optimized executable/example builds, and 100K-row narrow/wide/skewed
+terminal acceptance. Logs, acceptance JSONL, terminal captures and detailed
+failures remain in `artifacts/`. Environment records include the exact SHA,
+Rust/Cargo/Python versions and platform. No release is published.
 
-Current local and remote outcomes are recorded in [P0 evidence](p0-evidence.md).
-P0 remains **pending** until the three-platform functional workflow passes.
-Local Windows results cannot substitute for Linux/macOS evidence.
+There is **no CI pipeline** for this early MVP, at the user's request. Functional
+checks on Linux/macOS remain manual follow-up work; local Windows evidence does
+not establish those results. Current outcomes are recorded in
+[P0 evidence](p0-evidence.md).
 
 ## Remaining gates and milestones
 
-1. Obtain passing Windows/Linux/macOS functional CI on the implementation commit.
+1. Obtain local Windows/Linux/macOS functional results on the implementation commit.
    Source-safety, identity, rollback and cancellation failures block sign-off.
    Performance measurements and slow outliers create follow-up work; they do not
    block this MVP. See [performance.md](performance.md) for diagnostics, skips and

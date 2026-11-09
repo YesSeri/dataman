@@ -19,7 +19,7 @@ support `--shape`, `--repetitions`, `--working-directory`, and `--jsonl`.
 narrow (the original two-column terminal fixture), wide (16 mixed columns), and
 skewed (90% repeated, 9% unique, 1% null value cells) shapes. Fixtures are generated
 before measurement, sequentially, with conservative source/candidate/journal/disk
-headroom preflight. Insufficient space is a skipped diagnostic. Acceptance in CI
+headroom preflight. Insufficient space is a skipped diagnostic. Local functional acceptance
 always treats an inability to complete functional checks as a failure.
 
 Results report samples, median, minimum and maximum; nearest-rank p95 is reported
@@ -220,7 +220,7 @@ python scripts/terminal_acceptance.py target/release/dataman.exe 10000000
 ```
 
 On Linux/macOS, omit `.exe`. The scripts use Python's standard library only.
-CI runs the 100K terminal script on all three platforms. Cross-platform results,
+The local checker runs the 100K terminal script across all shapes. Cross-platform results,
 cold-cache and percentile targets, wide/skewed datasets, terminal peak RSS,
 transient peak disk, and large-promotion cancellation measurements remain open.
 Three-platform functional sign-off remains required; these diagnostic gaps do not block the MVP. No VisiData advantage is claimed.

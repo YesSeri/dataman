@@ -82,7 +82,7 @@
 - [ ] Create a quick-start tutorial.
 - [ ] Document keyboard shortcuts and workflows.
 - [ ] Publish reproducible performance benchmarks against VisiData.
-- [ ] Set up automated releases and CI.
+- [ ] Consider automated releases and CI after the early MVP (deferred).
 - [ ] Collect feedback from real users.
 
 ## Competitive Differentiation

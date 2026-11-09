@@ -1,10 +1,16 @@
 # P0 testing evidence
 
-Functional P0 sign-off is pending. The implementation is on `p0-testing`.
-The tested source revision and CI run URL will be recorded after the branch push.
-The base revision is `673000eb40db11b8d117566c599f9b66a7bf2ce5`; local records
-made before committing include working-tree changes and are not clean-commit CI
-proof. No release is published.
+The implementation is on `p0-testing`. Functional source revision:
+`102f4386a62946252186e10aa8c4dd1050f621e5` (followed by removal of CI and evidence updates).
+There is **no CI pipeline** for this early MVP, at the user's request. The earlier
+push did start [a workflow run](https://github.com/YesSeri/dataman/actions/runs/42695249032),
+which completed with failure before CI was removed. It is not sign-off evidence
+and no further CI runs are requested. Linux/macOS functional results remain
+pending manual runs; local Windows results do not substitute for them. No release
+was published.
+
+Local records before that implementation commit use base revision
+`673000eb40db11b8d117566c599f9b66a7bf2ce5` plus working-tree changes.
 
 The local Windows toolchain is Rust/Cargo 1.94.0, Python 3.11.4, x86_64 MSVC,
 Windows 10 build 19045, Intel family 6 model 158, 32 GiB RAM, NTFS.

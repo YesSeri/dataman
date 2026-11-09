@@ -3,6 +3,6 @@ generated 100K narrow fixture. It includes initial painting and incremental
 redraws, cursor queries, styling, erasure, and an external-edit error.
 
 Every acceptance run also retains `terminal-capture.vt` and checks replay with
-1-, 7-, and 127-byte fragments against whole-stream decoding. CI therefore
-tests captured application output from both Unix PTY and Windows ConPTY.
-No SQLite database files belong in this directory or CI artifacts.
+1-, 7-, and 127-byte fragments against whole-stream decoding. Local runs on Unix
+and Windows therefore check their own platform's captured application output.
+No SQLite database files belong in this directory or diagnostic artifacts.

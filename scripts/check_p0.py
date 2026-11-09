@@ -1,4 +1,4 @@
-"""Run independent checks to completion, retaining evidence on every platform."""
+"""Run local MVP checks to completion, retaining logs and terminal diagnostics."""
 import os
 from pathlib import Path
 import subprocess
