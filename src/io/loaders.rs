@@ -63,9 +63,9 @@ impl Database {
                 .extension()
                 .is_some_and(|ext| ext == "sqlite" || ext == "sqlite3" || ext == "db")
         {
-            let connection = Connection::open(&paths[0])?;
+            let connection = Connection::open_with_flags(&paths[0], rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)?;
             Self::install_cancellation(&connection, token.clone());
-            let mut database = Self::new(connection)?;
+            let mut database = Self::new_cancellable(connection, token.clone())?;
             Self::install_cancellation(&database.connection, token.clone());
             database.cancellation = token;
             return Ok(database);
@@ -76,7 +76,7 @@ impl Database {
         }) {
             let directory = tempfile::Builder::new().prefix("dataman-").tempdir()?;
             let connection = Connection::open(directory.path().join("session.sqlite"))?;
-            let mut database = Database::new(connection)?;
+            let mut database = Database::from_workspace(connection)?;
             database.session_directory = Some(directory);
             database.cancellation = token.clone();
             Self::install_cancellation(&database.connection, token.clone());

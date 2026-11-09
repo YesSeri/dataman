@@ -1,0 +1,6 @@
+{"rows": 100000, "first_page_ms": 34.375, "first_edit_ms": 99.367, "count_ms": 3.342, "page_ms": 0.926, "browse_temp_bytes": 20480, "workspace_temp_bytes": 2207744, "kind": "library", "process_ms": 368.601, "peak_rss_bytes": 9916416, "fixture_bytes": 2187264}
+{"rows": 1000000, "first_page_ms": 21.374, "first_edit_ms": 599.273, "count_ms": 24.174, "page_ms": 0.913, "browse_temp_bytes": 20480, "workspace_temp_bytes": 22073344, "kind": "library", "process_ms": 752.098, "peak_rss_bytes": 11788288, "fixture_bytes": 22052864}
+{"rows": 10000000, "first_page_ms": 36.11, "first_edit_ms": 6636.704, "count_ms": 258.003, "page_ms": 0.95, "browse_temp_bytes": 20480, "workspace_temp_bytes": 234381312, "kind": "library", "process_ms": 7095.631, "peak_rss_bytes": 11812864, "fixture_bytes": 234360832}
+{"kind": "terminal", "rows": 100000, "launch_to_painted_page_ms": 786.828, "cached_navigation_paint_ms": 13.161, "cancellation_ack_ms": 30.297}
+{"kind": "terminal", "rows": 1000000, "launch_to_painted_page_ms": 54.475, "cached_navigation_paint_ms": 12.429, "cancellation_ack_ms": 31.468}
+{"kind": "terminal", "rows": 10000000, "launch_to_painted_page_ms": 55.593, "cached_navigation_paint_ms": 14.844, "cancellation_ack_ms": 26.207}

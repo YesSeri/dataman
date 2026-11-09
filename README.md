@@ -1,6 +1,26 @@
 # Dataman
 
-`dam` is an Excel-like data wrangler in the terminal, inspired by [VisiData](https://www.visidata.org/). This application allows you to manipulate and transform data using regex, logic or SQL. It loads CSV/TSV files into a private temporary SQLite database and uses SQLite to query and transform the data.
+`dataman` is a terminal data wrangler, inspired by [VisiData](https://www.visidata.org/). It loads CSV/TSV files into a private temporary SQLite database and uses SQLite to query and transform the data.
+
+SQLite sources open read-only. Compatible tables display directly from the source;
+the first writable operation copies a consistent snapshot to a private workspace.
+Edits affect that workspace; save to a separate destination. Opening a missing
+SQLite file fails without creating it. User objects are preserved regardless of
+their names, including `table_of_tables` and `__dataman_undo_*`.
+
+Rows use opaque runtime identities, independent of user columns. Tables without
+an `id`, duplicate text IDs, text/composite primary keys, and `WITHOUT ROWID`
+tables support editing, selection, deletion, and undo/redo. The `#` gutter shows
+current row positions. A user column named `id` can be edited, hidden, or moved.
+Views and sources without a usable key open as explicitly named editable
+snapshots; edits to those copies do not write through to the source view.
+See [row identity and API behavior](docs/row-identity.md).
+
+The complete workbench roadmap is **not release-ready**. Copy-on-first-write and
+deferred counts are implemented; the cross-platform P0 acceptance gate remains
+open. Interactive SQL results, additional formats, and portable workflows remain
+unfinished. See the
+[implementation status and release gates](docs/implementation-status.md).
 
 ## Installation
 
@@ -12,13 +32,13 @@ To install and run the data manager, dataman, follow these steps:
     cd dataman
     cargo build --release
     # copy into your path e.g
-    cp ./target/release/dataman ~/.local/bin/dam
+    cp ./target/release/dataman ~/.local/bin/dataman
     # or if you don't want to add to path or can't get it to work
     # ./target/release/dataman
-    # cp ./target/release/dataman ./dam
-    dam your-data-file.csv
+    # cp ./target/release/dataman ./dataman
+    dataman your-data-file.csv
     # or
-    # ./dam your-data-file.csv
+    # ./dataman your-data-file.csv
     ```
 
 ## Commonly Used Key Commands
@@ -45,7 +65,7 @@ This checklist is the supported workflow target and release gate.
 
 - [x] The `M` sheet list opens the highlighted table with Enter, supports Space/`U` selection, `R` rename, `D`/`d` delete, and `[`/`]` navigation order. Batch deletion is one undoable operation.
 - [x] Preserve cursor, sort order, and row selection independently for each table while switching; `Ctrl+6` (also `Ctrl+^`) returns to the previously visited table.
-- [ ] Stable sheet IDs (derived sheets now track source names and become stale after source edits or SQL changes).
+- [x] Stable runtime sheet, column, and row identities; edits and selections use row handles.
 - [ ] Logical type configuration and persistent conversion error records. `#` now makes a strict, undoable integer-derived column and leaves invalid input null.
 - [x] `V` creates an all-column Describe sheet with null, invalid, distinct, min/max, sum, and average statistics.
 - [x] Refresh stale derived sheets with `F5`; source edits mark dependent frequency, Describe, grouped, pivot, join, and append results stale. Refresh rebuilds the sheet atomically and retains its name.
@@ -79,6 +99,7 @@ The following are some of the more commonly used key commands in the TUI applica
 | `+`                  | Configure count, distinct count, sum, average, min, or max |
 | `F3`                 | Group by marked keys |
 | `F4`                 | Pivot the current column using marked row keys |
+| `F6`                 | Count rows in the active sheet (Esc cancels) |
 | `Space`              | Toggle row/table selection |
 | `B`                  | Bulk edit selected rows in current column |
 | `|`                  | Add rows matching a SQLite `WHERE` expression (for example `amount > 20`) |
@@ -127,10 +148,22 @@ Names beginning with `__dataman_undo_` are reserved for temporary undo data and 
 
 ## Session storage and responsiveness
 
-Each CSV/TSV import session uses its own temporary database, removed on normal exit. Save your imported data to keep changes. Existing SQLite files are edited in place.
+Each CSV/TSV import session uses its own temporary database, removed on normal exit. Save your imported data to keep changes. SQLite edits affect a temporary private workspace; save to another path to keep them.
 
 Database operations run on a worker while the terminal displays cached data. During an operation, you can resize the terminal, move within cached rows, or press Esc to cancel. Additional data commands are rejected while an operation runs; repeated page, table, or sort navigation keeps only the latest pending request. Edits already completed remain applied if you cancel their subsequent page refresh.
 
 Exports are streamed to a temporary output and replace the destination only after success. Saving over the currently open SQLite source is rejected; choose another output path.
 
 Developer benchmarks, architecture details, and measurement instructions are in [docs/performance.md](docs/performance.md).
+
+Row totals start as `unknown`. Paging discovers continuation without scanning the
+whole table; reaching a justified EOF establishes an exact total. Press **F6**
+(`count_rows`) for an explicit cancellable count. Counts never run automatically
+in the background. Browse-only paging, sorting, searching, selection, counting,
+and export do not create a full workspace copy. Views and sources requiring
+materialization open named snapshots and can trigger workspace preparation.
+
+External source commits invalidate old row handles and pending edits with
+`Source changed; review and retry`. The next operation rediscovers the source.
+Replacing or losing access to the source path requires reopening it. See the
+[quick-start tutorial](docs/tutorial.md) and [performance measurements](docs/performance.md).

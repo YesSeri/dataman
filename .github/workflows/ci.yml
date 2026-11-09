@@ -1,0 +1,37 @@
+name: Checks
+on:
+  push:
+  pull_request:
+
+jobs:
+  regression:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --all-targets -- -D warnings
+      - run: cargo test --locked --all-targets
+        env:
+          DATAMAN_BENCH_ROWS: "1000"
+      - run: cargo build --locked --release
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Terminal acceptance (PTY or ConPTY)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            python scripts/terminal_acceptance.py target/release/dataman.exe 100000
+          else
+            python scripts/terminal_acceptance.py target/release/dataman 100000
+          fi
+
+# Public releases remain blocked until the P0 acceptance gate in
+# docs/implementation-status.md passes. This workflow does not publish binaries.

@@ -24,16 +24,6 @@ pub(crate) fn database_from_sqlite(connection: Connection) -> AppResult<Database
 
 pub(crate) fn create_table_query(csv: &mut Reader<File>, table_name: &str) -> AppResult<String> {
     let headers = csv.headers()?;
-    if table_name.starts_with(INTERNAL_PREFIX)
-        || headers
-            .iter()
-            .any(|header| header.starts_with(INTERNAL_PREFIX))
-    {
-        return Err(
-            "file names and CSV headers using Dataman's reserved undo prefix are not supported"
-                .into(),
-        );
-    }
     let headers_string: String = headers
         .iter()
         .map(|header| format!("{} TEXT", quote_identifier(header)))
@@ -42,7 +32,7 @@ pub(crate) fn create_table_query(csv: &mut Reader<File>, table_name: &str) -> Ap
     log::info!("Creating table with headers: {}", headers_string);
     let query = format!(
         r#"CREATE TABLE IF NOT EXISTS {}
-	(id INTEGER PRIMARY KEY, {})
+	({})
 	;"#,
         quote_identifier(table_name),
         headers_string
@@ -172,15 +162,9 @@ pub(crate) fn save_delimited_cancellable(
         }
     };
     check_cancelled()?;
-    let mut info = connection.prepare(&format!(
-        "PRAGMA table_info(\"{}\")",
-        table_name.replace('"', "\"\"")
-    ))?;
-    let headers = info
-        .query_map([], |row| row.get::<_, String>(1))?
-        .collect::<Result<Vec<_>, _>>()?
+    let headers = crate::model::metadata::visible_columns(connection, table_name, true)?
         .into_iter()
-        .filter(|header| header != "id" && !header.starts_with(INTERNAL_PREFIX))
+        .map(|(name, _)| name)
         .collect::<Vec<_>>();
     let select = headers
         .iter()
@@ -246,7 +230,7 @@ mod tests {
         let database = Database::try_from(vec![path.clone()]).unwrap();
         assert_eq!(
             database.get_headers(&table_name).unwrap(),
-            vec!["id", "name \"quoted\""]
+            vec!["name \"quoted\""]
         );
         std::fs::remove_file(path).unwrap();
     }
@@ -282,9 +266,9 @@ mod tests {
     fn write_db_to_out_test() {
         let directory = tempfile::tempdir().unwrap();
         let output = directory.path().join("out-data.csv");
-        let database1 = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
+        let mut database1 = Database::try_from(vec![PathBuf::from("assets/data.csv")]).unwrap();
         crate::io::savers::csv(&database1, "data", &output).unwrap();
-        let database2 = Database::try_from(vec![output]).unwrap();
+        let mut database2 = Database::try_from(vec![output]).unwrap();
         let first_row_db1 = database1.get(1, 0, "data", "").unwrap().1;
         let first_row_db2 = database2.get(1, 0, "out-data", "").unwrap().1;
 

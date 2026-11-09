@@ -10,7 +10,7 @@ use support::Fixture;
 fn workflows(c: &mut Criterion) {
     let rows = support::rows();
     let mut group = c.benchmark_group(format!("rows/{rows}"));
-    let fixture = Fixture::new(rows);
+    let mut fixture = Fixture::new(rows);
     let output = fixture.directory.path().join("export.csv");
     fixture
         .database

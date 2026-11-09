@@ -12,6 +12,10 @@ newer view. Busy navigation retains only its latest pending request. Progress
 phase messages are best effort; completion messages are always delivered.
 
 Esc cancels the active operation through an operation-specific atomic token.
+Explicit counts use an aggregate scan with progress callbacks rather than the
+single optimized btree-count opcode, so cancellation can interrupt a long count.
+Source busy waits are bounded at 50 ms because busy handlers do not invoke
+SQLite progress callbacks.
 SQLite's progress handler checks it during SQL, and Rust import, export, regex,
 and derivation loops check it between records or batches. Transactions roll back
 on failure or cancellation. Progress interruption is disabled during the final
@@ -19,19 +23,40 @@ commit/rollback boundary. A cancellation after that boundary does not undo an
 already completed edit. Errors refreshing its page are reported separately.
 
 Imported datasets live in unique temporary directories, with the connection
-closed before cleanup. Existing SQLite inputs retain their in-place editing
-behavior. CSV/TSV export and SQLite backup use a temporary sibling output and
+closed before cleanup. Compatible SQLite inputs browse directly from read-only
+sources. The first writable operation copies a consistent snapshot to an
+unpublished private workspace; later writes reuse it. Source reads use scoped
+transactions, with generation checks before and after each operation. Views and
+sources requiring snapshots can promote during sheet opening. CSV/TSV export and SQLite backup use a temporary sibling output and
 replace the destination after successful completion. The active SQLite source
 cannot be replaced by an export.
 
 ## Caching and memory
 
+Natural rowid and primary-key tuple orders fetch directly through SQLite indexes.
+Adjacent pages use scalar or tuple keyset cursors; arbitrary jumps use indexed
+`LIMIT/OFFSET`. These orders do not allocate a positional map. Other sorts retain
+cancellable position maps containing native locators in the session database.
+Opaque handles are interned only for fetched or selected rows. Row maps and
+ordering maps use a separate, named temporary SQLite file with a 2 MiB page cache;
+this storage is separate from source data and is removed on exit.
+The sidecar retains its disk rollback journal but disables durable fsync: its
+records are session-only and are discarded after a crash. Cancellation and
+failed operations still roll back their data and identity changes together.
+This setting does not change the separate output-file sync used by exports.
+
+The `startup/open_to_first_usable_page` navigation benchmark includes loading,
+schema discovery, controller construction, first-page fetch, and session cleanup.
+It excludes workspace promotion and explicit counting, which have separate
+`startup/first_edit_promotion` and `startup/explicit_count` benchmarks. Fixture generation is outside
+the timed region. It does not include terminal painting or process startup.
+
 - Schemas, table names, and row counts are cached. Cell value changes retain
   schema/count caches and preserve an existing ID ordering map when triggers and
   foreign-key cascades cannot affect other rows or tables.
-- One temporary ordering table maps indexed positions to row IDs and storage
-  keys. Sorting builds this map once; navigation uses position ranges and direct
-  storage-key lookups. This also handles derived tables without an ID index.
+- Each active sorted sheet can retain an indexed position map of native storage
+  locators. Value changes invalidate these maps; sorting never defines row
+  identity. Cached rendering and selection use handles carried with the page.
 - The active source page contains at most 100 rows. Worker and render snapshots
   share its immutable cell data through `Arc`; visible columns use index mappings.
   Layout changes reuse that source page, and widths are calculated per snapshot.
@@ -47,9 +72,10 @@ cannot be replaced by an export.
 
 The initial sort-map build and a rebuild after a sort-affecting change remain
 proportional to the table size. They run on the worker and can be cancelled.
-Editable tables still need a unique integer `id`, as before. Row IDs now use the
-full signed SQLite integer range. Row counts/page offsets retain their existing
-`u32` interface.
+Editable sheets use hidden SQLite rowids or non-null primary-key tuples, with
+private snapshots for sources without a usable key. Signed SQLite rowids,
+including both `i64` extremes, are supported. Runtime row handles are independent
+of those values. Row counts/page offsets retain the existing `u32` interface.
 
 ## Validation and reproduction
 
@@ -84,7 +110,109 @@ cached lookup timing excludes the initial map construction. The legacy bulk
 comparison performs 1,000 individual commits; the new comparison includes both
 the edit and undo.
 
-## Observations from this implementation
+## Copy-on-first-write observations (2026-11-09)
+
+These are single-run local Windows observations from the optimized build on the
+100K/1M/10M three-column fixture, with filesystem caches left intact. No build ran
+during the recorded matrix. Fixture generation is excluded. The raw results are
+[p0-measurements-2026-11-09.jsonl](p0-measurements-2026-11-09.jsonl).
+
+| Rows | Library first page | First edit including promotion | Explicit count | Repeated page fetch | Process peak RSS |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 100K | 34.4 ms | 99.4 ms | 3.34 ms | 0.926 ms | 9.46 MiB |
+| 1M | 21.4 ms | 599.3 ms | 24.17 ms | 0.913 ms | 11.24 MiB |
+| 10M | 36.1 ms | 6,636.7 ms | 258.00 ms | 0.950 ms | 11.27 MiB |
+
+Library first page measures source opening, sheet discovery, and 100-row fetch;
+it does not include process launch, terminal painting, or controller construction.
+The repeated-page figure averages 100 fetches of a previously visited natural
+page; it still queries SQLite. Peak RSS is the profile process high-water mark
+across browsing, counting, and promotion, sampled through Windows process
+counters at 1 ms intervals. It excludes the Python fixture/harness process and
+does not establish the terminal process's peak memory.
+
+Retained browsing storage after the first page was **20 KiB at every size**.
+Retained workspace storage after the first edit was 2.11, 21.05, and 223.52 MiB,
+respectively. Source fixtures were 2.09, 21.03, and 223.50 MiB. These disk readings
+are phase-boundary retained sizes; transient rollback journals and intermediate
+candidate sidecars are not a measured peak-disk bound.
+
+The separate real-process acceptance matrix includes fresh PTY/ConPTY setup,
+process launch, loading, and first terminal output containing a data row:
+
+| Rows | Launch to painted first page | Cached cursor move and paint | Cancellation acknowledgement |
+| ---: | ---: | ---: | ---: |
+| 100K | 786.8 ms | 13.2 ms | 30.3 ms |
+| 1M | 54.5 ms | 12.4 ms | 31.5 ms |
+| 10M | 55.6 ms | 14.8 ms | 26.2 ms |
+
+The 100K launch outlier is retained in the report. Other local runs ranged from
+about 48 ms to 298 ms at that size; this variance is why these figures are not
+p95 acceptance results. Cancellation acknowledgement measures Esc to the painted
+cancellation message during a long recursive SQL operation. Regression tests
+separately interrupt an exact-count scan and each promotion phase; the table does
+not establish large-backup cancellation latency. Each terminal run also asserts
+F6 without promotion, one workspace across two edits, undo/redo, session cleanup,
+and unchanged source checksums.
+
+Reproduce with no concurrent build:
+
+```powershell
+cargo build --locked --release --bin dataman --example profile_open
+python scripts/measure_open.py target/release/examples/profile_open.exe
+python scripts/terminal_acceptance.py target/release/dataman.exe 100000
+python scripts/terminal_acceptance.py target/release/dataman.exe 1000000
+python scripts/terminal_acceptance.py target/release/dataman.exe 10000000
+```
+
+On Linux/macOS, omit `.exe`. The scripts use Python's standard library only.
+CI runs the 100K terminal script on all three platforms. Cross-platform results,
+cold-cache and percentile targets, wide/skewed datasets, terminal peak RSS,
+transient peak disk, and large-promotion cancellation measurements remain open.
+Public SQLite releases remain blocked; no VisiData advantage is claimed.
+
+## Historical observations before copy-on-first-write
+
+After the identity migration, a local Windows run on 2026-11-08 with Rust 1.94
+measured the following means for the 100,000-row, three-column navigation
+fixture. Each estimate uses ten Criterion samples, a 0.1-second warmup, and a
+0.5-second requested measurement period. No other build ran during measurement.
+
+| Measurement | Mean | Criterion estimate interval |
+| --- | ---: | ---: |
+| Open to first usable page | 116.5 ms | 96.3–141.3 ms |
+| Adjacent keyset page with lazy identity mapping | 1.35 ms | 1.32–1.39 ms |
+| Cached sorted page with lazy identity mapping | 1.40 ms | 1.39–1.41 ms |
+
+The keyset measurement excludes the preceding page fetch. The cached sorted
+measurement excludes initial position-map construction. Startup includes all
+database work described above, including the eager private copy and exact count.
+The release-mode cached terminal rendering test separately measured an average
+of 249 microseconds per frame. These are preliminary warm-cache observations,
+not p95 figures, memory acceptance results, or comparisons with VisiData. Peak
+RSS, cancellation latency, and the full 10-million-row release gate remain
+unverified for this migration.
+
+Reproduce the identity and startup measurements with:
+
+```powershell
+$env:DATAMAN_BENCH_ROWS='100000'
+cargo bench --locked --bench benchmark_navigation -- 'startup|identity_' --warm-up-time 0.1 --measurement-time 0.5 --noplot
+```
+
+Before the generic identity migration, one local Windows run on 2026-11-08
+with Rust 1.94 measured the
+`startup/open_to_first_usable_page` path at **69.3 ms** for 100,000 rows
+(Criterion estimate interval 57.4–81.0 ms, ten samples). The fixture has three
+columns: an integer primary key, text with 1,000 repeated values, and an integer
+amount. This includes the private copy and exact row count. Filesystem caches
+were not flushed; peak RSS and temporary disk were not measured. This is a
+preliminary observation, not a performance gate result.
+
+The following measurements predate the workbench source-isolation changes.
+They are historical comparisons with earlier Dataman code, not current release
+measurements or comparisons with VisiData. Those historical startup paths included eager private copies; the full P0
+opening and identity gate remains incomplete.
 
 Short local measurements on the development host, using the unchanged size
 optimization settings:

@@ -187,6 +187,7 @@ mod tests {
             .is_cancelled());
     }
     #[test]
+    #[allow(clippy::invalid_regex)] // Exercise presentation of a malformed user pattern.
     fn cancellation_and_recoverable_messages_are_concise() {
         assert_eq!(
             AppError::Cancelled.context("Importing data.csv").present(),

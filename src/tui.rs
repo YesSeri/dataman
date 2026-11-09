@@ -233,40 +233,51 @@ impl TUI {
         let headers = &view.headers;
         let rows = &view.rows;
         let widths = &controller.column_widths;
-        let window = column_window(widths, view.column, f.area().width.saturating_sub(4));
-        let constraints = widths[window.clone()]
-            .iter()
-            .map(|w| Constraint::Min(*w))
+        let gutter_width = (controller
+            .view
+            .row_offset
+            .saturating_add(rows.len() as u32)
+            .to_string()
+            .len()
+            + 1)
+        .clamp(3, 20) as u16;
+        let window = column_window(
+            widths,
+            view.column,
+            f.area().width.saturating_sub(4 + gutter_width),
+        );
+        let constraints = std::iter::once(Constraint::Length(gutter_width))
+            .chain(widths[window.clone()].iter().map(|w| Constraint::Min(*w)))
             .collect::<Vec<_>>();
         let current_header = view.column;
         // mark current header
 
-        let header = Row::new(headers[window.clone()].iter().enumerate().map(|(i, h)| {
-            let label = if controller.marked_join_keys.iter().any(|key| key == h) {
-                format!("!{h}")
-            } else {
-                h.clone()
-            };
-            if current_header == window.start + i {
-                Cell::from(Span::styled(
-                    label,
-                    Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
-                ))
-            } else if controller.marked_join_keys.iter().any(|key| key == h) {
-                Cell::from(Span::styled(label, Style::default().fg(Color::Yellow)))
-            } else {
-                Cell::from(label)
-            }
-        }))
+        let header = Row::new(std::iter::once(Cell::from("#")).chain(
+            headers[window.clone()].iter().enumerate().map(|(i, h)| {
+                let label = if controller.marked_join_keys.iter().any(|key| key == h) {
+                    format!("!{h}")
+                } else {
+                    h.clone()
+                };
+                if current_header == window.start + i {
+                    Cell::from(Span::styled(
+                        label,
+                        Style::default().add_modifier(Modifier::BOLD).fg(Color::Red),
+                    ))
+                } else if controller.marked_join_keys.iter().any(|key| key == h) {
+                    Cell::from(Span::styled(label, Style::default().fg(Color::Yellow)))
+                } else {
+                    Cell::from(label)
+                }
+            }),
+        ))
         .height(1);
 
         // draw border under header
         let selected_ids = &controller.selected_rows;
-        let tui_rows = rows.iter().map(|data_row| {
-            let row_id = data_row
-                .get(view.column_indexes.first().copied().unwrap_or(0))
-                .and_then(|item| item.to_string().parse::<i64>().ok());
-            let selected_sheet = if view.table_name == "table_of_tables" {
+        let tui_rows = rows.iter().enumerate().map(|(index, data_row)| {
+            let row_id = view.row_ids.get(index).copied();
+            let selected_sheet = if view.table_name == controller.catalog_name {
                 let name_column = view
                     .headers
                     .iter()
@@ -286,11 +297,24 @@ impl TUI {
                 } else {
                     Style::default()
                 };
-            let data_row = view.column_indexes[window.clone()]
-                .iter()
-                .filter_map(|index| data_row.get(*index))
-                .map(data_item_cell)
-                .collect::<Vec<_>>();
+            let data_row = std::iter::once(Cell::from(
+                (u64::from(view.row_offset) + index as u64 + 1).to_string(),
+            ))
+            .chain(
+                view.column_indexes[window.clone()]
+                    .iter()
+                    .filter_map(|index| data_row.get(*index))
+                    .map(|item| {
+                        if view.table_name == controller.catalog_name
+                            && matches!(item, DataItem::Null)
+                        {
+                            Cell::from("")
+                        } else {
+                            data_item_cell(item)
+                        }
+                    }),
+            )
+            .collect::<Vec<_>>();
             Row::new(data_row).height(1).style(selected_style)
         });
         let selected_style = Style::default().add_modifier(Modifier::UNDERLINED);
@@ -322,7 +346,7 @@ impl TUI {
             String::new()
         };
         let table_height = rects[0].height;
-        let selected_count = if view.table_name == "table_of_tables" {
+        let selected_count = if view.table_name == controller.catalog_name {
             controller.selected_sheets.len()
         } else {
             controller.selected_rows.len()

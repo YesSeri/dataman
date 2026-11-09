@@ -5,10 +5,21 @@ use rusqlite::{params, Connection};
 use crate::error::AppResult;
 use crate::model::database::INTERNAL_PREFIX;
 
-pub(crate) fn create_table_of_tables(conn: &Connection) -> AppResult<()> {
-    conn.execute("DROP TABLE IF EXISTS table_of_tables;", [])?;
+pub(crate) fn create_catalog(conn: &Connection) -> AppResult<String> {
+    initialize_ownership(conn)?;
+    let mut name = "__dataman_catalog".to_owned();
+    let mut suffix = 0;
+    while conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name=?1)",
+        [&name],
+        |row| row.get::<_, bool>(0),
+    )? {
+        suffix += 1;
+        name = format!("__dataman_catalog_{suffix}");
+    }
     conn.execute(
-        "CREATE TABLE IF NOT EXISTS table_of_tables (
+        &format!(
+            "CREATE TEMP TABLE IF NOT EXISTS {} (
             table_name TEXT PRIMARY KEY,
             row_count INTEGER,
             col_count INTEGER,
@@ -18,9 +29,11 @@ pub(crate) fn create_table_of_tables(conn: &Connection) -> AppResult<()> {
             sheet_kind TEXT,
             stale INTEGER
         )",
+            quote_identifier(&name)
+        ),
         [],
     )?;
-    Ok(())
+    Ok(name)
 }
 
 fn get_tables(conn: &Connection) -> AppResult<Vec<String>> {
@@ -28,47 +41,122 @@ fn get_tables(conn: &Connection) -> AppResult<Vec<String>> {
     let table_names = stmt
         .query_map([], |row| row.get(0))?
         .collect::<Result<Vec<String>, rusqlite::Error>>()?;
-    Ok(table_names
-        .into_iter()
-        .filter(|name: &String| {
-            !name.starts_with("sqlite_")
-                && !name.starts_with(INTERNAL_PREFIX)
-                && name != "table_of_tables"
-        })
-        .collect())
+    let mut visible = Vec::new();
+    for name in table_names {
+        if !name.starts_with("sqlite_") && !is_owned(conn, "table", &name)? {
+            visible.push(name);
+        }
+    }
+    Ok(visible)
 }
 
-pub(crate) fn populate_table_of_tables(conn: &Connection) -> AppResult<()> {
-    conn.execute("DELETE FROM table_of_tables", [])?;
+pub(crate) fn populate_catalog(conn: &Connection, catalog: &str) -> AppResult<()> {
+    conn.execute(&format!("DELETE FROM {}", quote_identifier(catalog)), [])?;
     let tables = get_tables(conn)?;
     for table in tables {
-        let row_count: i64 = conn.query_row(
-            &format!("SELECT COUNT(*) FROM {}", quote_identifier(&table)),
-            [],
-            |row| row.get(0),
-        )?;
-        let mut statement =
-            conn.prepare(&format!("PRAGMA table_info({})", quote_identifier(&table)))?;
-        let columns = statement
-            .query_map([], |row| {
-                Ok((row.get::<_, String>(1)?, row.get::<_, String>(2)?))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        let columns = columns
-            .iter()
-            .filter(|(name, _)| !name.starts_with(INTERNAL_PREFIX))
-            .collect::<Vec<_>>();
+        let row_count: Option<i64> = None;
+        let columns = visible_columns(conn, &table, false)?;
         let col_count = columns.len();
         let int_col_count = columns.iter().filter(|(_, kind)| kind == "INTEGER").count();
         let text_col_count = columns.iter().filter(|(_, kind)| kind == "TEXT").count();
 
         conn.execute(
-            r#"REPLACE INTO table_of_tables (table_name, row_count, col_count, text_col_count, int_col_count, source_names, sheet_kind, stale) VALUES (?1, ?2, ?3, ?4, ?5, '', 'table', 0)"#,
+            &format!(r#"REPLACE INTO {} (table_name, row_count, col_count, text_col_count, int_col_count, source_names, sheet_kind, stale) VALUES (?1, ?2, ?3, ?4, ?5, '', 'table', 0)"#, quote_identifier(catalog)),
             params![table, row_count, col_count,text_col_count, int_col_count],
         )?;
     }
     Ok(())
 }
+
+/// Explicit column metadata distinguishes user data from session-owned columns.
+pub(crate) fn visible_columns(
+    conn: &Connection,
+    table: &str,
+    for_export: bool,
+) -> AppResult<Vec<(String, String)>> {
+    let mut statement =
+        conn.prepare(&format!("PRAGMA table_xinfo({})", quote_identifier(table)))?;
+    let columns = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(6)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut visible = Vec::new();
+    for (name, kind, hidden) in columns {
+        if hidden != 1
+            && !is_owned(conn, &format!("column:{table}"), &name)?
+            && (!for_export || !is_owned(conn, &format!("export:{table}"), &name)?)
+        {
+            visible.push((name, kind));
+        }
+    }
+    Ok(visible)
+}
+/// Ownership is recorded in session storage; user names never imply ownership.
+pub(crate) fn initialize_ownership(conn: &Connection) -> AppResult<()> {
+    let attached = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_database_list WHERE name='__dataman_session')",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if !attached {
+        conn.execute_batch("ATTACH DATABASE '' AS __dataman_session;
+            CREATE TABLE __dataman_session.owned_objects (scope TEXT NOT NULL, name TEXT NOT NULL, PRIMARY KEY(scope, name));")?;
+    }
+    Ok(())
+}
+
+pub(crate) fn initialize_ownership_at(conn: &Connection, path: &std::path::Path) -> AppResult<()> {
+    let attached = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM pragma_database_list WHERE name='__dataman_session')",
+        [],
+        |row| row.get::<_, bool>(0),
+    )?;
+    if attached {
+        return Err(crate::error::AppError::from(
+            "The connection already has a __dataman_session schema",
+        ));
+    }
+    let path = path.to_str().ok_or_else(|| {
+        crate::error::AppError::from("The session storage path is not valid Unicode")
+    })?;
+    conn.execute("ATTACH DATABASE ?1 AS __dataman_session", [path])?;
+    // This file is discarded with the session, never restored after a crash.
+    // Retain disk journaling for transactional rollback, but avoid durable fsyncs
+    // for browsing-only identity allocation. Export destinations sync separately.
+    conn.execute_batch("CREATE TABLE __dataman_session.owned_objects (scope TEXT NOT NULL,name TEXT NOT NULL,PRIMARY KEY(scope,name)); PRAGMA __dataman_session.cache_size=-2048; PRAGMA __dataman_session.synchronous=OFF;")?;
+    Ok(())
+}
+
+pub(crate) fn own(conn: &Connection, scope: &str, name: &str) -> AppResult<()> {
+    initialize_ownership(conn)?;
+    conn.execute(
+        "INSERT OR IGNORE INTO __dataman_session.owned_objects VALUES (?1, ?2)",
+        params![scope, name],
+    )?;
+    Ok(())
+}
+
+pub(crate) fn is_owned(conn: &Connection, scope: &str, name: &str) -> AppResult<bool> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM __dataman_session.owned_objects WHERE scope=?1 AND name=?2)",
+        params![scope, name],
+        |row| row.get(0),
+    )?)
+}
+
+pub(crate) fn disown(conn: &Connection, scope: &str, name: &str) -> AppResult<()> {
+    conn.execute(
+        "DELETE FROM __dataman_session.owned_objects WHERE scope=?1 AND name=?2",
+        params![scope, name],
+    )?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use core::num;
@@ -120,8 +208,8 @@ mod tests {
             )?;
         }
 
-        create_table_of_tables(&conn).unwrap();
-        populate_table_of_tables(&conn).unwrap();
+        create_catalog(&conn).unwrap();
+        populate_catalog(&conn, "__dataman_catalog").unwrap();
         Ok(conn)
     }
     fn write_db_to_disk(conn: &Connection) {
@@ -133,19 +221,19 @@ mod tests {
             .unwrap();
     }
     #[test]
-    fn metadata_counts_quoted_identifiers_and_excludes_internal_columns() {
+    fn metadata_counts_user_columns_regardless_of_prefix() {
         let connection = Connection::open_in_memory().unwrap();
-        create_table_of_tables(&connection).unwrap();
+        create_catalog(&connection).unwrap();
         connection.execute_batch("CREATE TABLE \"a\"\"b\" (id INTEGER, \"c\"\"d\" TEXT, __dataman_undo_hidden INTEGER); INSERT INTO \"a\"\"b\" VALUES (1, 'x', 0);").unwrap();
-        populate_table_of_tables(&connection).unwrap();
-        let counts = connection.query_row("SELECT row_count, col_count, text_col_count, int_col_count FROM table_of_tables WHERE table_name = ?1", ["a\"b"], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?))).unwrap();
-        assert_eq!(counts, (1, 2, 1, 1));
+        populate_catalog(&connection, "__dataman_catalog").unwrap();
+        let counts = connection.query_row("SELECT row_count, col_count, text_col_count, int_col_count FROM __dataman_catalog WHERE table_name = ?1", ["a\"b"], |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?, row.get::<_, i64>(3)?))).unwrap();
+        assert_eq!(counts, (None, 3, 1, 2));
     }
 
     #[test]
-    fn table_of_tables_num_count_test() {
+    fn __dataman_catalog_num_count_test() {
         let conn = setup_three_table_db().unwrap();
-        let num_tables = "SELECT COUNT(*) FROM table_of_tables";
+        let num_tables = "SELECT COUNT(*) FROM __dataman_catalog";
         let mut stmt = conn.prepare(num_tables).unwrap();
         let count: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
         assert_eq!(count, 3);
@@ -153,10 +241,10 @@ mod tests {
     }
 
     #[test]
-    fn table_of_tables_int_col_count() {
+    fn __dataman_catalog_int_col_count() {
         let conn = setup_three_table_db().unwrap();
         let num_tables_fun = |table| {
-            format!("SELECT int_col_count FROM table_of_tables WHERE table_name = '{table}'")
+            format!("SELECT int_col_count FROM __dataman_catalog WHERE table_name = '{table}'")
         };
         let mut stmt = conn.prepare(&num_tables_fun("t2")).unwrap();
         let count: i64 = stmt.query_row([], |row| row.get(0)).unwrap();
@@ -168,10 +256,10 @@ mod tests {
     }
 
     #[test]
-    fn table_of_tables_text_col_count() {
+    fn __dataman_catalog_text_col_count() {
         let conn = setup_three_table_db().unwrap();
         let num_tables_fun = |table| {
-            format!("SELECT text_col_count FROM table_of_tables WHERE table_name = '{table}'")
+            format!("SELECT text_col_count FROM __dataman_catalog WHERE table_name = '{table}'")
         };
 
         let mut stmt = conn.prepare(&num_tables_fun("t1")).unwrap();

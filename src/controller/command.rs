@@ -83,6 +83,7 @@ pub enum Command {
     DeleteSelected,
     CopySelected,
     ClearSelection,
+    CountRows,
 }
 
 impl Command {
@@ -151,7 +152,8 @@ impl Command {
             | Command::DeleteSelected
             | Command::CopySelected
             | Command::ClearSelection => true,
-            Command::None
+            Command::CountRows
+            | Command::None
             | Command::IllegalOperation
             | Command::Save
             | Command::Quit
@@ -160,6 +162,7 @@ impl Command {
     }
     fn as_str(&self) -> String {
         match self {
+            Command::CountRows => "Count Rows".to_string(),
             Command::None => "None".to_string(),
             Command::Copy => "Copy".to_string(),
             Command::RegexTransform => "Regex Transform".to_string(),
@@ -264,6 +267,7 @@ impl From<KeyEvent> for Command {
             "select_regex" => Command::SelectRegex,
             "delete_selected" => Command::DeleteSelected,
             "copy_selected" => Command::CopySelected,
+            "count_rows" => Command::CountRows,
             "clear_selection" => Command::ClearSelection,
             "move_left" => Command::Move(Direction::Left),
             "move_right" => Command::Move(Direction::Right),

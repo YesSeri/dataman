@@ -1,3 +1,4 @@
+use crate::model::database::RowId;
 use std::{
     collections::HashSet,
     ops::{Deref, DerefMut},
@@ -6,9 +7,9 @@ use std::{
 
 /// History, requests, and rendering share selections until they actually change.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct Selection(Arc<HashSet<i64>>);
+pub(crate) struct Selection(Arc<HashSet<RowId>>);
 impl Deref for Selection {
-    type Target = HashSet<i64>;
+    type Target = HashSet<RowId>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }

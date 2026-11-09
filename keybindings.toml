@@ -51,3 +51,5 @@
 "right" = "move_right"
 "up" = "move_up"
 "down" = "move_down"
+
+f6 = "count_rows"

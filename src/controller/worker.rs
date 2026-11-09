@@ -36,13 +36,14 @@ pub(crate) struct HistoryLine {
 
 #[derive(Debug, Clone)]
 pub(crate) struct RenderState {
+    pub(crate) catalog_name: String,
     pub(crate) ui: UiState,
     pub(crate) view: ViewState,
     pub(crate) selected_rows: Selection,
     pub(crate) selected_sheets: HashSet<String>,
     pub(crate) marked_join_keys: Vec<String>,
     pub(crate) command_history: Vec<HistoryLine>,
-    pub(crate) total_rows: u32,
+    pub(crate) total_rows: crate::model::database::RowCountState,
     pub(crate) busy: bool,
     pub(crate) column_widths: Vec<u16>,
     pub(crate) busy_phase: &'static str,
@@ -51,6 +52,7 @@ pub(crate) struct RenderState {
 impl RenderState {
     fn loading() -> Self {
         Self {
+            catalog_name: String::new(),
             ui: UiState {
                 input: String::new(),
                 character_index: 0,
@@ -64,6 +66,9 @@ impl RenderState {
                 history_cursor: 0,
             },
             view: ViewState {
+                sheet_id: None,
+                row_ids: Arc::default(),
+                column_ids: vec![],
                 table_name: String::new(),
                 column: 0,
                 row: 0,
@@ -79,7 +84,7 @@ impl RenderState {
             selected_sheets: HashSet::new(),
             marked_join_keys: vec![],
             command_history: vec![],
-            total_rows: 0,
+            total_rows: crate::model::database::RowCountState::Unknown { known_at_least: 0 },
             busy: true,
             column_widths: vec![],
             busy_phase: "Loading",
@@ -88,6 +93,7 @@ impl RenderState {
     }
     pub(crate) fn from_controller(controller: &Controller) -> AppResult<Self> {
         Ok(Self {
+            catalog_name: controller.database.catalog_name().to_owned(),
             ui: controller.ui.clone(),
             view: controller.view.clone(),
             selected_rows: controller.selected_rows.clone(),
@@ -108,7 +114,7 @@ impl RenderState {
                 .collect(),
             total_rows: controller
                 .database
-                .count_rows(&controller.view.table_name)?,
+                .row_count_state(&controller.view.table_name),
             busy: false,
             busy_phase: "Working",
             busy_frame: 0,
@@ -164,9 +170,19 @@ fn serve(
     requests: Receiver<DatabaseRequest>,
     responses: SyncSender<DatabaseResponse>,
 ) -> AppResult<()> {
+    let startup_responses = responses.clone();
+    controller.database.progress = Some(crate::model::database::ProgressCallback(Arc::new(
+        move |phase| {
+            let _ = startup_responses.try_send(DatabaseResponse::Progress {
+                id: OperationId(0),
+                phase,
+            });
+        },
+    )));
     let initial = controller
         .refresh_page(100)
         .and_then(|()| RenderState::from_controller(&controller));
+    controller.database.progress = None;
     match initial {
         Ok(state) => {
             if responses.send(DatabaseResponse::Ready(state)).is_err() {
@@ -204,6 +220,16 @@ fn serve(
         ) {
             break;
         }
+        let progress_responses = responses.clone();
+        let progress_id = operation.id;
+        controller.database.progress = Some(crate::model::database::ProgressCallback(Arc::new(
+            move |phase| {
+                let _ = progress_responses.try_send(DatabaseResponse::Progress {
+                    id: progress_id,
+                    phase,
+                });
+            },
+        )));
         let result = if operation.cancellation.load(Ordering::Relaxed) {
             Err(AppError::Cancelled)
         } else if let Some(inputs) = operation.inputs {
@@ -211,6 +237,7 @@ fn serve(
         } else {
             controller.dispatch(operation.command.clone(), operation.height)
         };
+        controller.database.progress = None;
         let error = result.err().map(|error| {
             error
                 .normalize_cancelled(operation.cancellation.load(Ordering::Relaxed))
@@ -565,6 +592,11 @@ impl Frontend {
             }
             return Ok(());
         }
+        if self.state.view.table_name == self.state.catalog_name
+            && matches!(command, Command::ToggleSelection | Command::ClearSelection)
+        {
+            return self.submit(command, None);
+        }
         match command {
             Command::Move(direction) => {
                 if !self.move_cached(direction) {
@@ -572,13 +604,7 @@ impl Frontend {
                 }
             }
             Command::ToggleSelection => {
-                if let Some(crate::model::datarow::DataItem::Integer(id)) = self
-                    .state
-                    .view
-                    .rows
-                    .get(self.state.view.row)
-                    .and_then(|row| row.get(*self.state.view.column_indexes.first()?))
-                {
+                if let Some(id) = self.state.view.row_ids.get(self.state.view.row) {
                     if !self.state.selected_rows.insert(*id) {
                         self.state.selected_rows.remove(id);
                     }
@@ -626,7 +652,10 @@ impl Frontend {
             Direction::Down if view.row + 1 < height.min(view.rows.len()) => view.row += 1,
             Direction::Down => {
                 return u64::from(view.row_offset) + view.row as u64 + 1
-                    >= u64::from(self.state.total_rows)
+                    >= match self.state.total_rows {
+                        crate::model::database::RowCountState::Exact(n) => n,
+                        _ => u64::MAX,
+                    }
             }
         }
         true
@@ -974,7 +1003,7 @@ mod tests {
         assert!(!session.exists());
     }
     #[test]
-    fn snapshot_count_errors_are_fallible() {
+    fn render_state_uses_only_cached_counts() {
         use rusqlite::hooks::{AuthContext, Authorization};
         let mut controller = controller();
         controller.refresh_page(100).unwrap();
@@ -982,7 +1011,7 @@ mod tests {
             .database
             .connection
             .authorizer(Some(|_: AuthContext<'_>| Authorization::Deny));
-        assert!(RenderState::from_controller(&controller).is_err());
+        assert!(RenderState::from_controller(&controller).is_ok());
     }
 
     #[test]

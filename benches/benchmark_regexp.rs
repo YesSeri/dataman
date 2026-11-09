@@ -5,7 +5,7 @@ use support::Fixture;
 fn regex(c: &mut Criterion) {
     let rows = support::rows();
     let mut group = c.benchmark_group(format!("rows/{rows}"));
-    let fixture = Fixture::new(rows);
+    let mut fixture = Fixture::new(rows);
     group.bench_function("regex/filter_cached_pattern", |b| b.iter(|| {
         fixture.database.execute_batch("CREATE TABLE filtered AS SELECT * FROM data WHERE value REGEXP '99$'; DROP TABLE filtered;").unwrap();
     }));

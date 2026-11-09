@@ -18,11 +18,10 @@ regex = "1.10.4"
 rusqlite = { version = "0.31.0", features = ["bundled", "functions", "backup", "hooks"] }
 serde = { version = "1.0.197", features = ["derive"] }
 mlua = { version = "0.9.9", features = ["lua54", "vendored"] }
-r2d2 = "0.8.10"
-r2d2_sqlite = "0.24.0"
 color-eyre = "0.6.3"
 toml = "0.8.19"
 tempfile = "3"
+same-file = "1"
 
 
 [dev-dependencies]
